@@ -1,0 +1,21 @@
+{
+  "name": "agi-lab-skills",
+  "owner": {
+    "name": "AGI Lab",
+    "email": "contact@agilab.jp"
+  },
+  "metadata": {
+    "description": "Fun and productivity skills from AGI Lab. Install and enjoy!",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "terminal-vibes",
+      "source": "./plugins/terminal-vibes",
+      "description": "Spinning ASCII donuts, cat art, dad jokes, and Matrix rain. Pure terminal fun, no API keys needed.",
+      "version": "1.0.0",
+      "category": "fun",
+      "tags": ["entertainment", "ascii-art", "terminal", "break-time"]
+    }
+  ]
+}
