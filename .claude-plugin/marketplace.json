@@ -5,10 +5,18 @@
     "email": "contact@agilab.jp"
   },
   "metadata": {
-    "description": "Fun and productivity skills from AGI Lab. Install and enjoy!",
-    "version": "1.0.0"
+    "description": "AGI Lab plugins and hackathon starter templates for Claude Code.",
+    "version": "1.1.0"
   },
   "plugins": [
+    {
+      "name": "hackathon-starter",
+      "source": "./plugins/hackathon-starter",
+      "description": "Starter plugin for AGI Lab hackathon participants. Fork, rename, and turn this into your own shareable skill.",
+      "version": "0.1.0",
+      "category": "template",
+      "tags": ["starter", "template", "hackathon", "marketplace"]
+    },
     {
       "name": "terminal-vibes",
       "source": "./plugins/terminal-vibes",

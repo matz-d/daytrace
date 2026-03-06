@@ -1,0 +1,11 @@
+{
+  "name": "hackathon-starter",
+  "description": "Starter plugin for AGI Lab hackathon participants. Replace this with your own skill and publish it in a shareable format.",
+  "version": "0.1.0",
+  "author": {
+    "name": "AGI Lab"
+  },
+  "homepage": "https://github.com/KaishuShito/agi-lab-skills-marketplace",
+  "license": "MIT",
+  "keywords": ["starter", "template", "hackathon", "plugin-marketplace"]
+}
