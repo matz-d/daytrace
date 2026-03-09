@@ -187,6 +187,8 @@ def main() -> None:
                 scanned_files=len(jsonl_files),
             )
         )
+    except PermissionError as exc:
+        emit(skipped_response(SOURCE_NAME, "permission_denied", root=str(root), message=str(exc)))
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 

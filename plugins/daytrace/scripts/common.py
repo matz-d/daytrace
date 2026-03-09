@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
+URL_PATTERN = re.compile(r"https?://[^\s<>\"]+")
 
 
 def parse_datetime(value: str | None, *, bound: str = "start") -> datetime | None:
@@ -87,8 +90,18 @@ def within_range(value: datetime | str | int | float | None, start: datetime | N
     return True
 
 
+def sanitize_url(raw_url: str) -> str:
+    parsed = urlsplit(raw_url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def sanitize_text(value: str | None) -> str:
+    text = value or ""
+    return URL_PATTERN.sub(lambda match: sanitize_url(match.group(0)), text)
+
+
 def summarize_text(value: str | None, limit: int = 160) -> str:
-    text = " ".join((value or "").split())
+    text = " ".join(sanitize_text(value).split())
     if len(text) <= limit:
         return text
     return f"{text[: max(0, limit - 3)].rstrip()}..."
@@ -98,7 +111,7 @@ def extract_text(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value
+        return sanitize_text(value)
     if isinstance(value, list):
         return " ".join(part for part in (extract_text(item) for item in value) if part)
     if isinstance(value, dict):

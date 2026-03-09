@@ -19,7 +19,7 @@ def write_file(path: Path, content: str) -> None:
 
 
 class AggregateCliTests(unittest.TestCase):
-    def run_aggregate(self, sources_file: Path) -> dict:
+    def run_aggregate(self, sources_file: Path) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(
             ["python3", str(AGGREGATE), "--sources-file", str(sources_file), "--all-sessions"],
             cwd=str(REPO_ROOT),
@@ -30,7 +30,7 @@ class AggregateCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["status"], "success", msg=completed.stdout)
-        return payload
+        return completed
 
     def test_aggregate_merges_parallel_results(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -164,7 +164,8 @@ class AggregateCliTests(unittest.TestCase):
                 ),
             )
 
-            payload = self.run_aggregate(sources_file)
+            completed = self.run_aggregate(sources_file)
+            payload = json.loads(completed.stdout)
             self.assertEqual(len(payload["timeline"]), 3)
             self.assertEqual(len(payload["groups"]), 2)
             self.assertEqual(payload["groups"][0]["confidence"], "high")
@@ -175,6 +176,9 @@ class AggregateCliTests(unittest.TestCase):
             self.assertEqual(payload["groups"][0]["sources"], ["claude-history", "git-history"])
             self.assertTrue(any(source["name"] == "broken-source" and source["status"] == "error" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "unsupported-source" and source["status"] == "skipped" for source in payload["sources"]))
+            self.assertIn("Source preflight:", completed.stderr)
+            self.assertIn("available=", completed.stderr)
+            self.assertIn("skipped=unsupported-source(unsupported_platform)", completed.stderr)
 
     def test_aggregate_handles_zero_runnable_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -198,11 +202,13 @@ class AggregateCliTests(unittest.TestCase):
                 ),
             )
 
-            payload = self.run_aggregate(sources_file)
+            completed = self.run_aggregate(sources_file)
+            payload = json.loads(completed.stdout)
             self.assertEqual(payload["timeline"], [])
             self.assertEqual(payload["groups"], [])
             self.assertTrue(payload["summary"]["no_sources_available"])
             self.assertEqual(payload["summary"]["source_status_counts"]["skipped"], 1)
+            self.assertIn("available=none", completed.stderr)
 
 
 if __name__ == "__main__":

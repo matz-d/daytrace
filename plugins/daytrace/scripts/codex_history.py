@@ -252,6 +252,16 @@ def main() -> None:
                 scanned_rollouts=len(rollout_files),
             )
         )
+    except PermissionError as exc:
+        emit(
+            skipped_response(
+                SOURCE_NAME,
+                "permission_denied",
+                history_file=str(history_file),
+                sessions_root=str(sessions_root),
+                message=str(exc),
+            )
+        )
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 

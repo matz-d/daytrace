@@ -42,7 +42,7 @@ user-invocable: true
 必ず先に `aggregate.py` を実行し、中間 JSON を取得する。
 
 `aggregate.py` はこの SKILL.md と同じ plugin 内の `scripts/` ディレクトリにある。
-実行前に、まずこの SKILL.md の絶対パスからプラグインルートを特定し、そこからの相対パスで実行する。
+この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
 
 ```bash
 python3 <plugin-root>/scripts/aggregate.py --date today

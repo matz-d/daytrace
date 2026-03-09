@@ -12,9 +12,15 @@ Depends on: C（aggregator の中間 JSON が入力）
 - [x] 明日のアクション提案を含める
 - [x] confidence が低い項目だけ確認質問に回す流れを作る
 - [x] source 欠損時の空日報 / 簡易日報の挙動を定義する
-- [ ] 1 コマンドで収集→集約→日報出力まで通ることを確認する
+- [x] 1 コマンドで収集→集約→日報出力まで通ることを確認する
 
 ## Done Criteria
 
-- [ ] 完全自動で日報ドラフトが出る
-- [ ] 不確実点だけ最後に確認できる
+- [x] 完全自動で日報ドラフトが出る
+- [x] 不確実点だけ最後に確認できる
+
+## Verification Notes
+
+- [x] 2026-03-09 に `python3 plugins/daytrace/scripts/aggregate.py --workspace /Users/makotomatuda/projects/lab/daytrace --date today` を実行し、中間 JSON を取得した（`success=5`, `events=86`, `groups=10`）
+- [x] 上記 JSON から SKILL.md のルールに沿って 5 項目の日報ドラフトを組み立て、`low` confidence 項目だけを `確認したい点` に分離できることを確認した
+- [x] `chrome-history` 単独では `success=1` かつ全 group が `low` になること、擬似 0 source ケースでは `summary.no_sources_available=true` と `sources[].status=skipped` になることを確認した

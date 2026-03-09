@@ -97,8 +97,16 @@ def resolve_command_paths(tokens: list[str]) -> list[str]:
     return resolved
 
 
-def build_command(source: dict[str, Any], *, since: str | None, until: str | None, all_sessions: bool) -> list[str]:
+def build_command(
+    source: dict[str, Any],
+    *,
+    workspace: Path,
+    since: str | None,
+    until: str | None,
+    all_sessions: bool,
+) -> list[str]:
     command = resolve_command_paths(shlex.split(source["command"]))
+    command.extend(["--workspace", str(workspace)])
     if source.get("supports_date_range"):
         if since:
             command.extend(["--since", since])
@@ -179,7 +187,7 @@ def run_source(
     until: str | None,
     all_sessions: bool,
 ) -> dict[str, Any]:
-    command = build_command(source, since=since, until=until, all_sessions=all_sessions)
+    command = build_command(source, workspace=workspace, since=since, until=until, all_sessions=all_sessions)
     started = datetime.now().timestamp()
     try:
         completed = subprocess.run(
@@ -274,6 +282,75 @@ def select_sources(
             continue
         runnable.append(source)
     return runnable, skipped
+
+
+def git_repo_available(workspace: Path) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def source_availability(source: dict[str, Any], workspace: Path) -> tuple[str, str | None]:
+    command = resolve_command_paths(shlex.split(source["command"]))
+    script_token = next((token for token in command if token.endswith(".py") or token.endswith(".sh")), None)
+    if script_token and not Path(script_token).exists():
+        return "unavailable", "command_missing"
+
+    name = source["name"]
+    if name in {"git-history", "workspace-file-activity"}:
+        if not git_repo_available(workspace):
+            return "unavailable", "not_git_repo"
+    elif name == "claude-history":
+        if not (Path.home() / ".claude" / "projects").exists():
+            return "unavailable", "not_found"
+    elif name == "codex-history":
+        history_file = Path.home() / ".codex" / "history.jsonl"
+        sessions_root = Path.home() / ".codex" / "sessions"
+        if not history_file.exists() or not sessions_root.exists():
+            return "unavailable", "not_found"
+    elif name == "chrome-history":
+        chrome_root = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+        history_paths = list(chrome_root.glob("Default/History")) + list(chrome_root.glob("Profile */History"))
+        if not history_paths:
+            return "unavailable", "not_found"
+
+    return "available", None
+
+
+def emit_preflight_summary(
+    runnable_sources: list[dict[str, Any]],
+    skipped_sources: list[dict[str, Any]],
+    workspace: Path,
+) -> None:
+    available: list[str] = []
+    unavailable: list[str] = []
+    skipped: list[str] = []
+
+    for source in runnable_sources:
+        status, reason = source_availability(source, workspace)
+        if status == "available":
+            available.append(source["name"])
+        else:
+            unavailable.append(f"{source['name']}({reason})")
+
+    for source in skipped_sources:
+        skipped.append(f"{source['source']}({source.get('reason', 'skipped')})")
+
+    parts = [
+        f"workspace={workspace}",
+        "available=" + (", ".join(sorted(available)) if available else "none"),
+    ]
+    if unavailable:
+        parts.append("unavailable=" + ", ".join(sorted(unavailable)))
+    if skipped:
+        parts.append("skipped=" + ", ".join(sorted(skipped)))
+    print("Source preflight: " + " | ".join(parts), file=sys.stderr)
 
 
 def group_confidence(source_names: set[str]) -> str:
@@ -372,6 +449,7 @@ def main() -> None:
             source_names=args.source_names,
             platform_name=current_platform(),
         )
+        emit_preflight_summary(runnable_sources, skipped_sources, workspace)
 
         max_workers = args.max_workers or max(1, len(runnable_sources))
         source_results = list(skipped_sources)

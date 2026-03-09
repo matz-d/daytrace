@@ -29,7 +29,7 @@ user-invocable: true
 必ず先に `aggregate.py` を実行し、中間 JSON を取得する。
 
 `aggregate.py` はこの SKILL.md と同じ plugin 内の `scripts/` ディレクトリにある。
-実行前に、まずこの SKILL.md の絶対パスからプラグインルートを特定し、そこからの相対パスで実行する。
+この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
 
 今日の日報:
 
@@ -116,6 +116,14 @@ python3 <plugin-root>/scripts/aggregate.py --workspace /absolute/path/to/workspa
 
 ## Graceful Degrade
 
+source 欠損の判定は、まず `summary` と `sources` から行う。
+
+- `summary.no_sources_available == true` または `source_status_counts.success == 0`
+  - `source が 0 本` とみなす
+- `source_status_counts.success` が 1-2
+  - `source が 1-2 本だけ` とみなす
+- `sources[].status` に `skipped` / `error` があっても、成功 source が残っていれば処理継続する
+
 ### source が 0 本
 
 以下のような空日報を返す。
@@ -143,6 +151,7 @@ python3 <plugin-root>/scripts/aggregate.py --workspace /absolute/path/to/workspa
 - まず `sources` を見て、何が取れて何が欠けたかを把握する
 - 次に `groups` を上から順に見て、その日の主要な活動塊を抽出する
 - `git-history + claude/codex-history` が同じグループにある場合は、最優先で主要活動候補にする
+- 同じグループに browser の雑多な移動履歴と git / AI の作業痕跡が混在する場合は、1つの出来事に無理に束ねず、主要活動と補助情報を分けて記述する
 - `chrome-history` は文脈補助として使い、単独では強い結論を作らない
 - 進捗、実装、調査、整理、確認のどれに当たるかを短い動詞で表現する
 - 未完了の作業が見える場合は、明日のアクションに自然につなぐ

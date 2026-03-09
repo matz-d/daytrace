@@ -74,3 +74,8 @@ Error shape:
 - `timeline`: merged event list sorted by timestamp
 - `groups`: nearby events grouped with `evidence` and aggregated `confidence`
 - `summary`: source status counts, total event count, total group count, and `no_sources_available`
+
+Aggregator behavior:
+
+- forwards `--workspace` to source CLIs and also runs them with that directory as `cwd`
+- prints a one-line preflight summary to `stderr` before collection starts

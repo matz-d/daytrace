@@ -29,6 +29,7 @@ CHROME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Emit Chrome browsing history as DayTrace events.")
+    parser.add_argument("--workspace", default=".", help="Accepted for aggregator compatibility. Ignored.")
     parser.add_argument("--since", help="Start datetime or date (inclusive).")
     parser.add_argument("--until", help="End datetime or date (inclusive).")
     parser.add_argument("--limit", type=int, help="Maximum number of events to return.")
@@ -58,6 +59,29 @@ def normalize_url(raw_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
+def collapse_visits(rows: list[tuple[str, str, str, int, int]]) -> list[dict[str, object]]:
+    collapsed: dict[tuple[str, str], dict[str, object]] = {}
+    for profile, normalized_url, title, last_visit_time, visit_count in rows:
+        key = (profile, normalized_url)
+        timestamp = chrome_timestamp_to_iso(last_visit_time)
+        current = collapsed.get(key)
+        if current is None:
+            collapsed[key] = {
+                "profile": profile,
+                "url": normalized_url,
+                "title": title or "",
+                "timestamp": timestamp,
+                "visit_count": visit_count,
+            }
+            continue
+
+        current["visit_count"] = int(current["visit_count"]) + visit_count
+        if timestamp > str(current["timestamp"]):
+            current["timestamp"] = timestamp
+            current["title"] = title or str(current["title"])
+    return list(collapsed.values())
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -76,7 +100,7 @@ def main() -> None:
             emit(skipped_response(SOURCE_NAME, "not_found", root=str(root)))
             return
 
-        events = []
+        raw_rows: list[tuple[str, str, str, int, int]] = []
         checked_profiles = []
         for profile, history_path in history_files:
             checked_profiles.append(profile)
@@ -100,25 +124,28 @@ def main() -> None:
                         continue
 
                     normalized_url = normalize_url(url)
-                    events.append(
-                        {
-                            "source": SOURCE_NAME,
-                            "timestamp": timestamp,
-                            "type": "browser_visit",
-                            "summary": summarize_text(title or normalized_url, 140),
-                            "details": {
-                                "profile": profile,
-                                "url": normalized_url,
-                                "title": title or "",
-                                "visit_count": visit_count,
-                            },
-                            "confidence": "low",
-                        }
-                    )
+                    raw_rows.append((profile, normalized_url, title or "", last_visit_time, visit_count))
                 connection.close()
             finally:
                 temp_path.unlink(missing_ok=True)
 
+        events = []
+        for row in collapse_visits(raw_rows):
+            events.append(
+                {
+                    "source": SOURCE_NAME,
+                    "timestamp": str(row["timestamp"]),
+                    "type": "browser_visit",
+                    "summary": summarize_text(str(row["title"]) or str(row["url"]), 140),
+                    "details": {
+                        "profile": row["profile"],
+                        "url": row["url"],
+                        "title": row["title"],
+                        "visit_count": row["visit_count"],
+                    },
+                    "confidence": "low",
+                }
+            )
         events.sort(key=lambda event: event["timestamp"], reverse=True)
         emit(
             success_response(
@@ -129,6 +156,8 @@ def main() -> None:
                 until=args.until,
             )
         )
+    except PermissionError as exc:
+        emit(skipped_response(SOURCE_NAME, "permission_denied", root=str(root), message=str(exc)))
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 
