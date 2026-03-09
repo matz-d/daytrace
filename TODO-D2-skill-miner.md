@@ -9,14 +9,14 @@ skill-miner は aggregator を経由せず、`claude_history.py` と `codex_hist
 
 ## Checklist
 
-- [ ] `plugins/daytrace/skills/skill-miner/SKILL.md` のゴール・入力・出力・確認フローを書く
-- [ ] SKILL.md 内で `claude_history.py` + `codex_history.py` を直接呼び出す導線を作る（全セッションモード）
-- [ ] 反復作業パターン抽出ロジックを SKILL.md のプロンプトとして定義する
-- [ ] `skill` / `plugin` / `agent` / `CLAUDE.md` / `hook` の 5 分類ルールを定義する
-- [ ] 各候補に「なぜその分類か」の説明を出せるようにする
-- [ ] 提案リスト出力フォーマットを作る
-- [ ] ユーザーが候補を選択する確認フローを作る
-- [ ] 選択候補に対するドラフト生成フローを実装する（SKILL.md / plugin.json / CLAUDE.md ルール / hook 設定）
+- [x] `plugins/daytrace/skills/skill-miner/SKILL.md` のゴール・入力・出力・確認フローを書く
+- [x] SKILL.md 内で `claude_history.py` + `codex_history.py` を直接呼び出す導線を作る（全セッションモード）
+- [x] 反復作業パターン抽出ロジックを SKILL.md のプロンプトとして定義する
+- [x] `skill` / `plugin` / `agent` / `CLAUDE.md` / `hook` の 5 分類ルールを定義する
+- [x] 各候補に「なぜその分類か」の説明を出せるようにする
+- [x] 提案リスト出力フォーマットを作る
+- [x] ユーザーが候補を選択する確認フローを作る
+- [x] 選択候補に対するドラフト生成フローを実装する（SKILL.md / plugin.json / CLAUDE.md ルール / hook 設定）
 - [ ] 3 件以上の候補を安定して出せることを確認する
 
 ## Done Criteria

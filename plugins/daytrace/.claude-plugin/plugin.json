@@ -1,0 +1,11 @@
+{
+  "name": "daytrace",
+  "description": "ローカル証跡（Git, Claude/Codex会話, Chrome履歴, ファイル変更）を集約し、日報・スキル提案・投稿下書きを自動生成する plugin。",
+  "version": "0.1.0",
+  "author": {
+    "name": "DayTrace"
+  },
+  "homepage": "https://github.com/KaishuShito/agi-lab-skills-marketplace",
+  "license": "MIT",
+  "keywords": ["daily-report", "activity-trace", "skill-mining", "post-draft"]
+}
