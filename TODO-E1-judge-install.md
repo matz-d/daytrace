@@ -9,7 +9,7 @@ Depends on: E3（hardening で致命的バグを潰してから）
 - [x] install 直後の利用可能ソース検出表示を確認する
 - [x] source 0 本、1 本、複数本のケースで実行確認する
 - [x] 権限不足、履歴不在、DB lock の挙動を確認する
-- [x] graceful degrade の実例をスクリーンショットまたはログで残す
+- [x] graceful degrade の実例をスクリーンショットまたはログで残す（※DB lock は temp copy により耐障害的成功するため degrade ではない）
 
 ## Done Criteria
 
@@ -24,5 +24,5 @@ Depends on: E3（hardening で致命的バグを潰してから）
 - `権限不足`: `python3 plugins/daytrace/scripts/claude_history.py --root "$UNREADABLE_CLAUDE_ROOT" --all-sessions`、`python3 plugins/daytrace/scripts/codex_history.py --history-file "$UNREADABLE_HISTORY" --sessions-root "$SESSIONS_ROOT" --all-sessions`、`python3 plugins/daytrace/scripts/chrome_history.py --root "$UNREADABLE_CHROME_ROOT"` を確認。いずれも JSON で `status=skipped` と `reason=permission_denied` を返し、`message` に OS エラーが入る。
 - `履歴不在`: `python3 plugins/daytrace/scripts/codex_history.py --history-file "$MISSING_HISTORY" --sessions-root "$MISSING_SESSIONS"` で JSON `status=skipped`, `reason=not_found` を確認。install 直後の空環境でも machine-readable に扱える。
 - `source 欠損`: 欠損 script を指す一時 `sources.json` で `python3 plugins/daytrace/scripts/aggregate.py --workspace "$EMPTY_WS" --sources-file "$TMP_SOURCES"` を実行。`stderr` は `unavailable=missing-source(command_missing)`、`stdout.sources[0]` は `status=error` だが top-level aggregate は落ちずに JSON を返す。
-- `DB lock 相当`: 排他 lock 中の Chrome `History` DB を用意して `python3 plugins/daytrace/scripts/chrome_history.py --root "$LOCKED_CHROME_ROOT"` を実行。読み取り前に temp copy を作る実装のため `status=success` で 1 event を返し、lock 中でも graceful degrade ではなく通常成功を確認。
+- `DB lock 相当`: 排他 lock 中の Chrome `History` DB を用意して `python3 plugins/daytrace/scripts/chrome_history.py --root "$LOCKED_CHROME_ROOT"` を実行。読み取り前に temp copy を作る実装のため `status=success` で 1 event を返し、lock 中でも graceful degrade ではなく**耐障害的成功**として通常成功することを確認（degrade の実例には含めない）。
 - 評価: install 直後に審査員が知りたい「この環境で何が使えるか」は `stderr` の `Source preflight: workspace=... | available=... | unavailable=... | skipped=...` で即時に把握できる。詳細な reason は `stdout.sources[]` の JSON でも追える。

@@ -19,9 +19,9 @@ def write_file(path: Path, content: str) -> None:
 
 
 class AggregateCliTests(unittest.TestCase):
-    def run_aggregate(self, sources_file: Path) -> subprocess.CompletedProcess[str]:
+    def run_aggregate(self, sources_file: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(
-            ["python3", str(AGGREGATE), "--sources-file", str(sources_file), "--all-sessions"],
+            ["python3", str(AGGREGATE), "--sources-file", str(sources_file), "--all-sessions", *extra_args],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
@@ -48,10 +48,10 @@ class AggregateCliTests(unittest.TestCase):
                     import json
                     print(json.dumps({
                         "status": "success",
-                        "source": "git-history",
+                        "source": "repo-source",
                         "events": [
                             {
-                                "source": "git-history",
+                                "source": "repo-source",
                                 "timestamp": "2026-03-09T10:00:00+09:00",
                                 "type": "commit",
                                 "summary": "Commit one",
@@ -70,10 +70,10 @@ class AggregateCliTests(unittest.TestCase):
                     import json
                     print(json.dumps({
                         "status": "success",
-                        "source": "claude-history",
+                        "source": "assistant-source",
                         "events": [
                             {
-                                "source": "claude-history",
+                                "source": "assistant-source",
                                 "timestamp": "2026-03-09T10:05:00+09:00",
                                 "type": "session_summary",
                                 "summary": "Claude summary",
@@ -92,10 +92,10 @@ class AggregateCliTests(unittest.TestCase):
                     import json
                     print(json.dumps({
                         "status": "success",
-                        "source": "chrome-history",
+                        "source": "browser-source",
                         "events": [
                             {
-                                "source": "chrome-history",
+                                "source": "browser-source",
                                 "timestamp": "2026-03-09T11:00:00+09:00",
                                 "type": "browser_visit",
                                 "summary": "Browser event",
@@ -115,31 +115,37 @@ class AggregateCliTests(unittest.TestCase):
                 json.dumps(
                     [
                         {
-                            "name": "git-history",
+                            "name": "repo-source",
                             "command": f"python3 {git_stub}",
                             "required": False,
                             "timeout_sec": 5,
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": False,
+                            "prerequisites": [],
+                            "confidence_category": "git",
                         },
                         {
-                            "name": "claude-history",
+                            "name": "assistant-source",
                             "command": f"python3 {claude_stub}",
                             "required": False,
                             "timeout_sec": 5,
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": True,
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
                         },
                         {
-                            "name": "chrome-history",
+                            "name": "browser-source",
                             "command": f"python3 {chrome_stub}",
                             "required": False,
                             "timeout_sec": 5,
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": False,
+                            "prerequisites": [],
+                            "confidence_category": "browser",
                         },
                         {
                             "name": "broken-source",
@@ -149,6 +155,8 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "prerequisites": [],
+                            "confidence_category": "other",
                         },
                         {
                             "name": "unsupported-source",
@@ -158,6 +166,8 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["win32"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "prerequisites": [],
+                            "confidence_category": "other",
                         },
                     ],
                     ensure_ascii=False,
@@ -173,7 +183,8 @@ class AggregateCliTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["source_status_counts"]["success"], 3)
             self.assertEqual(payload["summary"]["source_status_counts"]["error"], 1)
             self.assertEqual(payload["summary"]["source_status_counts"]["skipped"], 1)
-            self.assertEqual(payload["groups"][0]["sources"], ["claude-history", "git-history"])
+            self.assertEqual(payload["groups"][0]["sources"], ["assistant-source", "repo-source"])
+            self.assertEqual(payload["groups"][0]["confidence_categories"], ["ai_history", "git"])
             self.assertTrue(any(source["name"] == "broken-source" and source["status"] == "error" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "unsupported-source" and source["status"] == "skipped" for source in payload["sources"]))
             self.assertIn("Source preflight:", completed.stderr)
@@ -196,6 +207,8 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["win32"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "prerequisites": [],
+                            "confidence_category": "other",
                         }
                     ],
                     ensure_ascii=False,
@@ -209,6 +222,49 @@ class AggregateCliTests(unittest.TestCase):
             self.assertTrue(payload["summary"]["no_sources_available"])
             self.assertEqual(payload["summary"]["source_status_counts"]["skipped"], 1)
             self.assertIn("available=none", completed.stderr)
+
+    def test_group_window_can_be_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_stub = temp_path / "source_stub.py"
+            write_file(
+                source_stub,
+                textwrap.dedent(
+                    """
+                    import json
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "repo-source",
+                        "events": [
+                            {"source":"repo-source","timestamp":"2026-03-09T10:00:00+09:00","type":"commit","summary":"first","details":{},"confidence":"high"},
+                            {"source":"repo-source","timestamp":"2026-03-09T10:10:00+09:00","type":"commit","summary":"second","details":{},"confidence":"high"}
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+            sources_file = temp_path / "sources.json"
+            write_file(
+                sources_file,
+                json.dumps(
+                    [{
+                        "name": "repo-source",
+                        "command": f"python3 {source_stub}",
+                        "required": False,
+                        "timeout_sec": 5,
+                        "platforms": ["darwin", "linux"],
+                        "supports_date_range": True,
+                        "supports_all_sessions": False,
+                        "prerequisites": [],
+                        "confidence_category": "git"
+                    }],
+                    ensure_ascii=False,
+                ),
+            )
+            completed = self.run_aggregate(sources_file, "--group-window", "5")
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["config"]["group_window_minutes"], 5)
+            self.assertEqual(len(payload["groups"]), 2)
 
 
 if __name__ == "__main__":

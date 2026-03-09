@@ -58,10 +58,18 @@ Error shape:
 
 `details` is required but source-specific.
 
+## Source registry fields
+
+`sources.json` supports these additional declarative fields:
+
+- `prerequisites`: preflight checks such as `git_repo`, `path_exists`, `all_paths_exist`, `glob_exists`, `chrome_history_db`
+- `confidence_category`: source role used by grouping confidence rules, such as `git`, `ai_history`, `browser`, `file_activity`
+
 ## Shared CLI conventions
 
 - `--since` and `--until` accept ISO 8601 datetime or `YYYY-MM-DD`
 - `--date` accepts `today`, `yesterday`, or `YYYY-MM-DD` as a shorthand for single-day aggregation
+- `--group-window` overrides the default 15 minute grouping window
 - `--workspace` defaults to the current working directory where relevant
 - `--all-sessions` disables workspace filtering for Claude/Codex history
 - `--limit` caps returned events for manual inspection
@@ -79,3 +87,4 @@ Aggregator behavior:
 
 - forwards `--workspace` to source CLIs and also runs them with that directory as `cwd`
 - prints a one-line preflight summary to `stderr` before collection starts
+- uses `sources.json` metadata to evaluate preflight availability and confidence categories without source-name conditionals

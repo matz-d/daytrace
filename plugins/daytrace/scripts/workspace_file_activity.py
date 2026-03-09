@@ -11,10 +11,12 @@ from common import (
     error_response,
     isoformat,
     is_within_path,
+    parse_datetime,
     resolve_workspace,
     run_command,
     skipped_response,
     success_response,
+    within_range,
 )
 
 
@@ -24,6 +26,8 @@ SOURCE_NAME = "workspace-file-activity"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Emit untracked workspace file activity as DayTrace events.")
     parser.add_argument("--workspace", default=".", help="Workspace path to inspect. Defaults to cwd.")
+    parser.add_argument("--since", help="Start datetime or date (inclusive).")
+    parser.add_argument("--until", help="End datetime or date (inclusive).")
     parser.add_argument("--limit", type=int, help="Maximum number of events to return.")
     return parser
 
@@ -46,6 +50,8 @@ def main() -> None:
 
     try:
         workspace = resolve_workspace(args.workspace)
+        start = parse_datetime(args.since, bound="start")
+        end = parse_datetime(args.until, bound="end")
         context = repo_context(workspace)
         if context is None:
             emit(skipped_response(SOURCE_NAME, "not_git_repo", workspace=str(workspace)))
@@ -78,10 +84,13 @@ def main() -> None:
                 continue
 
             stats = full_path.stat()
+            timestamp = isoformat(stats.st_mtime)
+            if not within_range(timestamp, start, end):
+                continue
             events.append(
                 {
                     "source": SOURCE_NAME,
-                    "timestamp": isoformat(stats.st_mtime),
+                    "timestamp": timestamp,
                     "type": "untracked_file",
                     "summary": f"Untracked file activity: {rel_path}",
                     "details": {
@@ -113,6 +122,8 @@ def main() -> None:
                 apply_limit(events, args.limit),
                 workspace=str(workspace),
                 repo_root=str(repo_root),
+                since=args.since,
+                until=args.until,
             )
         )
     except Exception as exc:

@@ -188,7 +188,7 @@ def main() -> None:
             )
         )
     except PermissionError as exc:
-        emit(skipped_response(SOURCE_NAME, "permission_denied", root=str(root), message=str(exc)))
+        emit(skipped_response(SOURCE_NAME, "permission_denied", root=str(args.root), message=str(exc)))
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 

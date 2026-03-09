@@ -257,8 +257,8 @@ def main() -> None:
             skipped_response(
                 SOURCE_NAME,
                 "permission_denied",
-                history_file=str(history_file),
-                sessions_root=str(sessions_root),
+                history_file=str(args.history_file),
+                sessions_root=str(args.sessions_root),
                 message=str(exc),
             )
         )

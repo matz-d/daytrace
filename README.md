@@ -89,6 +89,7 @@ plugins/
 - `skill-miner` など対話で候補選択するフローの最終確認は、現状手動確認ベースです
 - `sources.json` の欠損や破損は設定エラーとして扱い、明示的に失敗させます
 - 個別 source script が欠損している場合は preflight で `command_missing` を表示し、aggregate 全体は他 source の処理を継続します
+- shell history は MVP では未収集です
 
 ## License
 

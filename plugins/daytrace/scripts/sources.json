@@ -6,7 +6,9 @@
     "timeout_sec": 10,
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
-    "supports_all_sessions": false
+    "supports_all_sessions": false,
+    "prerequisites": [{"type": "git_repo"}],
+    "confidence_category": "git"
   },
   {
     "name": "claude-history",
@@ -15,7 +17,9 @@
     "timeout_sec": 30,
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
-    "supports_all_sessions": true
+    "supports_all_sessions": true,
+    "prerequisites": [{"type": "path_exists", "path": "~/.claude/projects"}],
+    "confidence_category": "ai_history"
   },
   {
     "name": "codex-history",
@@ -24,16 +28,20 @@
     "timeout_sec": 30,
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
-    "supports_all_sessions": true
+    "supports_all_sessions": true,
+    "prerequisites": [{"type": "all_paths_exist", "paths": ["~/.codex/history.jsonl", "~/.codex/sessions"]}],
+    "confidence_category": "ai_history"
   },
   {
     "name": "chrome-history",
     "command": "python3 scripts/chrome_history.py",
     "required": false,
     "timeout_sec": 20,
-    "platforms": ["darwin"],
+    "platforms": ["darwin", "linux"],
     "supports_date_range": true,
-    "supports_all_sessions": false
+    "supports_all_sessions": false,
+    "prerequisites": [{"type": "chrome_history_db"}],
+    "confidence_category": "browser"
   },
   {
     "name": "workspace-file-activity",
@@ -41,7 +49,9 @@
     "required": false,
     "timeout_sec": 10,
     "platforms": ["darwin", "linux"],
-    "supports_date_range": false,
-    "supports_all_sessions": false
+    "supports_date_range": true,
+    "supports_all_sessions": false,
+    "prerequisites": [{"type": "git_repo"}],
+    "confidence_category": "file_activity"
   }
 ]

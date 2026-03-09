@@ -166,6 +166,17 @@ def run_command(args: list[str], *, cwd: str | Path | None = None, timeout: int 
     )
 
 
+def default_chrome_root() -> Path | None:
+    """Return the default Chrome user data directory for the current platform.
+    Returns None for unsupported platforms (e.g. Windows).
+    """
+    if sys.platform.startswith("darwin"):
+        return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    if sys.platform.startswith("linux"):
+        return Path.home() / ".config" / "google-chrome"
+    return None
+
+
 def resolve_workspace(workspace: str | None) -> Path:
     target = workspace or os.getcwd()
     return Path(target).expanduser().resolve()

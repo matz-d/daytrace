@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from common import (
     apply_limit,
+    default_chrome_root,
     emit,
     error_response,
     parse_datetime,
@@ -23,7 +24,7 @@ from common import (
 
 
 SOURCE_NAME = "chrome-history"
-CHROME_ROOT = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+CHROME_ROOT = default_chrome_root() or Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
 CHROME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 

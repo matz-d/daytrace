@@ -12,13 +12,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from common import ensure_datetime, isoformat, parse_datetime, resolve_workspace
+from common import default_chrome_root, ensure_datetime, isoformat, parse_datetime, resolve_workspace
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-GROUP_WINDOW_MINUTES = 15
+DEFAULT_GROUP_WINDOW_MINUTES = 15
 EVIDENCE_LIMIT = 5
-AI_HISTORY_SOURCES = {"claude-history", "codex-history"}
 REQUIRED_SOURCE_FIELDS = {
     "name",
     "command",
@@ -40,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--all-sessions", action="store_true", help="Pass --all-sessions to sources that support it.")
     parser.add_argument("--sources-file", default=str(SCRIPT_DIR / "sources.json"), help="Path to sources.json.")
     parser.add_argument("--source", action="append", dest="source_names", help="Specific source name(s) to run.")
+    parser.add_argument("--group-window", type=int, default=DEFAULT_GROUP_WINDOW_MINUTES, help="Minutes for grouping nearby events.")
     parser.add_argument("--max-workers", type=int, help="Maximum concurrent source processes.")
     return parser
 
@@ -85,6 +85,17 @@ def load_sources(path: Path) -> list[dict[str, Any]]:
             raise ValueError(f"Source entry is missing fields: {sorted(missing)}")
         sources.append(entry)
     return sources
+
+
+def normalize_confidence_categories(source: dict[str, Any]) -> list[str]:
+    raw_value = source.get("confidence_category")
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        return [raw_value]
+    if isinstance(raw_value, list):
+        return [item for item in raw_value if isinstance(item, str)]
+    raise ValueError(f"confidence_category must be a string or list of strings for {source['name']}")
 
 
 def resolve_command_paths(tokens: list[str]) -> list[str]:
@@ -296,29 +307,39 @@ def git_repo_available(workspace: Path) -> bool:
     )
 
 
+def evaluate_prerequisite(prerequisite: dict[str, Any], workspace: Path) -> tuple[bool, str | None]:
+    prereq_type = prerequisite.get("type")
+    if prereq_type == "git_repo":
+        return (git_repo_available(workspace), "not_git_repo")
+    if prereq_type == "path_exists":
+        path = Path(str(prerequisite["path"])).expanduser()
+        return (path.exists(), "not_found")
+    if prereq_type == "all_paths_exist":
+        paths = [Path(str(path)).expanduser() for path in prerequisite.get("paths", [])]
+        return (all(path.exists() for path in paths), "not_found")
+    if prereq_type == "glob_exists":
+        base = Path(str(prerequisite["base"])).expanduser()
+        pattern = str(prerequisite["pattern"])
+        return (base.exists() and any(base.glob(pattern)), "not_found")
+    if prereq_type == "chrome_history_db":
+        chrome_root = default_chrome_root()
+        if chrome_root is None:
+            return (True, None)
+        history_paths = list(chrome_root.glob("Default/History")) + list(chrome_root.glob("Profile */History"))
+        return (bool(history_paths), "not_found")
+    raise ValueError(f"Unsupported prerequisite type: {prereq_type}")
+
+
 def source_availability(source: dict[str, Any], workspace: Path) -> tuple[str, str | None]:
     command = resolve_command_paths(shlex.split(source["command"]))
     script_token = next((token for token in command if token.endswith(".py") or token.endswith(".sh")), None)
     if script_token and not Path(script_token).exists():
         return "unavailable", "command_missing"
 
-    name = source["name"]
-    if name in {"git-history", "workspace-file-activity"}:
-        if not git_repo_available(workspace):
-            return "unavailable", "not_git_repo"
-    elif name == "claude-history":
-        if not (Path.home() / ".claude" / "projects").exists():
-            return "unavailable", "not_found"
-    elif name == "codex-history":
-        history_file = Path.home() / ".codex" / "history.jsonl"
-        sessions_root = Path.home() / ".codex" / "sessions"
-        if not history_file.exists() or not sessions_root.exists():
-            return "unavailable", "not_found"
-    elif name == "chrome-history":
-        chrome_root = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
-        history_paths = list(chrome_root.glob("Default/History")) + list(chrome_root.glob("Profile */History"))
-        if not history_paths:
-            return "unavailable", "not_found"
+    for prerequisite in source.get("prerequisites", []):
+        is_available, reason = evaluate_prerequisite(prerequisite, workspace)
+        if not is_available:
+            return "unavailable", reason
 
     return "available", None
 
@@ -353,9 +374,9 @@ def emit_preflight_summary(
     print("Source preflight: " + " | ".join(parts), file=sys.stderr)
 
 
-def group_confidence(source_names: set[str]) -> str:
-    has_git = "git-history" in source_names
-    has_ai = bool(AI_HISTORY_SOURCES & source_names)
+def group_confidence(categories: set[str]) -> str:
+    has_git = "git" in categories
+    has_ai = "ai_history" in categories
     if has_git and has_ai:
         return "high"
     if has_git or has_ai:
@@ -363,10 +384,15 @@ def group_confidence(source_names: set[str]) -> str:
     return "low"
 
 
-def build_groups(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_groups(
+    timeline: list[dict[str, Any]],
+    *,
+    group_window_minutes: int,
+    confidence_categories_by_source: dict[str, list[str]],
+) -> list[dict[str, Any]]:
     groups = []
     current: dict[str, Any] | None = None
-    window = timedelta(minutes=GROUP_WINDOW_MINUTES)
+    window = timedelta(minutes=group_window_minutes)
 
     for event in timeline:
         event_time = ensure_datetime(event["timestamp"])
@@ -390,7 +416,12 @@ def build_groups(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group_id = f"group-{index:03d}"
         events = group["events"]
         source_names = {event["source"] for event in events}
-        confidence = group_confidence(source_names)
+        categories = {
+            category
+            for source_name in source_names
+            for category in confidence_categories_by_source.get(source_name, [])
+        }
+        confidence = group_confidence(categories)
         evidence = [
             {
                 "timestamp": event["timestamp"],
@@ -412,6 +443,7 @@ def build_groups(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "summary": summary,
                 "confidence": confidence,
                 "sources": sorted(source_names),
+                "confidence_categories": sorted(categories),
                 "source_count": len(source_names),
                 "event_count": len(events),
                 "evidence": evidence,
@@ -441,9 +473,14 @@ def main() -> None:
 
     try:
         workspace = resolve_workspace(args.workspace)
+        if args.group_window < 0:
+            raise ValueError("--group-window must be >= 0")
         sources_file = Path(args.sources_file).expanduser().resolve()
         since_arg, until_arg = resolve_date_filters(args.date, args.since, args.until)
         sources = load_sources(sources_file)
+        confidence_categories_by_source = {
+            source["name"]: normalize_confidence_categories(source) for source in sources
+        }
         runnable_sources, skipped_sources = select_sources(
             sources,
             source_names=args.source_names,
@@ -474,7 +511,11 @@ def main() -> None:
             if result["status"] == "success":
                 timeline.extend(result["events"])
         timeline.sort(key=lambda event: event["timestamp"])
-        groups = build_groups(timeline)
+        groups = build_groups(
+            timeline,
+            group_window_minutes=args.group_window,
+            confidence_categories_by_source=confidence_categories_by_source,
+        )
 
         output = {
             "status": "success",
@@ -485,10 +526,11 @@ def main() -> None:
                 "until": args.until,
                 "date": args.date,
                 "all_sessions": args.all_sessions,
+                "group_window": args.group_window,
             },
             "config": {
                 "sources_file": str(sources_file),
-                "group_window_minutes": GROUP_WINDOW_MINUTES,
+                "group_window_minutes": args.group_window,
                 "evidence_limit": EVIDENCE_LIMIT,
             },
             "sources": [summarize_source_result(result) for result in sorted(source_results, key=lambda item: item["source"])],

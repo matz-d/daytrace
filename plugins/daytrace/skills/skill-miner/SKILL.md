@@ -30,7 +30,7 @@ python3 <plugin-root>/scripts/claude_history.py --all-sessions
 python3 <plugin-root>/scripts/codex_history.py --all-sessions
 ```
 
-repo root が `/Users/makotomatuda/projects/lab/daytrace` の場合の実コマンド例:
+repo root をカレントディレクトリとした場合の実コマンド例:
 
 ```bash
 python3 plugins/daytrace/scripts/claude_history.py --all-sessions
