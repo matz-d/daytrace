@@ -266,6 +266,20 @@ class AggregateCliTests(unittest.TestCase):
             self.assertEqual(payload["config"]["group_window_minutes"], 5)
             self.assertEqual(len(payload["groups"]), 2)
 
+    def test_aggregate_returns_non_zero_on_fatal_error(self) -> None:
+        missing_sources = Path("/tmp/daytrace-missing-sources.json")
+        completed = subprocess.run(
+            ["python3", str(AGGREGATE), "--sources-file", str(missing_sources)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("No such file", payload["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

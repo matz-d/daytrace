@@ -14,7 +14,6 @@ from common import (
     parse_datetime,
     resolve_workspace,
     run_command,
-    skipped_response,
     success_response,
     within_range,
 )
@@ -105,17 +104,6 @@ def main() -> None:
             )
 
         events.sort(key=lambda event: event["timestamp"], reverse=True)
-        if not events:
-            emit(
-                skipped_response(
-                    SOURCE_NAME,
-                    "no_untracked_files",
-                    workspace=str(workspace),
-                    repo_root=str(repo_root),
-                )
-            )
-            return
-
         emit(
             success_response(
                 SOURCE_NAME,

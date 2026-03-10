@@ -173,13 +173,13 @@ Depends on: Track 1, Track 2, Track 3, Track 4, Track 5
 - [x] `skill_miner_detail.py` の `session_ref` 解決テストを作る
 - [x] broken / missing / permission denied ケースを確認する
 - [x] 10-20 論理 session の手動ゴールドセットを作る
-- [ ] E2E で「提案 -> 選択 -> ドラフト」を通す
+- [x] E2E で「提案 -> 選択 -> ドラフト」を通す
 
 ### Done Criteria
 
 - [x] 主要 contract がテストで固定されている
 - [x] ゴールドセットで明らかな merge しすぎ / split しすぎが少ない
-- [ ] 自身の履歴データで提案からドラフトまで完走する
+- [x] 自身の履歴データで提案からドラフトまで完走する
 
 ## Cross-Cutting Checklist
 

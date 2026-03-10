@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 from common import (
@@ -39,8 +39,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_history_index(path: Path, start, end) -> dict[str, dict[str, object]]:
-    sessions: dict[str, dict[str, object]] = {}
+def append_history_record(index: dict[str, dict[str, object]], session_id: str, timestamp, text) -> None:
+    session = index.setdefault(session_id, {"timestamps": [], "user_excerpts": []})
+    session["timestamps"].append(timestamp)
+    excerpt = summarize_text(text, 180)
+    if excerpt and excerpt not in session["user_excerpts"] and len(session["user_excerpts"]) < 3:
+        session["user_excerpts"].append(excerpt)
+
+
+def load_history_indexes(path: Path, start, end) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+    full_index: dict[str, dict[str, object]] = {}
+    filtered_index: dict[str, dict[str, object]] = {}
     with path.open(encoding="utf-8") as handle:
         for raw_line in handle:
             raw_line = raw_line.strip()
@@ -52,19 +61,14 @@ def load_history_index(path: Path, start, end) -> dict[str, dict[str, object]]:
                 continue
 
             timestamp = record.get("ts")
-            if not within_range(timestamp, start, end):
-                continue
-
             session_id = record.get("session_id")
             if not session_id:
                 continue
 
-            session = sessions.setdefault(session_id, {"timestamps": [], "user_excerpts": []})
-            session["timestamps"].append(timestamp)
-            excerpt = summarize_text(record.get("text"), 180)
-            if excerpt and excerpt not in session["user_excerpts"] and len(session["user_excerpts"]) < 3:
-                session["user_excerpts"].append(excerpt)
-    return sessions
+            append_history_record(full_index, session_id, timestamp, record.get("text"))
+            if within_range(timestamp, start, end):
+                append_history_record(filtered_index, session_id, timestamp, record.get("text"))
+    return full_index, filtered_index
 
 
 def session_meta_from_rollout(path: Path) -> dict[str, object] | None:
@@ -100,8 +104,7 @@ def main() -> None:
             emit(skipped_response(SOURCE_NAME, "not_found", history_file=str(history_file), sessions_root=str(sessions_root)))
             return
 
-        full_history_index = load_history_index(history_file, None, None)
-        filtered_history_index = load_history_index(history_file, start, end)
+        full_history_index, filtered_history_index = load_history_indexes(history_file, start, end)
         candidate_sessions = set(full_history_index.keys())
 
         rollout_files = sorted(sessions_root.glob("**/rollout-*.jsonl"))

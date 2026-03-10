@@ -543,6 +543,7 @@ def main() -> None:
     except Exception as exc:
         json.dump({"status": "error", "message": str(exc)}, sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
