@@ -785,7 +785,7 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
 
     for packet in prepare_payload.get("unclustered", []):
         if isinstance(packet, dict):
-            rejected.append(packet)
+            rejected.append(annotate_unclustered_packet(packet))
 
     markdown = build_proposal_markdown(ready, needs_research, rejected)
     selection_prompt = "どの候補をドラフト化しますか？番号か候補名で指定してください。" if ready else None

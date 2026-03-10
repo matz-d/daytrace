@@ -67,7 +67,8 @@ python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/pre
 4. `needs_research` の候補があり、巨大クラスタや曖昧クラスタが原因なら、代表 `session_refs` だけで 1 回だけ追加調査する
 5. 追加調査後に `skill_miner_research_judge.py` を実行し、`promote_ready` / `split_candidate` / `reject_candidate` を得る
 6. judge の結論に応じて、正式提案に昇格させるか、`追加調査待ち` または `今回は見送り` に残す
-7. 必要なら `skill_miner_proposal.py` で `提案成立` / `追加調査待ち` / `今回は見送り` を組み立てる
+7. 正式提案候補または追加調査待ち候補がある場合、`skill_miner_proposal.py` で `提案成立` / `追加調査待ち` / `今回は見送り` を組み立てる
+
 8. ユーザーに「どれをドラフト化するか」を確認する
 9. 選択された候補の `session_refs` だけで `skill_miner_detail.py --refs ...` を実行する
 10. detail を読んで、その候補に対応するドラフトを返す
@@ -261,7 +262,7 @@ prepare の出力を読んだら、まず候補を 3 区分に分ける。
 1. 候補名または項目種別
    理由: 単発または一般化の根拠不足
 
-確認したい候補がある場合だけ最後に聞く:
+提案成立に候補がある場合だけ最後に聞く:
 どの候補をドラフト化しますか？番号か候補名で指定してください。
 ```
 
