@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "description": "Seed gold set for skill-miner clustering review. These labels are manual expectations for representative logical sessions.",
+  "logical_sessions": [
+    {"id": "review-01", "expected_cluster": "review-findings", "expected_classification": "skill"},
+    {"id": "review-02", "expected_cluster": "review-findings", "expected_classification": "skill"},
+    {"id": "review-03", "expected_cluster": "review-findings", "expected_classification": "skill"},
+    {"id": "report-01", "expected_cluster": "daily-report", "expected_classification": "skill"},
+    {"id": "report-02", "expected_cluster": "daily-report", "expected_classification": "skill"},
+    {"id": "report-03", "expected_cluster": "daily-report", "expected_classification": "skill"},
+    {"id": "config-01", "expected_cluster": "env-rules", "expected_classification": "CLAUDE.md"},
+    {"id": "config-02", "expected_cluster": "env-rules", "expected_classification": "CLAUDE.md"},
+    {"id": "post-01", "expected_cluster": "post-draft", "expected_classification": "skill"},
+    {"id": "hook-01", "expected_cluster": "auto-format", "expected_classification": "hook"}
+  ]
+}

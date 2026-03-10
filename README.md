@@ -10,7 +10,7 @@ Git コミット、Claude / Codex の会話履歴、Chrome 閲覧履歴、ファ
 | スキル | 説明 |
 |--------|------|
 | `/daily-report` | その日の活動から日報ドラフトを自動生成 |
-| `/skill-miner` | AI会話の反復パターンを抽出し、skill/plugin/agent/CLAUDE.md/hook を提案・ドラフト生成 |
+| `/skill-miner` | AI会話の反復パターンを圧縮 candidate view で抽出し、skill/plugin/agent/CLAUDE.md/hook を提案・ドラフト生成 |
 | `/post-draft` | 活動ログからテックブログ・チーム共有・Slack投稿の下書きを生成 |
 
 ## インストール
@@ -75,6 +75,8 @@ plugins/
       git_history.py
       claude_history.py
       codex_history.py
+      skill_miner_prepare.py
+      skill_miner_detail.py
       chrome_history.py
       workspace_file_activity.py
 ```
@@ -83,6 +85,7 @@ plugins/
 
 - macOS / Linux のみ対応（Windows は未検証）
 - AI 会話履歴が大量の場合、サマリーに圧縮して処理します
+- `skill-miner` は提案時に compressed candidate view を使い、選択後だけ detail を再取得します
 - browser URL は query string / fragment を落とした正規化済み URL として扱います
 - 利用できない source や権限不足の source は graceful degrade の対象として skip / 短縮出力になります
 - install 直後の source 検出サマリーは `aggregate.py` の `stderr` に `Source preflight:` として表示され、machine-readable な詳細は `stdout` JSON の `sources[]` に出ます

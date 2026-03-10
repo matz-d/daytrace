@@ -16,6 +16,7 @@
 
 - [TODO-D1-daily-report.md](TODO-D1-daily-report.md)
 - [TODO-D2-skill-miner.md](TODO-D2-skill-miner.md)
+- [TODO-D2a-skill-miner-compression.md](TODO-D2a-skill-miner-compression.md)
 - [TODO-D3-post-draft.md](TODO-D3-post-draft.md)
 
 ## Phase 3: Polish & Submit（3/19 - 3/22）
@@ -34,6 +35,9 @@ C の最初の 1 項目（共通契約の確定 + sources.json）
 
 B2, B3（claude/codex CLI）
   → D2（skill-miner は B2, B3 を直接使う。aggregator は経由しない）
+
+D2
+  → D2a（skill-miner compression refactor は現行 skill-miner の上に載せる）
 
 A（packaging）は他と並行して進められる
 

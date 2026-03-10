@@ -88,3 +88,65 @@ Aggregator behavior:
 - forwards `--workspace` to source CLIs and also runs them with that directory as `cwd`
 - prints a one-line preflight summary to `stderr` before collection starts
 - uses `sources.json` metadata to evaluate preflight availability and confidence categories without source-name conditionals
+
+## Skill Miner CLIs
+
+`skill-miner` uses two standalone CLIs that do not go through `aggregate.py`.
+
+### `skill_miner_prepare.py`
+
+Purpose:
+
+- reads raw Claude/Codex JSONL directly
+- splits Claude history into logical sessions
+- emits compressed `candidates` and `unclustered` packets for proposal phase
+
+Top-level shape:
+
+```json
+{
+  "status": "success",
+  "source": "skill-miner-prepare",
+  "candidates": [],
+  "unclustered": [],
+  "sources": [],
+  "summary": {},
+  "config": {}
+}
+```
+
+Important fields:
+
+- `candidates[].session_refs`: stable references for detail lookup
+- `candidates[].support`: packet counts and ranking evidence
+- `unclustered[]`: packets that did not form a repeated cluster
+
+### `skill_miner_detail.py`
+
+Purpose:
+
+- accepts one or more `session_ref` values from prepare output
+- returns user/assistant conversation detail for selected packets only
+
+Top-level shape:
+
+```json
+{
+  "status": "success",
+  "source": "skill-miner-detail",
+  "details": [],
+  "errors": []
+}
+```
+
+Important fields:
+
+- `details[].messages`: pure user/assistant conversation log
+- `details[].tool_calls`: aggregated command/tool usage when available
+
+### `session_ref` contract
+
+- Claude: `claude:/absolute/path/to/file.jsonl:<epoch>`
+- Codex: `codex:<session_id>:<epoch>`
+
+These refs are the only supported bridge between prepare and detail.
