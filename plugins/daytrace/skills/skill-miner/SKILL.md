@@ -38,22 +38,39 @@ python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
 python3 <plugin-root>/scripts/skill_miner_detail.py --refs "<session_ref_1>" "<session_ref_2>"
 ```
 
+追加調査後の結論判定:
+
+```bash
+python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "<candidate_id>" --detail-file /tmp/detail.json
+```
+
+最終 proposal 組み立て:
+
+```bash
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json
+```
+
 repo root をカレントディレクトリとした場合の実コマンド例:
 
 ```bash
 python3 plugins/daytrace/scripts/skill_miner_prepare.py --all-sessions
 python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710000000"
+python3 plugins/daytrace/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "codex-abc123" --detail-file /tmp/detail.json
+python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json
 ```
 
 ## Execution Rules
 
 1. まず `skill_miner_prepare.py` を 1 回だけ実行する
-2. `candidates` と `unclustered` を読み、価値の高い候補を 3-5 件に絞る
-3. 各候補を 5 分類のどれかに仮分類し、理由を書く
-4. まず提案リストだけを出す
-5. ユーザーに「どれをドラフト化するか」を確認する
-6. 選択された候補の `session_refs` だけで `skill_miner_detail.py --refs ...` を実行する
-7. detail を読んで、その候補に対応するドラフトを返す
+2. `candidates` と `unclustered` を読み、まず `ready` / `needs_research` / `rejected` にトリアージする
+3. `proposal_ready=true` の候補だけを正式提案候補にする。提案数は **0-5 件** を許容する
+4. `needs_research` の候補があり、巨大クラスタや曖昧クラスタが原因なら、代表 `session_refs` だけで 1 回だけ追加調査する
+5. 追加調査後に `skill_miner_research_judge.py` を実行し、`promote_ready` / `split_candidate` / `reject_candidate` を得る
+6. judge の結論に応じて、正式提案に昇格させるか、`追加調査待ち` または `今回は見送り` に残す
+7. 必要なら `skill_miner_proposal.py` で `提案成立` / `追加調査待ち` / `今回は見送り` を組み立てる
+8. ユーザーに「どれをドラフト化するか」を確認する
+9. 選択された候補の `session_refs` だけで `skill_miner_detail.py --refs ...` を実行する
+10. detail を読んで、その候補に対応するドラフトを返す
 
 ## Division of Labor
 
@@ -67,8 +84,11 @@ python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710
 
 ### LLM side
 
-- `candidates` から価値の高い候補を 3-5 件に絞る
-- 5 分類へ仮分類する
+- `candidates` を `ready` / `needs_research` / `rejected` に分ける
+- `proposal_ready=true` の候補だけを 0-5 件提案する
+- 必要な場合だけ `needs_research` 候補を追加調査する
+- 追加調査後は `skill_miner_research_judge.py` の結論を proposal へ反映する
+- 提案する候補だけを 5 分類へ仮分類する
 - `なぜこの候補か` と `なぜその分類か` を説明する
 - ユーザー選択後だけ detail を読んでドラフトを書く
 
@@ -86,14 +106,30 @@ python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710
   - ranked cluster 一覧
 - `candidates[].support`
   - 出現回数、source 多様性、直近性
+- `candidates[].confidence`
+  - 候補の強さ。`strong` / `medium` / `weak` / `insufficient`
+- `candidates[].proposal_ready`
+  - そのまま提案可能か
+- `candidates[].triage_status`
+  - `ready` / `needs_research` / `rejected`
+- `candidates[].quality_flags`
+  - 巨大クラスタや汎用クラスタなどの注意信号
+- `candidates[].evidence_summary`
+  - 根拠の短い要約
 - `candidates[].representative_examples`
   - 候補の代表例
 - `candidates[].session_refs`
   - 選択後 detail 取得に使う参照キー
+- `candidates[].research_targets`
+  - `needs_research` 候補で優先的に detail 取得する ref と理由
+- `candidates[].research_brief`
+  - 追加調査で何を確認し、どの基準で `ready` / `split` / `rejected` を判断するか
 - `unclustered`
-  - cluster に乗らなかった孤立 packet
+  - cluster に乗らなかった孤立 packet。原則として提案しない
 - `summary`
   - packet 数、candidate 数、blocking の規模
+- `skill_miner_proposal.py` の出力
+  - triage 済み candidate を人間向け proposal section に整形したもの
 
 注意:
 
@@ -127,7 +163,7 @@ python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710
 
 ## Classification Rules
 
-候補は必ず次の 5 分類のどれか 1 つにする。
+正式提案に進める候補だけ、次の 5 分類のどれか 1 つにする。
 
 ### `skill`
 
@@ -168,39 +204,110 @@ python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710
 - 人が毎回明示的に呼ばなくてもよい
 - lint, format, validation, logging のような機械的処理に向く
 
+## Triage Rules
+
+prepare の出力を読んだら、まず候補を 3 区分に分ける。
+
+### `ready`
+
+- `proposal_ready=true`
+- `confidence` が `strong` または `medium`
+- そのまま提案してよい
+
+### `needs_research`
+
+- 巨大クラスタ
+- 汎用 task shape / 汎用 tool に偏る
+- `quality_flags` に注意信号がある
+- そのまま 5 分類へ押し込まない
+
+### `rejected`
+
+- `unclustered`
+- `confidence=insufficient`
+- 単発に近い、または一般化が弱い
+
+ルール:
+
+- 正式提案は **0-5 件** を許容する
+- 強い候補が 0 件なら「今回は有力候補なし」と返してよい
+- `unclustered` は参考情報にとどめ、件数合わせで提案に混ぜない
+- `needs_research` 候補は、必要な場合だけ限定的に detail を取りに行く
+
 ## Proposal Format
 
-提案フェーズでは、必ず 3-5 件を目標にし、以下の形式で返す。
+提案フェーズでは、以下の 3 区分で返す。
 
 ```markdown
-## 自動化候補
+## 提案成立
 
 1. 候補名
    分類: skill
+   confidence: medium
    なぜこの候補か: 反復している作業内容の要約
    なぜその分類か: skill に向く理由
    根拠: Claude 2件 / Codex 3件 / 直近7日 2件
    期待効果: 何が短縮・安定化されるか
 
-2. 候補名
-   分類: CLAUDE.md
-   なぜこの候補か: ...
-   なぜその分類か: ...
-   根拠: ...
-   期待効果: ...
+## 追加調査待ち
+
+1. 候補名
+   confidence: weak
+   保留理由: 巨大クラスタで意味の異なる作業が混ざる可能性がある
+   根拠: 63 packets / generic tools / generic task shapes
+
+## 今回は見送り
+
+1. 候補名または項目種別
+   理由: 単発または一般化の根拠不足
+
+確認したい候補がある場合だけ最後に聞く:
+どの候補をドラフト化しますか？番号か候補名で指定してください。
 ```
 
 提案ルール:
 
-- 候補は重要度順に並べる
-- 各候補に `なぜその分類か` を必ず書く
-- `根拠` は source 内訳と頻度を含める
-- 曖昧な候補は順位を下げる
-- `unclustered` は通常は補助扱いにし、候補不足時だけ使う
+- `提案成立` だけを重要度順に並べる
+- 各正式候補に `なぜその分類か` を必ず書く
+- `根拠` は source 内訳、頻度、`confidence` を含める
+- `追加調査待ち` には `保留理由` を必ず書く
+- `今回は見送り` には 1 文で理由を書く
+- 候補が 0 件でも、失敗扱いにしない
+
+## Deep Research Rules
+
+`needs_research` 候補に対してだけ、限定的な追加調査を行ってよい。
+
+ルール:
+
+- 1 candidate あたり最大 5 refs まで
+- 追加調査は 1 回まで
+- `research_targets` があればそれを優先して使う
+- `research_brief.questions` と `research_brief.decision_rules` をそのまま調査メモの骨子に使う
+- ランダム抽出ではなく、代表例に近い ref / near-match に近い ref / 異質そうな ref を混ぜる
+- detail を大量取得しない
+- 追加調査しても粒度が粗い場合は `今回は見送り` に落とす
+
+追加調査後:
+
+- `skill_miner_research_judge.py` を 1 回だけ実行して structured conclusion を得る
+- `promote_ready`
+  - `提案成立` へ移す
+- `split_candidate`
+  - `追加調査待ち` に残し、必要なら「分割軸」を書く
+- `reject_candidate`
+  - `今回は見送り` に移す
+
+追加調査で確認すべきこと:
+
+- 本当に 1 つの automation candidate か
+- コードレビュー、調査、ログ整理のような別作業が混ざっていないか
+- 分割するならどの軸が自然か
+- 今回の proposal phase で正式提案すべきか、保留すべきか
 
 ## Selection Flow
 
-提案リストを出したら、次の 1 問だけ聞く。
+`提案成立` に候補がある場合だけ、次の 1 問だけ聞く。
 
 ```text
 どの候補をドラフト化しますか？番号か候補名で指定してください。
@@ -208,9 +315,11 @@ python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710
 
 複数選択は求めない。まず 1 件だけ進める。
 
+`提案成立` が 0 件なら、無理に選択を迫らない。
+
 ## Detail Phase Rules
 
-ユーザーが候補を選んだら、選択候補の `session_refs` だけを `skill_miner_detail.py --refs ...` で取得する。
+ユーザーが正式候補を選んだら、選択候補の `session_refs` だけを `skill_miner_detail.py --refs ...` で取得する。
 
 detail フェーズのルール:
 

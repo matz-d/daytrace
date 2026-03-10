@@ -13,10 +13,14 @@ from skill_miner_common import (
     CODEX_SOURCE,
     DEFAULT_GAP_HOURS,
     DEFAULT_MAX_UNCLUSTERED,
+    DEFAULT_RESEARCH_REF_LIMIT,
     DEFAULT_TOP_N,
     PREPARE_SOURCE,
     build_claude_session_ref,
     build_codex_session_ref,
+    build_candidate_quality,
+    build_research_brief,
+    build_research_targets,
     build_packet,
     candidate_label,
     candidate_score,
@@ -33,6 +37,7 @@ from skill_miner_common import (
     recent_packet_count,
     stable_block_keys,
     tokenize,
+    annotate_unclustered_packet,
     workspace_matches,
 )
 
@@ -310,6 +315,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
         return [], [], {"block_count": 0, "block_comparisons": 0}
 
     sorted_packets = sorted(packets, key=packet_sort_key, reverse=True)
+    packet_lookup = {str(packet.get("packet_id")): packet for packet in sorted_packets}
     blocks: dict[str, list[int]] = defaultdict(list)
     for index, packet in enumerate(sorted_packets):
         for key in stable_block_keys(packet):
@@ -337,6 +343,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                             "packet_id": sorted_packets[right_index]["packet_id"],
                             "score": score,
                             "primary_intent": sorted_packets[right_index]["primary_intent"],
+                            "session_ref": sorted_packets[right_index].get("session_ref"),
                         }
                     )
                     near_matches_by_index[right_index].append(
@@ -344,6 +351,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                             "packet_id": sorted_packets[left_index]["packet_id"],
                             "score": score,
                             "primary_intent": sorted_packets[left_index]["primary_intent"],
+                            "session_ref": sorted_packets[left_index].get("session_ref"),
                         }
                     )
 
@@ -355,10 +363,11 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     candidates: list[dict[str, Any]] = []
     unclustered: list[dict[str, Any]] = []
 
+    total_packets_all = len(sorted_packets)
     for root, indexes in groups.items():
         group_packets = [sorted_packets[index] for index in indexes]
         if len(group_packets) == 1:
-            unclustered.append(group_packets[0])
+            unclustered.append(annotate_unclustered_packet(group_packets[0]))
             continue
         timestamps = [str(packet.get("timestamp") or "") for packet in group_packets if packet.get("timestamp")]
         support = {
@@ -377,6 +386,16 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             3,
         )
         representative_examples = _top_values([packet.get("primary_intent") for packet in group_packets if packet.get("primary_intent")], 2)
+        if len(representative_examples) < 2:
+            snippets = _top_values(
+                [snippet for packet in group_packets for snippet in packet.get("representative_snippets", []) if snippet],
+                2,
+            )
+            for snippet in snippets:
+                if snippet not in representative_examples:
+                    representative_examples.append(snippet)
+                if len(representative_examples) >= 2:
+                    break
         session_refs = [packet.get("session_ref") for packet in group_packets if packet.get("session_ref")]
         nearest_values: list[dict[str, Any]] = []
         for index in indexes:
@@ -386,10 +405,22 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             key=lambda item: (float(item["score"]), str(item["packet_id"])),
             reverse=True,
         )[:3]
-        label = candidate_label(group_packets[0])
+        research_targets = build_research_targets(
+            group_packets,
+            near_matches=nearest,
+            packet_lookup=packet_lookup,
+            limit=DEFAULT_RESEARCH_REF_LIMIT,
+        )
         candidate = {
             "candidate_id": group_packets[0]["packet_id"].replace(":", "-"),
-            "label": label,
+            "label": candidate_label(
+                {
+                    "common_task_shapes": task_shapes,
+                    "artifact_hints": artifact_hints,
+                    "rule_hints": rule_hints,
+                    "primary_intent": group_packets[0].get("primary_intent"),
+                }
+            ),
             "score": 0.0,
             "support": support,
             "common_task_shapes": task_shapes,
@@ -399,8 +430,11 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             "representative_examples": representative_examples,
             "session_refs": session_refs,
             "near_matches": nearest,
+            "research_targets": research_targets,
         }
         candidate["score"] = candidate_score(support)
+        candidate.update(build_candidate_quality(candidate, total_packets_all=total_packets_all))
+        candidate["research_brief"] = build_research_brief(candidate)
         candidates.append(candidate)
 
     candidates.sort(key=candidate_sort_key, reverse=True)

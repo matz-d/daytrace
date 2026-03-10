@@ -17,6 +17,7 @@
 - [TODO-D1-daily-report.md](TODO-D1-daily-report.md)
 - [TODO-D2-skill-miner.md](TODO-D2-skill-miner.md)
 - [TODO-D2a-skill-miner-compression.md](TODO-D2a-skill-miner-compression.md)
+- [TODO-D2b-skill-miner-proposal-quality.md](TODO-D2b-skill-miner-proposal-quality.md)
 - [TODO-D3-post-draft.md](TODO-D3-post-draft.md)
 
 ## Phase 3: Polish & Submit（3/19 - 3/22）
@@ -38,6 +39,9 @@ B2, B3（claude/codex CLI）
 
 D2
   → D2a（skill-miner compression refactor は現行 skill-miner の上に載せる）
+
+D2a
+  → D2b（proposal quality / UX recovery は compression 導入後の改善）
 
 A（packaging）は他と並行して進められる
 

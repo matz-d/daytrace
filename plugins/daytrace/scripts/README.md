@@ -92,6 +92,7 @@ Aggregator behavior:
 ## Skill Miner CLIs
 
 `skill-miner` uses two standalone CLIs that do not go through `aggregate.py`.
+Deep research adds helper CLIs for post-detail judgment and final proposal formatting.
 
 ### `skill_miner_prepare.py`
 
@@ -119,6 +120,10 @@ Important fields:
 
 - `candidates[].session_refs`: stable references for detail lookup
 - `candidates[].support`: packet counts and ranking evidence
+- `candidates[].confidence`, `proposal_ready`, `triage_status`: proposal quality and triage outcome
+- `candidates[].quality_flags`, `evidence_summary`: why a candidate is strong, weak, or held back
+- `candidates[].research_targets`: up to 5 suggested refs for deep research on `needs_research` candidates
+- `candidates[].research_brief`: suggested questions and decision rules for deep research
 - `unclustered[]`: packets that did not form a repeated cluster
 
 ### `skill_miner_detail.py`
@@ -143,6 +148,59 @@ Important fields:
 
 - `details[].messages`: pure user/assistant conversation log
 - `details[].tool_calls`: aggregated command/tool usage when available
+
+### `skill_miner_research_judge.py`
+
+Purpose:
+
+- accepts one candidate from prepare output and one detail payload
+- returns a structured conclusion for deep research
+
+Top-level shape:
+
+```json
+{
+  "status": "success",
+  "source": "skill-miner-research-judge",
+  "candidate_id": "codex-abc123",
+  "judgment": {}
+}
+```
+
+Important fields:
+
+- `judgment.recommendation`: `promote_ready`, `split_candidate`, or `reject_candidate`
+- `judgment.proposed_triage_status`: suggested triage status after research
+- `judgment.reasons`: short explanation list for the decision
+- `judgment.split_suggestions`: candidate split axes when the verdict is `split_candidate`
+
+### `skill_miner_proposal.py`
+
+Purpose:
+
+- accepts prepare output and optional research judgments
+- returns final `ready` / `needs_research` / `rejected` proposal sections and markdown
+
+Top-level shape:
+
+```json
+{
+  "status": "success",
+  "source": "skill-miner-proposal",
+  "ready": [],
+  "needs_research": [],
+  "rejected": [],
+  "selection_prompt": null,
+  "markdown": ""
+}
+```
+
+Important fields:
+
+- `ready`: proposal-ready candidates
+- `needs_research`: candidates still held back after prepare and optional research judgment
+- `rejected`: candidates and unclustered references that should not be proposed
+- `markdown`: preformatted proposal sections for the LLM/user-facing output
 
 ### `session_ref` contract
 
