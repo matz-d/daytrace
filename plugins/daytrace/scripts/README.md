@@ -1,6 +1,29 @@
 # DayTrace Source CLI Contract
 
-`scripts/` contains source CLIs for DayTrace.
+`scripts/` contains all CLI scripts for DayTrace, organized into two groups:
+
+**共通 CLI** — 全 skill が使う:
+
+| Script | 役割 |
+|--------|------|
+| `aggregate.py` | 5 source を統合し中間 JSON を返すオーケストレーター |
+| `common.py` | 共有ユーティリティ（JSON I/O, エラー処理, CLI 引数） |
+| `git_history.py` | Git commit 履歴の source CLI |
+| `claude_history.py` | Claude 会話履歴の source CLI |
+| `codex_history.py` | Codex 会話履歴の source CLI |
+| `chrome_history.py` | Chrome 閲覧履歴の source CLI |
+| `workspace_file_activity.py` | ファイル変更検出の source CLI |
+| `sources.json` | source レジストリ（preflight, timeout, confidence_category） |
+
+**skill-miner 専用 CLI** — `/skill-miner` skill だけが使う:
+
+| Script | 役割 |
+|--------|------|
+| `skill_miner_prepare.py` | 全セッションを圧縮 candidate view に変換 |
+| `skill_miner_detail.py` | 選択候補の session_ref から raw detail を再取得 |
+| `skill_miner_research_judge.py` | 追加調査後の structured conclusion |
+| `skill_miner_proposal.py` | prepare + judge → 最終 proposal 組み立て |
+| `skill_miner_common.py` | skill-miner 共有ユーティリティ |
 
 ## Common output contract
 
