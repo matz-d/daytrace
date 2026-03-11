@@ -17,6 +17,7 @@ from skill_miner_common import (
     codex_command_names,
     codex_message_text,
     compact_snippet,
+    earliest_iso_timestamp,
     load_jsonl,
     parse_session_ref,
 )
@@ -78,7 +79,10 @@ def resolve_claude_detail(file_path: Path, epoch: int, gap_hours: int) -> dict[s
     def current_ref() -> str | None:
         if not packet_records:
             return None
-        return build_claude_session_ref(str(file_path), packet_records[0].get("timestamp"))
+        return build_claude_session_ref(
+            str(file_path),
+            earliest_iso_timestamp([record.get("timestamp") for record in packet_records]),
+        )
 
     def flush_if_match() -> dict[str, Any] | None:
         if not packet_records:
@@ -89,7 +93,7 @@ def resolve_claude_detail(file_path: Path, epoch: int, gap_hours: int) -> dict[s
         messages: list[dict[str, str]] = []
         tools: Counter[str] = Counter()
         workspace = None
-        timestamp = str(packet_records[0].get("timestamp") or "")
+        timestamp = str(earliest_iso_timestamp([record.get("timestamp") for record in packet_records]) or "")
         for record in packet_records:
             workspace = record.get("cwd") or workspace
             text = claude_visible_text(record.get("message"))
@@ -152,7 +156,19 @@ def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, histo
 
     records = load_jsonl(rollout)
     meta = next((record.get("payload", {}) for record in records if record.get("type") == "session_meta"), {})
-    ref = build_codex_session_ref(session_id, meta.get("timestamp"))
+    history_timestamps: list[Any] = []
+    if history_file.exists():
+        for record in load_jsonl(history_file):
+            if record.get("session_id") == session_id:
+                history_timestamps.append(record.get("ts"))
+
+    rollout_timestamps = [record.get("timestamp") for record in records if record.get("timestamp")]
+    start_timestamp = (
+        earliest_iso_timestamp([meta.get("timestamp")])
+        or earliest_iso_timestamp(history_timestamps)
+        or earliest_iso_timestamp(rollout_timestamps)
+    )
+    ref = build_codex_session_ref(session_id, start_timestamp)
     if ref != f"codex:{session_id}:{epoch}":
         raise ValueError(f"Codex session_ref not found: codex:{session_id}:{epoch}")
 
@@ -188,7 +204,7 @@ def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, histo
         "session_ref": ref,
         "source": "codex-history",
         "workspace": meta.get("cwd"),
-        "timestamp": meta.get("timestamp"),
+        "timestamp": start_timestamp,
         "messages": messages,
         "tool_calls": [{"name": name, "count": count} for name, count in tool_counter.most_common()],
     }

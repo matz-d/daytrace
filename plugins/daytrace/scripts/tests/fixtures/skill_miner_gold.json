@@ -12,5 +12,49 @@
     {"id": "config-02", "expected_cluster": "env-rules", "expected_classification": "CLAUDE.md"},
     {"id": "post-01", "expected_cluster": "post-draft", "expected_classification": "skill"},
     {"id": "hook-01", "expected_cluster": "auto-format", "expected_classification": "hook"}
+  ],
+  "anonymized_packets": [
+    {
+      "id": "pkt-01",
+      "primary_intent": "Review the backend PR and return findings by severity.",
+      "task_shape": ["review_changes", "summarize_findings"],
+      "artifact_hints": ["review"],
+      "repeated_rules": ["findings-first", "file-line-refs"]
+    },
+    {
+      "id": "pkt-02",
+      "primary_intent": "Review another PR and keep the same findings-first format.",
+      "task_shape": ["review_changes", "summarize_findings"],
+      "artifact_hints": ["review"],
+      "repeated_rules": ["findings-first"]
+    },
+    {
+      "id": "pkt-03",
+      "primary_intent": "Prepare the weekly status report draft in markdown.",
+      "task_shape": ["prepare_report", "write_markdown"],
+      "artifact_hints": ["report", "markdown"],
+      "repeated_rules": []
+    },
+    {
+      "id": "pkt-04",
+      "primary_intent": "Prepare another weekly report draft with the same structure.",
+      "task_shape": ["prepare_report", "write_markdown"],
+      "artifact_hints": ["report", "markdown"],
+      "repeated_rules": []
+    },
+    {
+      "id": "pkt-05",
+      "primary_intent": "Append repo-local pytest verification guidance to CLAUDE.md.",
+      "task_shape": ["edit_config", "write_markdown"],
+      "artifact_hints": ["claude-md", "config"],
+      "repeated_rules": ["tests-before-close"]
+    },
+    {
+      "id": "pkt-06",
+      "primary_intent": "Run formatting automatically before commit.",
+      "task_shape": ["run_tests"],
+      "artifact_hints": ["config"],
+      "repeated_rules": []
+    }
   ]
 }

@@ -1,74 +1,88 @@
-# Classification & Triage Rules
+# Classification Rules v2
 
-## Classification Rules
+`skill-miner` の一次分類は `CLAUDE.md / skill / hook / agent` の 4 つだけ使う。
+`plugin` は v2 では使わない。
 
-正式提案に進める候補だけ、次の 5 分類のどれか 1 つにする。
+## `CLAUDE.md`
 
-### `skill`
+向いているもの:
 
-使う条件:
+- repo ローカルの原則として毎回読ませたい
+- 手順よりも「必ず守るルール」の固定化が目的
+- 同じ前提説明や禁止事項を繰り返している
 
-- 1 つの目的に対して複数ステップの定型フローがある
-- 専用の入出力ルールや判断基準がある
-- 将来も繰り返し使う価値がある
+境界ケース:
 
-### `plugin`
+- 同じ作法を repo ルールにしたいなら `CLAUDE.md`
+- ただし複数段の作業手順まで含むなら `skill` を優先する
 
-使う条件:
+例:
 
-- 複数 skill を束ねて初めて価値が出る
-- install 可能なまとまりとして扱いたい
-- marketplace / plugin 導線を含む配布単位にしたい
+- findings-first で報告する
+- テスト結果を閉じに必ず書く
+- 特定 repo では絶対に `git reset --hard` しない
 
-### `agent`
+## `skill`
 
-使う条件:
+向いているもの:
 
-- 長めの役割定義や意思決定方針が必要
-- 複数タスクを横断する一貫した振る舞いが価値の中心
+- 明確な入力、出力、手順がある
+- 複数ステップを順番に踏むことで価値が出る
+- 人が呼び出して使うフローとして再利用したい
 
-### `CLAUDE.md`
+境界ケース:
 
-使う条件:
+- 同じ目的で毎回 3 手以上の処理を踏むなら `skill`
+- `CLAUDE.md` の原則だけでは再現できない具体手順があるなら `skill`
 
-- repo ローカルの常設ルールとして常に読ませたい
-- 毎回同じ作法、禁則、出力方針を最初から共有したい
-- 手順よりも原則の固定化が目的
+例:
 
-### `hook`
+- PR review の findings-first レポート生成
+- 週次のレポート下書き作成
+- 手順つきの migration 作業補助
 
-使う条件:
+## `hook`
 
-- あるタイミングで自動実行したい
-- 人が毎回明示的に呼ばなくてもよい
-- lint, format, validation, logging のような機械的処理に向く
+向いているもの:
 
-## Triage Rules
+- 判断不要の機械処理
+- あるタイミングで自動実行すると価値がある
+- 成否や副作用が比較的読みやすい
 
-prepare の出力を読んだら、まず候補を 3 区分に分ける。
+境界ケース:
 
-### `ready`
+- 人が都度判断する必要があるなら `skill` か `agent`
+- 単なる repo ルールなら `CLAUDE.md`
 
-- `proposal_ready=true`
-- `confidence` が `strong` または `medium`
-- そのまま提案してよい
+例:
 
-### `needs_research`
+- save 時の整形
+- commit 前の lint / validation
+- log / telemetry の自動採取
 
-- 巨大クラスタ
-- 汎用 task shape / 汎用 tool に偏る
-- `quality_flags` に注意信号がある
-- そのまま 5 分類へ押し込まない
+## `agent`
 
-### `rejected`
+向いているもの:
 
-- `unclustered`
-- `confidence=insufficient`
-- 単発に近い、または一般化が弱い
+- 単一手順ではなく継続的な役割が中心
+- 複数タスクを横断する行動原則や優先順位が重要
+- 出力物より振る舞いの一貫性が価値になる
 
-ルール:
+境界ケース:
 
-- 正式提案は **0-5 件** を許容する
-- 強い候補が 0 件なら「今回は有力候補なし」と返してよい
-- `unclustered` は参考情報にとどめ、件数合わせで提案に混ぜない
-- `needs_research` 候補は、必要な場合だけ限定的に detail を取りに行く
+- 「何をするか」より「どう振る舞うか」が主題なら `agent`
+- 実行トリガーごとに定型フローへ落とせるなら `skill` または `hook`
+
+例:
+
+- 常にレビュー観点を保つ reviewer agent
+- 継続的な triage / routing を担う agent
+- 監視対象を横断して動く observation agent
+
+## Triage Reminder
+
+- `提案成立`: そのまま分類してよい
+- `追加調査待ち`: 巨大クラスタや混在疑いがあり、detail で split 判定したい
+- `今回は見送り`: 単発または一般化の根拠不足
+
+正式提案数は `0-5 件` を正常系として扱う。

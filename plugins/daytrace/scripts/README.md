@@ -122,8 +122,11 @@ Deep research adds helper CLIs for post-detail judgment and final proposal forma
 Purpose:
 
 - reads raw Claude/Codex JSONL directly
+- defaults to `--days 7`
+- disables the date window only when `--all-sessions` is explicitly set
 - splits Claude history into logical sessions
 - emits compressed `candidates` and `unclustered` packets for proposal phase
+- can emit `intent_analysis` for B0 observation with `--dump-intents`
 
 Top-level shape:
 
@@ -135,19 +138,48 @@ Top-level shape:
   "unclustered": [],
   "sources": [],
   "summary": {},
-  "config": {}
+  "config": {},
+  "intent_analysis": {
+    "summary": {},
+    "items": []
+  }
 }
 ```
 
 Important fields:
 
+- `config.days`: default `7`
+- `config.all_sessions`: only explicit override for the date window
+- `config.date_window_start`: ISO 8601 threshold used when `all_sessions=false`
 - `candidates[].session_refs`: stable references for detail lookup
 - `candidates[].support`: packet counts and ranking evidence
 - `candidates[].confidence`, `proposal_ready`, `triage_status`: proposal quality and triage outcome
 - `candidates[].quality_flags`, `evidence_summary`: why a candidate is strong, weak, or held back
+- `candidates[].evidence_items`: up to 3 proposal-ready evidence entries with `session_ref`, `timestamp`, `source`, `summary`
 - `candidates[].research_targets`: up to 5 suggested refs for deep research on `needs_research` candidates
 - `candidates[].research_brief`: suggested questions and decision rules for deep research
 - `unclustered[]`: packets that did not form a repeated cluster
+- `intent_analysis.summary`: `generic_rate`, `synonym_split_rate`, `specificity_distribution`
+- `intent_analysis.items`: anonymized `primary_intent` samples for B0 inspection
+
+Contract notes:
+
+- `summary` in `evidence_items[]` prefers `primary_intent`; when empty it falls back to a masked representative snippet
+- `prepare` is the only phase that reads raw history for evidence chain construction
+- no state file is used; execution mode is determined only by CLI flags
+
+`candidates[].evidence_items[]` example:
+
+```json
+[
+  {
+    "session_ref": "codex:abc123:1710000000",
+    "timestamp": "2026-03-10T09:00:00+09:00",
+    "source": "codex-history",
+    "summary": "SKILL.md の構造確認を行い、提案理由を整理"
+  }
+]
+```
 
 ### `skill_miner_detail.py`
 
@@ -203,6 +235,8 @@ Purpose:
 
 - accepts prepare output and optional research judgments
 - returns final `ready` / `needs_research` / `rejected` proposal sections and markdown
+- renders the evidence chain directly from `candidates[].evidence_items[]`
+- does not reload raw history
 
 Top-level shape:
 

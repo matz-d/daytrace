@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from skill_miner_common import (
     DEFAULT_MAX_UNCLUSTERED,
     DEFAULT_RESEARCH_REF_LIMIT,
     DEFAULT_TOP_N,
+    GENERIC_TASK_SHAPES,
     PREPARE_SOURCE,
     build_claude_session_ref,
     build_codex_session_ref,
@@ -30,6 +32,7 @@ from skill_miner_common import (
     codex_message_text,
     compact_snippet,
     compare_iso_timestamps,
+    earliest_iso_timestamp,
     jaccard_score,
     load_jsonl,
     overlap_score,
@@ -45,12 +48,39 @@ from skill_miner_common import (
 DEFAULT_CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 DEFAULT_CODEX_HISTORY = Path.home() / ".codex" / "history.jsonl"
 DEFAULT_CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+CLUSTER_MERGE_THRESHOLD = 0.60
+CLUSTER_NEAR_MATCH_THRESHOLD = 0.45
+
+# v2 target mix:
+# - task_shapes: 0.30 (split between shared-shape overlap and exact specific-shape bonus)
+# - snippet / intent: 0.25
+# - artifacts: 0.20
+# - rules: 0.20
+# - tools: 0.05
+SIMILARITY_TASK_SHAPES_WEIGHT = 0.22
+SIMILARITY_SPECIFIC_SHAPE_BONUS = 0.08
+SIMILARITY_INTENT_WEIGHT = 0.15
+SIMILARITY_SNIPPET_WEIGHT = 0.10
+SIMILARITY_ARTIFACT_WEIGHT = 0.20
+SIMILARITY_RULE_WEIGHT = 0.20
+SIMILARITY_TOOL_WEIGHT = 0.05
+SIMILARITY_GENERIC_ONLY_PENALTY = 0.08
+SIMILARITY_WEIGHT_TOTAL = (
+    SIMILARITY_TASK_SHAPES_WEIGHT
+    + SIMILARITY_SPECIFIC_SHAPE_BONUS
+    + SIMILARITY_INTENT_WEIGHT
+    + SIMILARITY_SNIPPET_WEIGHT
+    + SIMILARITY_ARTIFACT_WEIGHT
+    + SIMILARITY_RULE_WEIGHT
+    + SIMILARITY_TOOL_WEIGHT
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare compressed skill-miner candidates from raw Claude/Codex history.")
     parser.add_argument("--workspace", default=".", help="Workspace path to filter by. Ignored with --all-sessions.")
     parser.add_argument("--all-sessions", action="store_true", help="Ignore workspace filtering and scan all sessions.")
+    parser.add_argument("--days", type=int, default=7, help="Limit packets to the last N days. Ignored with --all-sessions.")
     parser.add_argument("--claude-root", default=str(DEFAULT_CLAUDE_ROOT), help="Claude projects root.")
     parser.add_argument("--codex-history-file", default=str(DEFAULT_CODEX_HISTORY), help="Codex history.jsonl path.")
     parser.add_argument("--codex-sessions-root", default=str(DEFAULT_CODEX_SESSIONS), help="Codex sessions root.")
@@ -61,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAX_UNCLUSTERED,
         help="Maximum number of unclustered packets to include.",
+    )
+    parser.add_argument(
+        "--dump-intents",
+        action="store_true",
+        help="Include anonymized primary_intent samples and summary metrics for B0 observation.",
     )
     return parser
 
@@ -130,7 +165,7 @@ def read_claude_packets(root: Path, workspace: Path | None, gap_hours: int) -> t
                                     tools.append(name)
                     tools.extend(_commands_from_text(text))
 
-                packet_start = min(timestamps, default=None)
+                packet_start = earliest_iso_timestamp(timestamps)
                 workspace_str = str(cwd) if cwd else None
                 session_ref = build_claude_session_ref(str(path), packet_start)
                 packet = build_packet(
@@ -156,6 +191,10 @@ def read_claude_packets(root: Path, workspace: Path | None, gap_hours: int) -> t
                     continue
                 cwd = record.get("cwd")
                 if not workspace_matches(cwd, workspace):
+                    if packet_records:
+                        flush_packet()
+                        last_timestamp = None
+                        last_sidechain = None
                     continue
                 timestamp_value = record.get("timestamp")
                 current_timestamp = ensure_datetime(timestamp_value)
@@ -249,7 +288,12 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
 
             history_entry = history_by_session.get(session_id, {})
             user_messages = history_entry.get("user_messages", []) + user_messages
-            start_timestamp = str(meta.get("timestamp") or _min_history_timestamp(history_entry.get("timestamps", [])) or (min(timestamps) if timestamps else ""))
+            start_timestamp = (
+                earliest_iso_timestamp([meta.get("timestamp")])
+                or _min_history_timestamp(history_entry.get("timestamps", []))
+                or earliest_iso_timestamp(timestamps)
+                or ""
+            )
             if not user_messages and not assistant_messages:
                 continue
             packet = build_packet(
@@ -285,29 +329,251 @@ def _commands_from_text(text: str) -> list[str]:
 
 
 def _min_history_timestamp(values: list[Any]) -> str | None:
-    best = None
-    for value in values:
-        current = ensure_datetime(value)
-        if current is None:
-            continue
-        candidate = current.isoformat()
-        if best is None or candidate < best:
-            best = candidate
-    return best
+    return earliest_iso_timestamp(values)
+
+
+def _primary_non_generic_shape(packet: dict[str, Any]) -> str:
+    task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
+    return next((shape for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
+
+
+def _rule_names(packet: dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("normalized") or "")
+        for item in packet.get("repeated_rules", [])
+        if isinstance(item, dict) and item.get("normalized")
+    }
 
 
 def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
     left_tokens = set().union(*(tokenize(compact_snippet(item, left.get("workspace"))) for item in left.get("representative_snippets", [])))
     right_tokens = set().union(*(tokenize(compact_snippet(item, right.get("workspace"))) for item in right.get("representative_snippets", [])))
     snippet = jaccard_score(left_tokens, right_tokens)
+    intent = jaccard_score(tokenize(str(left.get("primary_intent") or "")), tokenize(str(right.get("primary_intent") or "")))
     task_shapes = overlap_score(set(left.get("task_shape", [])), set(right.get("task_shape", [])))
     tools = jaccard_score(set(left.get("tool_signature", [])), set(right.get("tool_signature", [])))
     artifacts = overlap_score(set(left.get("artifact_hints", [])), set(right.get("artifact_hints", [])))
-    rules = overlap_score(
-        {item.get("normalized") for item in left.get("repeated_rules", [])},
-        {item.get("normalized") for item in right.get("repeated_rules", [])},
+    rules = overlap_score(_rule_names(left), _rule_names(right))
+    same_specific_shape = 1.0 if _primary_non_generic_shape(left) and _primary_non_generic_shape(left) == _primary_non_generic_shape(right) else 0.0
+    generic_task_only = bool(left.get("task_shape")) and bool(right.get("task_shape")) and all(
+        shape in GENERIC_TASK_SHAPES for shape in set(left.get("task_shape", [])) | set(right.get("task_shape", []))
     )
-    return round((task_shapes * 0.40) + (snippet * 0.15) + (tools * 0.05) + (artifacts * 0.15) + (rules * 0.25), 3)
+    generic_tool_only = bool(left.get("tool_signature")) and bool(right.get("tool_signature")) and all(
+        tool in {"bash", "read", "rg", "sed", "cat", "ls", "nl"} for tool in set(left.get("tool_signature", [])) | set(right.get("tool_signature", []))
+    )
+    score = (
+        (task_shapes * SIMILARITY_TASK_SHAPES_WEIGHT)
+        + (intent * SIMILARITY_INTENT_WEIGHT)
+        + (snippet * SIMILARITY_SNIPPET_WEIGHT)
+        + (artifacts * SIMILARITY_ARTIFACT_WEIGHT)
+        + (rules * SIMILARITY_RULE_WEIGHT)
+        + (tools * SIMILARITY_TOOL_WEIGHT)
+        + (same_specific_shape * SIMILARITY_SPECIFIC_SHAPE_BONUS)
+    )
+    if generic_task_only and generic_tool_only and artifacts == 0.0 and rules == 0.0:
+        score -= SIMILARITY_GENERIC_ONLY_PENALTY
+    return round(max(0.0, min(score, 1.0)), 3)
+
+
+def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[list[dict[str, Any]], str | None]:
+    if days <= 0:
+        raise ValueError("--days must be a positive integer")
+    threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    filtered: list[dict[str, Any]] = []
+    for packet in packets:
+        timestamp = ensure_datetime(packet.get("timestamp"))
+        if timestamp is None:
+            continue
+        if timestamp >= threshold:
+            filtered.append(packet)
+    return filtered, threshold.isoformat()
+
+
+def evidence_summary_text(packet: dict[str, Any]) -> str:
+    primary_intent = str(packet.get("primary_intent") or "").strip()
+    if primary_intent:
+        return compact_snippet(primary_intent, packet.get("workspace"), limit=96)
+    snippets = packet.get("representative_snippets") or []
+    for snippet in snippets:
+        text = str(snippet or "").strip()
+        if text:
+            return compact_snippet(text, packet.get("workspace"), limit=96)
+    return candidate_label(packet)
+
+
+def build_evidence_items(group_packets: list[dict[str, Any]], limit: int = 3) -> list[dict[str, str]]:
+    ranked_packets = sorted(
+        group_packets,
+        key=lambda packet: (
+            1 if str(packet.get("primary_intent") or "").strip() else 0,
+            int(packet.get("support", {}).get("message_count", 0)),
+            compare_iso_timestamps(packet.get("timestamp")),
+            str(packet.get("packet_id") or ""),
+        ),
+        reverse=True,
+    )
+
+    selected: list[dict[str, str]] = []
+    selected_refs: set[str] = set()
+    selected_summaries: set[str] = set()
+    used_sources: set[str] = set()
+
+    def try_add(packet: dict[str, Any], *, prefer_new_source: bool) -> bool:
+        session_ref = str(packet.get("session_ref") or "").strip()
+        timestamp = str(packet.get("timestamp") or "").strip()
+        source = str(packet.get("source") or "").strip()
+        summary = evidence_summary_text(packet)
+        summary_key = summary.lower()
+        if not session_ref or not timestamp or not source or not summary:
+            return False
+        if session_ref in selected_refs or summary_key in selected_summaries:
+            return False
+        if prefer_new_source and used_sources and source in used_sources:
+            return False
+        selected.append(
+            {
+                "session_ref": session_ref,
+                "timestamp": timestamp,
+                "source": source,
+                "summary": summary,
+            }
+        )
+        selected_refs.add(session_ref)
+        selected_summaries.add(summary_key)
+        used_sources.add(source)
+        return True
+
+    if not ranked_packets:
+        return []
+
+    # 1) First pick the most representative packet.
+    representative = ranked_packets[0]
+    try_add(representative, prefer_new_source=False)
+
+    # 2) Then pick a supporting packet, preferring a different source/session.
+    for packet in ranked_packets[1:]:
+        if len(selected) >= limit:
+            break
+        if try_add(packet, prefer_new_source=True):
+            break
+    for packet in ranked_packets[1:]:
+        if len(selected) >= limit:
+            break
+        if try_add(packet, prefer_new_source=False):
+            break
+
+    # 3) Finally pick the most heterogeneous supporting packet still inside the same candidate.
+    anchor_summary = evidence_summary_text(representative)
+    anchor_tokens = tokenize(anchor_summary)
+    heterogeneous_packets = sorted(
+        ranked_packets[1:],
+        key=lambda packet: (
+            jaccard_score(anchor_tokens, tokenize(evidence_summary_text(packet))),
+            -int(packet.get("support", {}).get("message_count", 0)),
+        ),
+    )
+    for packet in heterogeneous_packets:
+        if len(selected) >= limit:
+            break
+        try_add(packet, prefer_new_source=False)
+
+    return selected[:limit]
+
+
+def classify_intent_specificity(packet: dict[str, Any]) -> str:
+    intent = str(packet.get("primary_intent") or "").strip()
+    tokens = tokenize(intent)
+    task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
+    has_non_generic_shape = any(shape not in GENERIC_TASK_SHAPES for shape in task_shapes)
+    if has_non_generic_shape and len(tokens) >= 6:
+        return "high"
+    if has_non_generic_shape or len(tokens) >= 4:
+        return "medium"
+    return "low"
+
+
+def is_generic_intent(packet: dict[str, Any]) -> bool:
+    intent = str(packet.get("primary_intent") or "").strip()
+    tokens = tokenize(intent)
+    task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
+    return not intent or len(tokens) < 4 or (bool(task_shapes) and all(shape in GENERIC_TASK_SHAPES for shape in task_shapes[:2]))
+
+
+def estimate_synonym_split_rate(packets: list[dict[str, Any]]) -> float:
+    unique_intents: list[str] = []
+    token_sets: list[set[str]] = []
+    for packet in packets:
+        intent = str(packet.get("primary_intent") or "").strip()
+        if not intent:
+            continue
+        lowered = intent.lower()
+        if lowered in {value.lower() for value in unique_intents}:
+            continue
+        unique_intents.append(intent)
+        token_sets.append(tokenize(intent))
+
+    pair_count = 0
+    near_pair_count = 0
+    for index, left_tokens in enumerate(token_sets):
+        for right_tokens in token_sets[index + 1 :]:
+            pair_count += 1
+            score = jaccard_score(left_tokens, right_tokens)
+            if 0.25 <= score < 0.85:
+                near_pair_count += 1
+    if pair_count == 0:
+        return 0.0
+    return round(near_pair_count / pair_count, 3)
+
+
+def build_intent_analysis(packets: list[dict[str, Any]], limit: int = 10) -> dict[str, Any]:
+    specificity_distribution = Counter({"high": 0, "medium": 0, "low": 0})
+    generic_count = 0
+    items: list[dict[str, Any]] = []
+
+    ordered_packets = sorted(
+        packets,
+        key=lambda packet: (
+            compare_iso_timestamps(packet.get("timestamp")),
+            str(packet.get("packet_id") or ""),
+        ),
+        reverse=True,
+    )
+
+    for index, packet in enumerate(ordered_packets[:limit], start=1):
+        specificity = classify_intent_specificity(packet)
+        specificity_distribution[specificity] += 1
+        generic = is_generic_intent(packet)
+        if generic:
+            generic_count += 1
+        items.append(
+            {
+                "sample_id": f"intent-{index:03d}",
+                "timestamp": packet.get("timestamp"),
+                "source": packet.get("source"),
+                "primary_intent": evidence_summary_text(packet),
+                "specificity": specificity,
+                "is_generic": generic,
+            }
+        )
+
+    for packet in ordered_packets[limit:]:
+        specificity_distribution[classify_intent_specificity(packet)] += 1
+        if is_generic_intent(packet):
+            generic_count += 1
+
+    total_packets = len(ordered_packets)
+    generic_rate = round(generic_count / total_packets, 3) if total_packets else 0.0
+    synonym_split_rate = estimate_synonym_split_rate(ordered_packets)
+
+    return {
+        "summary": {
+            "total_packets": total_packets,
+            "generic_rate": generic_rate,
+            "synonym_split_rate": synonym_split_rate,
+            "specificity_distribution": dict(specificity_distribution),
+        },
+        "items": items,
+    }
 
 
 def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
@@ -335,9 +601,9 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                 seen_pairs.add(pair)
                 block_comparisons += 1
                 score = similarity_score(sorted_packets[left_index], sorted_packets[right_index])
-                if score >= 0.60:
+                if score >= CLUSTER_MERGE_THRESHOLD:
                     union_find.union(left_index, right_index)
-                elif 0.45 <= score < 0.60:
+                elif CLUSTER_NEAR_MATCH_THRESHOLD <= score < CLUSTER_MERGE_THRESHOLD:
                     near_matches_by_index[left_index].append(
                         {
                             "packet_id": sorted_packets[right_index]["packet_id"],
@@ -359,7 +625,11 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     for index in range(len(sorted_packets)):
         groups[union_find.find(index)].append(index)
 
-    latest_timestamp = max((packet.get("timestamp") for packet in sorted_packets if packet.get("timestamp")), default=None)
+    latest_timestamp = max(
+        (str(packet.get("timestamp")) for packet in sorted_packets if packet.get("timestamp")),
+        key=compare_iso_timestamps,
+        default=None,
+    )
     candidates: list[dict[str, Any]] = []
     unclustered: list[dict[str, Any]] = []
 
@@ -431,6 +701,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             "session_refs": session_refs,
             "near_matches": nearest,
             "research_targets": research_targets,
+            "evidence_items": build_evidence_items(group_packets),
         }
         candidate["score"] = candidate_score(support)
         candidate.update(build_candidate_quality(candidate, total_packets_all=total_packets_all))
@@ -480,6 +751,9 @@ def main() -> None:
         claude_packets, claude_status = read_claude_packets(claude_root, workspace, args.gap_hours)
         codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace)
         all_packets = claude_packets + codex_packets
+        date_window_start = None
+        if not args.all_sessions:
+            all_packets, date_window_start = filter_packets_by_days(all_packets, args.days)
         candidates, unclustered, stats = cluster_packets(all_packets)
         top_candidates = candidates[: max(0, args.top_n)]
         limited_unclustered = unclustered[: max(0, args.max_unclustered)]
@@ -500,13 +774,17 @@ def main() -> None:
                 "no_sources_available": len(all_packets) == 0,
             },
             "config": {
+                "days": args.days,
                 "gap_hours": args.gap_hours,
                 "top_n": args.top_n,
                 "max_unclustered": args.max_unclustered,
                 "workspace": str(workspace) if workspace else None,
                 "all_sessions": args.all_sessions,
+                "date_window_start": None if args.all_sessions else date_window_start,
             },
         }
+        if args.dump_intents:
+            payload["intent_analysis"] = build_intent_analysis(all_packets)
         emit(payload)
     except Exception as exc:
         emit(error_response(PREPARE_SOURCE, str(exc)))
