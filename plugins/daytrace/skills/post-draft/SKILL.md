@@ -281,11 +281,12 @@ ask は使わず、読者と主題から以下を自動で決める。
 
 source 欠損の判定は `summary` と `sources` から行う。
 
-- `summary.no_sources_available == true` または `source_status_counts.success == 0`
+- `source_status_counts.success == 0`
   - `source が 0 本` とみなす
 - `source_status_counts.success` が 1-2
   - `source が 1-2 本だけ` とみなす
 - `sources[].status` に `skipped` / `error` があっても、成功 source が残っていれば継続する
+- 注記: `summary.no_sources_available` は空結果を示すメタ情報であり、実際の分岐判定は `source_status_counts.success` を優先する
 
 ### source が 0 本
 

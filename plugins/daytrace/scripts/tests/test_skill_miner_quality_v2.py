@@ -30,6 +30,8 @@ from skill_miner_prepare import (
     SIMILARITY_TASK_SHAPES_WEIGHT,
     SIMILARITY_TOOL_WEIGHT,
     SIMILARITY_WEIGHT_TOTAL,
+    _build_similarity_features,
+    _similarity_score_from_features,
     UnionFind,
     cluster_packets,
     similarity_score,
@@ -214,6 +216,68 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
 
         self.assertLess(similarity_score(left, right), 0.60)
         self.assertGreaterEqual(legacy_similarity_score(left, right), 0.60)
+
+    def test_similarity_feature_path_matches_public_wrapper(self) -> None:
+        left = make_packet(
+            "pkt-feature-left",
+            primary_intent="Implement config sync and update /tmp/workspace/app/config.yaml safely.",
+            snippets=["Implement config sync in /tmp/workspace/app/config.yaml and keep rollback notes."],
+            task_shape=["implement_feature", "edit_config"],
+            artifact_hints=["config"],
+            repeated_rules=["tests-before-close"],
+            top_tool="python3",
+            tool_signature=["python3", "pytest"],
+        )
+        right = make_packet(
+            "pkt-feature-right",
+            primary_intent="Implement config sync and update /tmp/workspace/app/settings.yaml with tests.",
+            snippets=["Implement config sync in /tmp/workspace/app/settings.yaml and keep rollback notes."],
+            task_shape=["implement_feature", "edit_config"],
+            artifact_hints=["config"],
+            repeated_rules=["tests-before-close"],
+            top_tool="python3",
+            tool_signature=["python3", "pytest"],
+        )
+
+        wrapper_score = similarity_score(left, right)
+        feature_score = _similarity_score_from_features(
+            _build_similarity_features(left),
+            _build_similarity_features(right),
+        )
+
+        self.assertEqual(feature_score, wrapper_score)
+
+    def test_similarity_feature_path_matches_generic_only_penalty_case(self) -> None:
+        left = make_packet(
+            "pkt-generic-left",
+            primary_intent="Review the change and summarize findings.",
+            snippets=["Review the change and summarize findings."],
+            task_shape=["review_changes", "search_code"],
+            artifact_hints=[],
+            repeated_rules=[],
+            tool_signature=["rg", "read", "sed"],
+        )
+        right = make_packet(
+            "pkt-generic-right",
+            primary_intent="Review the diff and summarize findings.",
+            snippets=["Review the diff and summarize findings."],
+            task_shape=["review_changes", "inspect_files"],
+            artifact_hints=[],
+            repeated_rules=[],
+            tool_signature=["rg", "read", "sed"],
+        )
+
+        left_features = _build_similarity_features(left)
+        right_features = _build_similarity_features(right)
+
+        self.assertTrue(left_features["generic_task_only"])
+        self.assertTrue(right_features["generic_task_only"])
+        self.assertTrue(left_features["generic_tool_only"])
+        self.assertTrue(right_features["generic_tool_only"])
+        self.assertEqual(
+            _similarity_score_from_features(left_features, right_features),
+            similarity_score(left, right),
+        )
 
     def test_compare_iso_timestamps_and_recent_count_respect_actual_time(self) -> None:
         packets = [

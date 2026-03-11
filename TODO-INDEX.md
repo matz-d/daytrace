@@ -33,7 +33,6 @@
 
 ## Phase 2.5: v2.3 Realignment Control
 
-- [TODO-V2-realignment.md](TODO-V2-realignment.md)
 - [TODO-C2-v2-aggregate-scope-mode.md](TODO-C2-v2-aggregate-scope-mode.md)
 
 ## 依存関係

@@ -5,7 +5,7 @@ Depends on: C2, D1b, D3b, D2d（少なくとも文言が固まっていること
 
 ## Goal
 
-README とデモ導線を v2.3 の product framing に合わせ、審査員に `date-first / date-first / scope-first` を短時間で誤解なく伝えられる状態にする。
+README とデモ資産を v2.3 の product framing に合わせ、審査員に `date-first / date-first / scope-first` を短時間で誤解なく伝えられる状態にする。
 
 ## Non Goals
 
@@ -34,24 +34,28 @@ README とデモ導線を v2.3 の product framing に合わせ、審査員に `
 - [x] workspace の意味が skill ごとに違うことを README で明示する
 - [x] mixed-scope の説明を README に入れる
 - [x] 審査員向け最短検証手順を v2.3 に合わせて更新する
+- [x] `demo/fixtures/` に必要な成果物一覧を明文化する
+  - `daily-report-shared.md`
+  - `post-draft.md`
+  - `skill-miner-proposal.md`
 - [x] fallback plan を README または demo 手順書から辿れるようにする
-- [x] fallback を repo 常設のサンプル出力に依存させず、録画バックアップ中心に整理する
 - [x] `TODO-E2-readme-demo.md` と役割が重複しないよう、必要ならリンクまたは引継ぎメモを追記する
 
 ## Target Files
 
 - `README.md`
-- `PLAN_update.v2.md`（必要なら fallback wording の整合だけ）
+- `PLAN_update.v2.md`（必要なら demo asset 名の整合だけ）
 - `TODO-E2-readme-demo.md`
+- `demo/fixtures/` 配下の説明文書または placeholder
 
 ## Verification
 
 - [x] README の冒頭だけ読んで 3 skill の役割差が説明できる
 - [x] mixed-scope と workspace semantics が README に残っている
-- [x] fallback が録画バックアップ中心で説明されている
+- [x] fallback 用 fixture 一覧が明文化されている
 
 ## Done Criteria
 
 - [x] README が v2.3 framing と矛盾しない
-- [x] demo fallback 方針が repo 内で共有できる
+- [x] demo fallback 資産の一覧が repo 内で共有できる
 - [x] 3 分デモの説明が product copy と一致している

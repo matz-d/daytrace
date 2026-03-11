@@ -47,8 +47,8 @@ python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
 
 - デフォルト観測窓は 7 日
 - `--all-sessions` は workspace 制限を外すだけで、7 日窓は維持する
-- `workspace` モードだけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
-- full-history 相当の観測が必要な場合は、B0 用に `--all-sessions --days 3650 --dump-intents` のように明示する
+- `workspace` モード（`--all-sessions` を付けない通常実行。`--workspace` 未指定時は `cwd` を使う）だけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
+- full-history 相当の観測が必要な場合は、B0 観測（改善優先度を決めるための実データ観測）用に `--all-sessions --days 3650 --dump-intents` のように明示する
 
 追加調査の detail 再取得:
 
@@ -73,7 +73,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 1. まず `skill_miner_prepare.py` を 1 回だけ実行する
 2. デフォルト観測窓は `7` 日
 3. `--all-sessions` は workspace 制限を外すモードであり、無制限読み込みではない
-4. `workspace` モードは 7 日で開始し、packet / candidate が少なすぎる時だけ 30 日へ自動拡張する
+4. `workspace` モード（`--all-sessions` なし）は 7 日で開始し、packet / candidate が少なすぎる時だけ 30 日へ自動拡張する
 5. adaptive window は `workspace` モードにだけ持たせる
 6. 実行モードは CLI 引数だけで決める。state file は持たない
 7. `candidates` と `unclustered` を `ready` / `needs_research` / `rejected` に分ける
@@ -118,7 +118,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 - `config.all_sessions`
   - `true` の時は workspace 制限だけを外す
 - `config.adaptive_window`
-  - workspace モードで 30 日へ拡張したか、その判定基準と初期件数
+  - workspace モード（`--all-sessions` なし）で 30 日へ拡張したか、その判定基準と初期件数
 - `summary.adaptive_window_expanded`
   - adaptive window が発火したかどうか
 - `candidates[].support`
@@ -155,7 +155,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 ## Classification Rules
 
 分類先は 4 つだけ使う。詳細な境界ケースは `references/classification.md` を参照する。
-B0 の観測方法と優先順位ルールは `references/b0-observation.md` を参照する。
+B0 観測の方法と優先順位ルールは `references/b0-observation.md` を参照する。
 
 - `CLAUDE.md`
   - repo ローカルで毎回守らせたい原則

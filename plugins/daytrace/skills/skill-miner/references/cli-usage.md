@@ -23,8 +23,9 @@ python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
 
 - デフォルト観測窓は `--days 7`
 - `--all-sessions` は workspace 制限を外すだけで、日数窓は維持する
-- `workspace` モードだけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
-- B0 のように full-history 相当を見たい場合は、十分長い `--days` を明示する
+- `workspace` モード（`--all-sessions` を付けない通常実行。`--workspace` 未指定時は `cwd` を使う）だけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
+- B0 観測（`primary_intent` / clustering / quality gate のどこを優先的に改善すべきかを見るための実データ観測）では、full-history 相当を見たい場合に十分長い `--days` を明示する
+- B0 の判断枠と実行手順の詳細は `references/b0-observation.md` を参照する
 
 例:
 
@@ -100,7 +101,7 @@ python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/pre
 - `summary`
   - packet 数、candidate 数、blocking の規模
 - `summary.adaptive_window_expanded`
-  - workspace モードで 30 日 fallback が発火したか
+  - workspace モード（`--all-sessions` なし）で 30 日 fallback が発火したか
 - `config.effective_days`
   - 実際に使われた観測窓
 - `config.adaptive_window`

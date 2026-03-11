@@ -329,40 +329,44 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
 
 
 
-def _primary_non_generic_shape(packet: dict[str, Any]) -> str:
-    task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
-    return next((shape for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
-
-
-def _rule_names(packet: dict[str, Any]) -> set[str]:
-    return {
+def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
+    workspace = packet.get("workspace")
+    snippets = packet.get("representative_snippets", [])
+    snippet_tokens = set().union(*(tokenize(compact_snippet(item, workspace)) for item in snippets)) if snippets else set()
+    intent_tokens = tokenize(str(packet.get("primary_intent") or ""))
+    task_shape_set = set(packet.get("task_shape", []))
+    tool_set = set(packet.get("tool_signature", []))
+    task_shapes_strs = [str(shape) for shape in packet.get("task_shape", []) if shape]
+    primary_non_generic = next((shape for shape in task_shapes_strs if shape not in GENERIC_TASK_SHAPES), "")
+    rule_names = {
         str(item.get("normalized") or "")
         for item in packet.get("repeated_rules", [])
         if isinstance(item, dict) and item.get("normalized")
     }
+    return {
+        "snippet_tokens": snippet_tokens,
+        "intent_tokens": intent_tokens,
+        "task_shape_set": task_shape_set,
+        "tool_set": tool_set,
+        "artifact_set": set(packet.get("artifact_hints", [])),
+        "rule_names": rule_names,
+        "primary_non_generic_shape": primary_non_generic,
+        "generic_task_only": bool(task_shape_set) and task_shape_set <= GENERIC_TASK_SHAPES,
+        "generic_tool_only": bool(tool_set) and tool_set <= GENERIC_TOOL_SIGNATURES,
+    }
 
 
-def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
-    left_tokens = set().union(*(tokenize(compact_snippet(item, left.get("workspace"))) for item in left.get("representative_snippets", [])))
-    right_tokens = set().union(*(tokenize(compact_snippet(item, right.get("workspace"))) for item in right.get("representative_snippets", [])))
-    snippet = jaccard_score(left_tokens, right_tokens)
-    intent = jaccard_score(tokenize(str(left.get("primary_intent") or "")), tokenize(str(right.get("primary_intent") or "")))
-    left_task_shapes = set(left.get("task_shape", []))
-    right_task_shapes = set(right.get("task_shape", []))
-    left_tools = set(left.get("tool_signature", []))
-    right_tools = set(right.get("tool_signature", []))
-    task_shapes = overlap_score(left_task_shapes, right_task_shapes)
-    tools = jaccard_score(left_tools, right_tools)
-    artifacts = overlap_score(set(left.get("artifact_hints", [])), set(right.get("artifact_hints", [])))
-    rules = overlap_score(_rule_names(left), _rule_names(right))
-    left_specific = _primary_non_generic_shape(left)
-    same_specific_shape = 1.0 if left_specific and left_specific == _primary_non_generic_shape(right) else 0.0
-    generic_task_only = bool(left_task_shapes) and bool(right_task_shapes) and all(
-        shape in GENERIC_TASK_SHAPES for shape in left_task_shapes | right_task_shapes
-    )
-    generic_tool_only = bool(left_tools) and bool(right_tools) and all(
-        tool in GENERIC_TOOL_SIGNATURES for tool in left_tools | right_tools
-    )
+def _similarity_score_from_features(left: dict[str, Any], right: dict[str, Any]) -> float:
+    snippet = jaccard_score(left["snippet_tokens"], right["snippet_tokens"])
+    intent = jaccard_score(left["intent_tokens"], right["intent_tokens"])
+    task_shapes = overlap_score(left["task_shape_set"], right["task_shape_set"])
+    tools = jaccard_score(left["tool_set"], right["tool_set"])
+    artifacts = overlap_score(left["artifact_set"], right["artifact_set"])
+    rules = overlap_score(left["rule_names"], right["rule_names"])
+    left_specific = left["primary_non_generic_shape"]
+    same_specific_shape = 1.0 if left_specific and left_specific == right["primary_non_generic_shape"] else 0.0
+    generic_task_only = left["generic_task_only"] and right["generic_task_only"]
+    generic_tool_only = left["generic_tool_only"] and right["generic_tool_only"]
     score = (
         (task_shapes * SIMILARITY_TASK_SHAPES_WEIGHT)
         + (intent * SIMILARITY_INTENT_WEIGHT)
@@ -375,6 +379,13 @@ def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
     if generic_task_only and generic_tool_only and artifacts == 0.0 and rules == 0.0:
         score -= SIMILARITY_GENERIC_ONLY_PENALTY
     return round(max(0.0, min(score, 1.0)), 3)
+
+
+def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
+    return _similarity_score_from_features(
+        _build_similarity_features(left),
+        _build_similarity_features(right),
+    )
 
 
 def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[list[dict[str, Any]], str | None]:
@@ -609,6 +620,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
 
     sorted_packets = sorted(packets, key=packet_sort_key, reverse=True)
     packet_lookup = {str(packet.get("packet_id")): packet for packet in sorted_packets}
+    features_by_index = [_build_similarity_features(packet) for packet in sorted_packets]
     blocks: dict[str, list[int]] = defaultdict(list)
     for index, packet in enumerate(sorted_packets):
         for key in stable_block_keys(packet):
@@ -627,7 +639,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                     continue
                 seen_pairs.add(pair)
                 block_comparisons += 1
-                score = similarity_score(sorted_packets[left_index], sorted_packets[right_index])
+                score = _similarity_score_from_features(features_by_index[left_index], features_by_index[right_index])
                 if score >= CLUSTER_MERGE_THRESHOLD:
                     union_find.union(left_index, right_index)
                 elif CLUSTER_NEAR_MATCH_THRESHOLD <= score < CLUSTER_MERGE_THRESHOLD:

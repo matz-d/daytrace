@@ -1,6 +1,6 @@
 # B0 Observation Guide
 
-`skill-miner` の B0 は、固定の結論を保存するためのものではない。
+`skill-miner` の B0 は、`primary_intent` / clustering / quality gate のどこを優先的に改善すべきかを見るための実データ観測タスクであり、固定の結論を保存するためのものではない。
 その時点の履歴を観測し、`B: feature extraction` / `C: clustering` / `D: quality gate` のどこを優先すべきかを決めるための判断フレームである。
 
 このファイルには固定の考え方だけを書く。
@@ -25,6 +25,7 @@ python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions --days 3650 
 補足:
 
 - 通常運用の `skill-miner` は `--days 7` がデフォルトで、workspace モードだけ必要時に 30 日へ自動拡張する
+- ここでいう workspace モードは、`--all-sessions` を付けない通常実行を指す。`--workspace` 未指定時は `cwd`、指定時はその path を観測対象に使う
 - `--all-sessions` 単体は workspace 制限を外すだけで、無制限観測ではない
 - B0 の優先順位判断は、原則として `--all-sessions + 明示的な長窓` の観測を基準にする
 - `--days 7` や adaptive 30 日は通常運用の挙動確認には使ってよいが、B0 の主判断には使わない
