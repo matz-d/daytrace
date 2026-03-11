@@ -7,11 +7,39 @@ Git コミット、Claude / Codex の会話履歴、Chrome 閲覧履歴、ファ
 
 ## できること
 
-| スキル | 説明 |
-|--------|------|
-| `/daily-report` | その日の活動から日報ドラフトを自動生成 |
-| `/skill-miner` | AI会話の反復パターンを圧縮 candidate view で抽出し、skill/plugin/agent/CLAUDE.md/hook を提案・ドラフト生成 |
-| `/post-draft` | 活動ログからテックブログ・チーム共有・Slack投稿の下書きを生成 |
+| スキル | 役割 | 主軸 | 概要 |
+|--------|------|------|------|
+| `/daily-report` | **Fact & Action** | date-first | その日全体の活動を「自分用」または「共有用」の日報ドラフトに再構成する。workspace は主軸ではなく補助フィルタ |
+| `/post-draft` | **Context & Narrative** | date-first | その日の一次情報から、外部に出せる narrative draft を 1 本組み立てる。reader に合わせてトーンと粒度を自動調整する |
+| `/skill-miner` | **Pattern Extraction** | scope-first | Claude / Codex 履歴から反復パターンを抽出し、`CLAUDE.md` / `skill` / `hook` / `agent` への固定化を提案する。workspace か all-sessions かの観測スコープが UX 上の主要な選択肢 |
+
+### 3 skill の関係
+
+```
+daily-report  ── Fact & Action    ── その日に何をしたか・何が残っているかを整理する
+post-draft    ── Context & Narrative ── その日の一次情報を外に出せる文章に変換する
+skill-miner   ── Pattern Extraction  ── 蓄積履歴から反復パターンを読み出し、作法として固定化を提案する
+```
+
+`daily-report` と `post-draft` は **date-first**（対象日が主軸）、`skill-miner` は **scope-first**（どの範囲の履歴を読むかが主軸）。
+
+### workspace の意味はスキルごとに異なる
+
+| スキル | workspace の意味 |
+|--------|-----------------|
+| `daily-report` | 補助フィルタ。未指定でも date-first で動く。指定すると git / ファイル変更を絞り込む |
+| `post-draft` | 補助フィルタ。未指定でも date-first で動く。指定すると git / ファイル変更を絞り込む |
+| `skill-miner` | 観測スコープ。デフォルトは current workspace の 7 日窓。`--all-sessions` で workspace 制限を外す |
+
+### mixed-scope について
+
+`daily-report` / `post-draft` は source によってスコープが異なる。
+
+- **all-day source**（`claude-history`, `codex-history`, `chrome-history`）: その日全体の証跡
+- **workspace source**（`git-history`, `workspace-file-activity`）: current workspace に限定された証跡
+
+workspace を指定しない場合でも、この 2 種類が混在した mixed-scope 出力になりえる。
+出力の冒頭に mixed-scope 注記が入る場合があるが、これは coverage の誤認を防ぐための事実説明であり、日報や narrative の価値を弱めるものではない。
 
 ## インストール
 
@@ -46,11 +74,50 @@ DayTrace は以下のローカルデータを読み取ります。**外部への
 
 ## 審査員向け: 最短検証手順
 
-1. 上記のインストールコマンドを実行
-2. このリポジトリを開いた状態で `python3 plugins/daytrace/scripts/aggregate.py --workspace . --all-sessions >/tmp/daytrace-aggregate.json` を実行
-3. `stderr` の `Source preflight:` に `available=` / `unavailable=` / `skipped=` が出て、install 直後に使える source が一目で分かることを確認
-4. `/tmp/daytrace-aggregate.json` の `sources[]` に source ごとの `status` と `reason` が入り、source 0 本でも空結果で正常終了することを確認
-5. 任意のリポジトリで `/daily-report` を実行し、利用可能な source だけでドラフトが生成されることを確認
+### 1. インストール直後の source 確認
+
+```bash
+python3 plugins/daytrace/scripts/aggregate.py --date today --all-sessions >/tmp/daytrace-aggregate.json
+```
+
+- `stderr` の `Source preflight:` に `available=` / `unavailable=` / `skipped=` が出る
+- `/tmp/daytrace-aggregate.json` の `sources[]` に source ごとの `status` / `scope` が入る
+- source が 0 本でも空結果で正常終了する（graceful degrade）
+
+### 2. daily-report の確認（Fact & Action / date-first）
+
+```
+/daily-report
+```
+
+- 今日全体の活動が日報ドラフトとして生成されること
+- 引数なしの場合は「自分用ですか？共有用ですか？」の 1 問だけ確認して完走する
+- mixed-scope 注記（all-day source / workspace source の区別）が冒頭に入ることがある
+- source が欠けていても空日報または簡易日報で完走すること
+
+### 3. post-draft の確認（Context & Narrative / date-first）
+
+```
+/post-draft
+```
+
+- 今日の一次情報から narrative draft が 1 本生成されること
+- ask 0 回で自動完走すること
+
+### 4. skill-miner の確認（Pattern Extraction / scope-first）
+
+```
+/skill-miner
+```
+
+- 候補が「提案成立 / 追加調査待ち / 今回は見送り」の 3 区分で返ること
+- 0 件でも失敗扱いにならないこと
+- `--all-sessions` で workspace 制限を外した広域観測ができること
+
+### fallback: demo fixture を使った確認
+
+source が取れない環境向けに、サンプル出力を `demo/fixtures/` に用意している。
+詳細は [`demo/fixtures/README.md`](demo/fixtures/README.md) を参照。
 
 ## リポジトリ構成
 
@@ -79,6 +146,13 @@ plugins/
       skill_miner_detail.py
       chrome_history.py
       workspace_file_activity.py
+
+demo/
+  fixtures/
+    README.md               # fixture 一覧と fallback 手順
+    daily-report-shared.md  # /daily-report 共有用のサンプル出力
+    post-draft.md           # /post-draft のサンプル出力
+    skill-miner-proposal.md # /skill-miner のサンプル出力
 ```
 
 ## 制限事項
