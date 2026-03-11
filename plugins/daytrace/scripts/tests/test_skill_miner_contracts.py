@@ -176,6 +176,62 @@ class SkillMinerContractTests(unittest.TestCase):
 
         return workspace, claude_root, root / "missing-history.jsonl", root / "missing-sessions"
 
+    def create_all_sessions_scope_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        workspace = root / "workspace-a"
+        other_workspace = root / "workspace-b"
+        workspace.mkdir(parents=True, exist_ok=True)
+        other_workspace.mkdir(parents=True, exist_ok=True)
+
+        now = datetime.now(timezone.utc)
+        old_timestamp = (now - timedelta(days=20)).isoformat()
+        recent_timestamp = (now - timedelta(days=2)).isoformat()
+
+        claude_root = root / "claude"
+        write_jsonl(
+            claude_root / "repo" / "session-workspace-old.jsonl",
+            [
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-old-workspace",
+                    "isSidechain": False,
+                    "timestamp": old_timestamp,
+                    "message": {"role": "user", "content": f"Review {workspace}/src/app.py and return findings first."},
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-old-workspace",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(old_timestamp) + timedelta(minutes=2)).isoformat(),
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "I will summarize findings by severity."}]},
+                },
+            ],
+        )
+        write_jsonl(
+            claude_root / "repo" / "session-other-recent.jsonl",
+            [
+                {
+                    "type": "user",
+                    "cwd": str(other_workspace),
+                    "sessionId": "claude-recent-global",
+                    "isSidechain": False,
+                    "timestamp": recent_timestamp,
+                    "message": {"role": "user", "content": f"Review {other_workspace}/src/server.py and return findings first."},
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(other_workspace),
+                    "sessionId": "claude-recent-global",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_timestamp) + timedelta(minutes=1)).isoformat(),
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "I will inspect the files and summarize findings by severity."}]},
+                },
+            ],
+        )
+
+        return workspace, claude_root, root / "missing-history.jsonl", root / "missing-sessions"
+
     def create_workspace_switch_fixture(self, root: Path) -> tuple[Path, Path]:
         workspace = root / "workspace-a"
         other_workspace = root / "workspace-b"
@@ -310,26 +366,54 @@ class SkillMinerContractTests(unittest.TestCase):
         args = parser.parse_args([])
         self.assertEqual(args.days, 7)
 
-    def test_prepare_default_days_filters_old_packets(self) -> None:
+    def test_prepare_workspace_mode_starts_with_seven_day_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace, claude_root, codex_history, codex_sessions = self.create_recent_fixture(Path(temp_dir))
+            payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+
+            self.assertEqual(payload["config"]["days"], 7)
+            self.assertEqual(payload["config"]["effective_days"], 7)
+            self.assertFalse(payload["config"]["all_sessions"])
+            self.assertEqual(payload["config"]["observation_mode"], "workspace")
+            self.assertIsNotNone(payload["config"]["date_window_start"])
+            self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
+            self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
+            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertGreaterEqual(payload["summary"]["total_packets"], 3)
+
+    def test_prepare_workspace_mode_expands_to_thirty_days_when_sparse(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, claude_root, codex_history, codex_sessions = self.create_old_fixture(Path(temp_dir))
             payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
 
-            self.assertEqual(payload["config"]["days"], 7)
             self.assertFalse(payload["config"]["all_sessions"])
+            self.assertEqual(payload["config"]["effective_days"], 30)
+            self.assertEqual(payload["config"]["observation_mode"], "workspace")
+            self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
+            self.assertTrue(payload["config"]["adaptive_window"]["expanded"])
+            self.assertEqual(payload["config"]["adaptive_window"]["reason"], "insufficient_packets")
+            self.assertEqual(payload["config"]["adaptive_window"]["initial_packet_count"], 0)
+            self.assertEqual(payload["config"]["adaptive_window"]["initial_candidate_count"], 0)
+            self.assertTrue(payload["summary"]["adaptive_window_expanded"])
+            self.assertEqual(payload["summary"]["total_packets"], 2)
+            self.assertEqual(len(payload["candidates"]), 1)
             self.assertIsNotNone(payload["config"]["date_window_start"])
-            self.assertEqual(payload["summary"]["total_packets"], 0)
-            self.assertEqual(payload["candidates"], [])
 
-    def test_prepare_all_sessions_overrides_day_filter(self) -> None:
+    def test_prepare_all_sessions_removes_workspace_filter_but_keeps_day_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            workspace, claude_root, codex_history, codex_sessions = self.create_old_fixture(Path(temp_dir))
+            workspace, claude_root, codex_history, codex_sessions = self.create_all_sessions_scope_fixture(Path(temp_dir))
             payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions, "--all-sessions")
 
             self.assertTrue(payload["config"]["all_sessions"])
-            self.assertIsNone(payload["config"]["date_window_start"])
-            self.assertEqual(payload["summary"]["total_packets"], 2)
-            self.assertEqual(len(payload["candidates"]), 1)
+            self.assertIsNone(payload["config"]["workspace"])
+            self.assertEqual(payload["config"]["effective_days"], 7)
+            self.assertEqual(payload["config"]["observation_mode"], "all-sessions")
+            self.assertFalse(payload["config"]["adaptive_window"]["enabled"])
+            self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
+            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertIsNotNone(payload["config"]["date_window_start"])
+            self.assertEqual(payload["summary"]["total_packets"], 1)
+            self.assertEqual(payload["candidates"], [])
 
     def test_prepare_candidate_includes_evidence_items_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

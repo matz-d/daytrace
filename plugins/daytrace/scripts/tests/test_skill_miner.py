@@ -210,7 +210,7 @@ class SkillMinerTests(unittest.TestCase):
 
         return workspace, claude_root, codex_history, codex_sessions
 
-    def run_prepare(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path) -> dict:
+    def run_prepare(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, *extra_args: str) -> dict:
         completed = subprocess.run(
             [
                 "python3",
@@ -227,6 +227,7 @@ class SkillMinerTests(unittest.TestCase):
                 "5",
                 "--max-unclustered",
                 "5",
+                *extra_args,
             ],
             cwd=str(REPO_ROOT),
             capture_output=True,
@@ -272,6 +273,19 @@ class SkillMinerTests(unittest.TestCase):
             self.assertNotIn("?a=1", snippets)
             masked_url = compact_snippet("See https://example.com/path?a=1#frag", str(workspace))
             self.assertEqual(masked_url, "See https://example.com")
+
+    def test_prepare_reports_effective_observation_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(Path(temp_dir))
+            payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+
+            self.assertEqual(payload["config"]["days"], 7)
+            self.assertEqual(payload["config"]["effective_days"], 7)
+            self.assertEqual(payload["config"]["observation_mode"], "workspace")
+            self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
+            self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
+            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertIsNotNone(payload["config"]["date_window_start"])
 
     def test_candidate_quality_flags_oversized_generic_cluster_for_research(self) -> None:
         candidate = {

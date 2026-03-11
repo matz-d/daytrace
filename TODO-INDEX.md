@@ -15,17 +15,26 @@
 ## Phase 2: Output Skills（3/14 - 3/18）
 
 - [TODO-D1-daily-report.md](TODO-D1-daily-report.md)
+- [TODO-D1b-v2-daily-report-date-first.md](TODO-D1b-v2-daily-report-date-first.md)
 - [TODO-D2-skill-miner.md](TODO-D2-skill-miner.md)
 - [TODO-D2a-skill-miner-compression.md](TODO-D2a-skill-miner-compression.md)
 - [TODO-D2b-skill-miner-proposal-quality.md](TODO-D2b-skill-miner-proposal-quality.md)
 - [TODO-D2c-skill-miner-v2.md](TODO-D2c-skill-miner-v2.md)
+- [TODO-D2d-skill-miner-adaptive-window.md](TODO-D2d-skill-miner-adaptive-window.md)
 - [TODO-D3-post-draft.md](TODO-D3-post-draft.md)
+- [TODO-D3b-v2-post-draft-narrative.md](TODO-D3b-v2-post-draft-narrative.md)
 
 ## Phase 3: Polish & Submit（3/19 - 3/22）
 
 - [TODO-E1-judge-install.md](TODO-E1-judge-install.md)
 - [TODO-E2-readme-demo.md](TODO-E2-readme-demo.md)
+- [TODO-E2b-v2-readme-demo-realignment.md](TODO-E2b-v2-readme-demo-realignment.md)
 - [TODO-E3-hardening.md](TODO-E3-hardening.md)
+
+## Phase 2.5: v2.3 Realignment Control
+
+- [TODO-V2-realignment.md](TODO-V2-realignment.md)
+- [TODO-C2-v2-aggregate-scope-mode.md](TODO-C2-v2-aggregate-scope-mode.md)
 
 ## 依存関係
 
@@ -46,6 +55,18 @@ D2a
 
 D2b
   → D2c（weekly classification / evidence chain / CLAUDE.md apply / B0-Validation の再整理）
+
+C
+  → C2（scope metadata を追加し、v2.3 の mixed-scope contract を機械可読にする）
+
+C2
+  → D1b, D3b（daily-report / post-draft は `scope` を前提に書き換える）
+
+D2c
+  → D2d（adaptive window は skill-miner v2 契約の後続）
+
+C2, D1b, D3b, D2d
+  → E2b（README / demo の最終整合）
 
 A（packaging）は他と並行して進められる
 

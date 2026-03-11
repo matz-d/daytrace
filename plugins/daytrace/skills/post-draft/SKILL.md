@@ -1,245 +1,340 @@
 ---
 name: post-draft
 description: >
-  ローカル証跡の集約結果から、テックブログ・チーム共有・Slack投稿の下書きを生成する。
+  1日の活動ログから、その日全体の流れを読者向け narrative draft に再構成する。記事を書きたい、ブログにまとめたい、ふりかえりを書きたい、学びを共有したい時に使う。topic / reader は任意で上書きできる。
 user-invocable: true
 ---
 
 # Post Draft
 
-集約結果をもとに、用途別の投稿下書きを生成する。公開や送信は行わず、下書き生成で止める。
+その日のローカル証跡から、date-first で narrative draft を組み立てる。
+主目的は媒体を選ぶことではなく、その人だけが書ける一次情報ベースの `Context & Narrative` を下書き化すること。
 
 ## Goal
 
-- ローカル証跡から発信・共有用の下書きを自動生成する
-- 用途ごとにトーンと粒度を切り替える
-- source が欠けていても破綻しない短縮版を返す
+- 1 日全体の活動ログから、公開前の narrative draft を 1 本組み立てる
+- `workspace default` ではなく `date-first default + optional workspace filter` として扱う
+- 入口 ask なしで完走し、必要なら `topic` と `reader` だけ optional override として受け付ける
+- 読者に応じてトーン、構成、説明粒度を自動で切り替える
+- source が欠けていても narrative が破綻しない短縮版を返す
 
 ## Inputs
 
-- 用途
-  - `tech-blog`
-  - `team-summary`
-  - `slack`
 - 対象日
-  - 指定がなければ今日
-- 対象 workspace
-  - 指定がなければ現在の作業ディレクトリ
+  - 指定がなければ `today`
+  - 単日指定を基本とし、必要なら `YYYY-MM-DD` を使う
+- reader
+  - 任意
+  - 未指定時は自動推定する
+- topic
+  - 任意
+  - 未指定時は narrative policy で自動選定する
+- workspace
+  - 任意
+  - 主軸ではなく補助フィルタ
+  - 特定 workspace の git / file 根拠を強めたい時だけ使う
+  - 現状の source 実装では、workspace を指定しても `claude-history` / `codex-history` / `chrome-history` はその日全体の証跡を返しうる
+  - したがって strict な repo 限定指定ではなく、mixed-scope の内訳を制御する補助情報として扱う
 
-## Purpose Selection
+## Entry Contract
 
-用途指定のインターフェースは対話で決める。
+入力は自然言語抽出と引数なし実行の 2 経路を前提にする。
 
-- ユーザーが `tech-blog` / `team-summary` / `slack` のいずれかを明示したら、そのまま使う
-- 指定がない場合だけ、次の 1 問だけ聞く
+### 自然言語からの抽出
 
-```text
-用途は tech-blog / team-summary / slack のどれにしますか？
-```
+- 「今日の記事を書きたい」「昨日の学びをブログ向けにまとめたい」などから日付を抽出する
+- 「非エンジニア向けに」「個人ブログ向けに」などから `reader` を抽出する
+- 「aggregate.py の話で」「scope の変更について」などから `topic` を抽出する
+- 「daytrace の」「`/path/to/repo` で」などから workspace を抽出する
+
+### 引数なし実行
+
+- ask は 0 回に固定する
+- 日付は `today` を使う
+- `reader` は自動推定する
+- `topic` は narrative policy で自動選定する
+- workspace は未指定のまま date-first で進める
+
+### 追加 ask の禁止
+
+- 入口でも途中でも質問しない
+- source 欠損や low confidence が見えても追加 ask しない
+- 抽出できなかった情報はデフォルト値で埋める
 
 ## Data Collection
 
-必ず先に `aggregate.py` を実行し、中間 JSON を取得する。
+必ず最初に `aggregate.py` を 1 回だけ実行し、中間 JSON を取得する。
 
-`aggregate.py` はこの SKILL.md と同じ plugin 内の `scripts/` ディレクトリにある。
+`aggregate.py` はこの `SKILL.md` と同じ plugin 内の `scripts/` ディレクトリにある。
 この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
 
-```bash
-python3 <plugin-root>/scripts/aggregate.py --date today
-```
-
-特定日や別 workspace の場合:
+date-first デフォルト:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09
-python3 <plugin-root>/scripts/aggregate.py --workspace /absolute/path/to/workspace --date today
+python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions
 ```
+
+特定日:
+
+```bash
+python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09 --all-sessions
+```
+
+workspace の git / file 根拠を current repo に固定したい場合:
+
+```bash
+python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions --workspace /absolute/path/to/workspace
+```
+
+この指定の意味:
+
+- `git-history` と `workspace-file-activity` は `--workspace` で絞り込まれる
+- `claude-history` / `codex-history` は `--all-sessions` が付くと workspace を無視する
+- `chrome-history` は現状常に workspace を無視する
+- したがって downstream の生成では `sources[].scope` を見て、repo ローカルの根拠と全日根拠を混同しない
 
 中間 JSON の主な読みどころ:
 
-- `sources`: 利用できた source と欠損 source
-- `groups`: まとまりとして扱うべき活動塊
+- `sources`: source ごとの `success / skipped / error / scope`
+- `groups`: 近接イベントを束ねた活動グループ
 - `timeline`: 詳細な時系列
-- `summary`: 件数と欠損状況
+- `summary`: 件数と source 利用状況
 
-## Output Formats
+## Scope Contract
 
-### `tech-blog`
+この skill は date-first だが、source には `all-day` と `workspace` の 2 種類がある。
 
-- 用途
-  - 学びや実装の流れを、第三者が読める形で整理する
+- `all-day`
+  - その日全体を代表する証跡
+  - 例: `claude-history`, `codex-history`, `chrome-history`
+- `workspace`
+  - 指定 workspace または current working directory に依存する証跡
+  - 例: `git-history`, `workspace-file-activity`
+
+workspace 未指定でも、出力は全日 source と cwd 起点の workspace source が混在しうる。
+workspace 指定時も mixed-scope は解消されず、repo ローカルの根拠密度が上がるだけで `all-day` source まで strict な repo filter にはならない。
+date-first の narrative を組み立てつつ、mixed-scope を隠さないこと。
+
+## Narrative Policy
+
+主題選定は Python helper に切り出さず、この `SKILL.md` の policy として実装する。
+`aggregate.py` が返す `groups` / `events` を読み、主題選定と narrative 構成を一体で行うこと。
+
+### 主題選定の優先順位
+
+`--topic` が明示されている場合は、それを最優先する。
+未指定時は `groups` から以下の 3 段フォールバックで主題を 1 つ選ぶ。
+
+#### 優先度 1: AI + Git 共起グループ
+
+- 条件: `sources` に `git-history` と (`claude-history` または `codex-history`) が両方含まれる
+- 複数該当時: `event_count` が最大の group を選ぶ
+- 根拠: AI との対話と実際のコミットが同時間帯にある group は、実作業の密度が最も高い
+
+#### 優先度 2: AI 密度グループ
+
+- 条件: `confidence_categories` に `ai_history` を含み、かつ group 内の `claude-history` / `codex-history` イベント数が 3 件以上
+- 複数該当時: AI イベント数が最大の group を選ぶ
+- 根拠: AI との対話が集中している group は、試行錯誤の narrative を組み立てやすい
+
+#### 優先度 3: 最大イベント数グループ
+
+- 条件: 上記に該当しない場合
+- 選び方: `event_count` が最大の group を選ぶ
+- 根拠: 補助証跡しかなくても、その日の中心的な活動塊を最低限拾う
+
+### 主題の広げ方
+
+- 選んだ group を narrative の中心に据える
+- 周辺 group は背景、前提、判断、次の一手として補助的に接続する
+- 主題が 1 つでも、本文は単なる group 要約にしない
+- `events[].summary` や `type` から、転換点、詰まり、判断理由、学びを narrative 構成で拾う
+- 「学びの転換点」の判定は決定論的 helper ではなく LLM の narrative 構成フェーズで行う
+
+## Reader Policy
+
+優先順位は `--reader` override > 自然言語から抽出した reader > デフォルト読者 とする。
+
+### デフォルト読者
+
+- 自然言語から `reader` を抽出できた場合はそれを使う
+- 抽出できず、`--reader` override も無い場合のデフォルトは `同じ技術スタックを使う開発者`
+
+### `--reader` override
+
+- `reader` が明示されている場合は、その読者像に合わせてトーンと粒度を調整する
+- 例: `--reader "社内の非エンジニア"` の場合、技術用語を減らし、背景、プロセス、成果を中心に書く
+- 例: `--reader "個人ブログの読者"` の場合、一人称で試行錯誤や学びのストーリーを前に出す
+
+### 自動判定ルール
+
+ask は使わず、読者と主題から以下を自動で決める。
+
 - トーン
-  - 文章中心、説明的、再利用可能な学びを前に出す
-- 粒度
-  - 背景、やったこと、詰まった点、学び、次の改善まで含める
-- 期待する長さ
-  - 見出しつきの下書き 600-1200 字程度
-
-### `team-summary`
-
-- 用途
-  - チームメンバーに進捗と判断材料を短く共有する
-- トーン
-  - 簡潔、実務的、箇条書き中心
-- 粒度
-  - 何を進めたか、何が決まったか、何が未解決か
-- 期待する長さ
-  - 5-10 bullet 程度
-
-### `slack`
-
-- 用途
-  - Slack にそのまま貼れる短い共有文を作る
-- トーン
-  - カジュアル寄りだが業務利用前提
-- 粒度
-  - 今日の一番大きい進捗、次の一手、必要なら依頼
-- 期待する長さ
-  - 3-8 行程度
+  - 技術者向け: 具体的、再現可能、実装寄り
+  - 非技術者向け: プロセス、判断、成果中心。技術用語は必要最小限に言い換える
+  - 個人ブログ向け: 一人称、試行錯誤、学びの転換点を前に出す
+- 構成
+  - 実装系主題: 背景 / 何を変えたか / 詰まった点 / 学び / 次の一手
+  - 調査系主題: 動機 / 比較したもの / 判断 / 結論
+  - 設計系主題: 課題 / 選択肢 / 採用理由 / 残課題
+- 長さ
+  - 600-1200 字を基本とする
+  - source が薄い日は短くしてよい
+  - reader が非技術者寄りの場合は背景説明を少し厚くし、詳細実装は削る
 
 ## Execution Rules
 
-1. 用途を決める
-2. `aggregate.py` を 1 回だけ実行する
-3. `groups` を優先して読み、用途に合わせて並べ替える
-4. 事実と推定を分ける
-5. confidence が低い内容は過剰に膨らませない
-6. 公開・送信はせず、下書きだけ返す
+1. `aggregate.py` を 1 回だけ実行する
+2. 先に `sources` を読み、取得できた source と `scope` を把握する
+3. 次に `groups` を読み、主題選定の 3 段フォールバックで中心 group を決める
+4. 必要に応じて `timeline` を補助参照し、背景や前後関係を補う
+5. workspace 指定があっても `all-day` source を repo 限定の根拠として扱わない
+6. narrative は 1 本通った話として組み立てる
+7. `chrome-history` は補助的文脈として使い、単独では主題化しすぎない
+8. `workspace-file-activity` 単独の場合は「作業痕跡」として控えめに扱う
+9. 事実と推定を分け、confidence が低い内容は過剰に膨らませない
+10. 公開・送信はせず、下書きだけ返す
+11. `team-summary` / `slack` を main UX に戻さない
 
-## Reconstruction Prompt
+## Output Rules
 
-集約結果から用途別に要点を再構成するときは、以下の方針を守る。
+出力は日本語 Markdown。
+少なくとも以下の要素を含む narrative draft として返す。
 
-- `git-history + claude/codex-history` が同じ活動グループにあるものを優先的に主題化する
-- `chrome-history` は補助的文脈としてのみ使う
-- `workspace-file-activity` 単独の場合は「作業痕跡」として控えめに扱う
-- 何をしたかだけでなく、なぜ意味があるかを用途に応じて言い換える
-- 実装、調査、設計、判断、詰まり、次アクションを切り分ける
-- low confidence の内容は本文で断定せず、必要なら最後に確認事項として分離する
+- `# タイトル案`
+- 導入または背景
+- その日の中心的な出来事
+- 詰まり / 判断 / 学びのいずれか
+- 次の一手
 
-## Format Rules
+### 共通ルール
 
-### `tech-blog`
+- 1 本の narrative として読み通せる流れにする
+- group の列挙で終わらせず、背景と意味づけを入れる
+- source 名やファイル名は必要な範囲で本文に出してよい
+- 根拠が薄い箇所は断定しない
+- `確認したい点` セクションは作らない
+- low confidence は本文内の注記で処理する
+- 読者に合わせて専門用語の量と説明密度を変える
 
-以下の構成で返す。
+### 技術者向けの基本構成
 
 ```markdown
 # タイトル案
 
-## 導入
+## 背景
 
-## 今日やったこと
+## 何を進めたか
 
-## 詰まった点 / 工夫した点
+## 詰まった点 / 判断したこと
 
 ## 学び
 
 ## 次にやること
 ```
 
-ルール:
-
-- 事実ベースで書く
-- 読者が再現しやすい粒度を意識する
-- 具体的なファイル名や source 名を必要に応じて本文へ入れてよい
-- marketing copy ではなく、実装記録寄りにする
-
-### `team-summary`
-
-以下の構成で返す。
+### 非技術者向け override の構成
 
 ```markdown
-## Team Summary
+# タイトル案
 
-- 今日の進捗:
-- 主な証拠:
-- 未解決:
-- 次のアクション:
+## 何に取り組んだか
+
+## どう進めたか
+
+## 何が分かったか
+
+## 次のアクション
 ```
 
-ルール:
+## Mixed-Scope Note Rules
 
-- 箇条書き中心
-- 判断・進捗・リスクを優先
-- 長い背景説明は削る
+成功した `sources[]` の `scope` を見て、冒頭の注記要否を決める。
 
-### `slack`
+- `all-day` と `workspace` の両方が含まれる場合
+  - 導入直後か blockquote で 1 回だけ mixed-scope 注記を入れる
+  - 例:
+    - `Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。`
+    - `1 日全体の流れをもとに構成していますが、repo ローカルの変更根拠は current workspace に限られます。`
+- `all-day` のみ、または `workspace` のみの場合
+  - mixed-scope 注記は必須ではない
+- 注記は coverage の誤認を防ぐための事実説明に留める
+  - narrative の価値を過度に弱めない
 
-以下の構成で返す。
+## Confidence Handling
 
-```markdown
-今日の進捗メモです。
-- ...
-- ...
-次: ...
-```
-
-ルール:
-
-- そのまま貼れる短さにする
-- 1投稿に収まる密度を優先する
-- 必要があれば最後に `確認したい点` を 1 行だけ入れる
+- `high`
+  - そのまま narrative に採用する
+- `medium`
+  - narrative に採用してよい
+  - 必要なら `と見られる` `中心だった` などで断定を弱める
+- `low`
+  - narrative に入れる場合は inline 注記にする
+  - 例:
+    - `注記: ファイル変更からは確認できるが、最終的な意図は断定できない`
+    - `注記: Chrome 履歴由来の補助情報で、着手の確度は高くない`
+  - 別セクションへ分離しない
+  - 追加 ask を発生させない
 
 ## Graceful Degrade
 
+source 欠損の判定は `summary` と `sources` から行う。
+
+- `summary.no_sources_available == true` または `source_status_counts.success == 0`
+  - `source が 0 本` とみなす
+- `source_status_counts.success` が 1-2
+  - `source が 1-2 本だけ` とみなす
+- `sources[].status` に `skipped` / `error` があっても、成功 source が残っていれば継続する
+
 ### source が 0 本
 
-用途を問わず、短縮版を返す。
-
-- `tech-blog`
-  - 記事化できる十分な証跡がなかった旨を明記し、次回必要な source を 1-2 行で添える
-- `team-summary`
-  - `共有できる自動収集証跡なし` と短く返す
-- `slack`
-  - `今日は自動収集できる証跡が少なく、下書きは簡易版です。` のように一言で返す
-
-### source が限定的
-
-- 出力は短縮する
-- 断定表現を避ける
-- `取得できた証跡は限定的` と明記してよい
-
-## Sample Outputs
-
-### Sample: `tech-blog`
+以下のような空 narrative を返す。
 
 ```markdown
-# DayTrace の source CLI をまとめる aggregator を実装した話
+# タイトル案
 
-## 導入
-今日は DayTrace の集約レイヤーを実装し、複数のローカル証跡を 1 つの中間 JSON に統合できる状態まで進めた。
-
-## 今日やったこと
-`sources.json` を起点に source CLI を並列実行する `aggregate.py` を追加した。`git-history`、`claude-history`、`codex-history`、`chrome-history`、`workspace-file-activity` の結果を正規化して、時系列の `timeline` と近接イベントの `groups` にまとめるようにした。
-
-## 詰まった点 / 工夫した点
-source ごとの成功・スキップ・エラーの shape が違うため、aggregator 側で統一した。Chrome や履歴系 source が欠けても全体が止まらないようにしている。
-
-## 学び
-実際の出力スキルを作る前に、中間 JSON の shape を固定したのが効いた。後段の daily-report や post-draft は `groups` と `sources` を読むだけで済む。
+## 背景
+利用可能なローカル証跡が見つからず、その日の活動から narrative を組み立てられなかった。
 
 ## 次にやること
-daily-report と post-draft の SKILL.md を仕上げて、出力層をつなぐ。
+- Git、Claude/Codex、Chrome など少なくとも 1 系統の証跡が取れる状態で再実行する
 ```
 
-### Sample: `team-summary`
+### source が 1-2 本だけ
 
-```markdown
-## Team Summary
+- 短縮版 narrative として返す
+- `取得できた証跡は限定的` と導入で明記してよい
+- 断定的なストーリー化を避ける
+- それでも `タイトル / 背景 / 中心的な出来事 / 次の一手` の骨格は維持する
 
-- 今日の進捗: aggregator 本体を追加し、5 source の統合 JSON を返せるようにした
-- 主な証拠: `aggregate.py`、stub 結合テスト、5 source 実行確認
-- 未解決: Chrome 起動中ロック状態での読取確認は未完了
-- 次のアクション: daily-report と post-draft の出力設計を固める
-```
+## Compatibility Note
 
-### Sample: `slack`
+- 旧 `team-summary` 的な共有は、main UX ではなく `daily-report` の `共有用` へ役割を移したとみなす
+- 旧 `slack` 用途は main UX から外す
+- 互換説明は残してよいが、description や sample output の中心には置かない
 
-```markdown
-今日の進捗メモです。
-- DayTrace の aggregator を実装して、5 source を 1 つの JSON に統合できるようにしました
-- `success / skipped / error` の正規化と近接イベントのグルーピングまで入っています
-- 次は daily-report / post-draft の出力層を仕上げます
-```
+## Verification Policy
 
-この skill は、用途指定だけで下書きを返す前提で使う。
+- 主題選定そのものを unit test の pass/fail 条件にはしない
+- 理由: `post-draft` の価値は wording と narrative continuity にあり、決定論的 helper に閉じないから
+- 検証は fixture ベースの sample review で行う
+- 自動テストは `aggregate.py` の shape、mixed-scope 表示、graceful degrade など決定論的な部分だけに限定する
+
+サンプルと fixture review 手順は `references/sample-outputs.md` を参照すること。
+
+## Completion Check
+
+以下を満たすまで出力を確定しない。
+
+- `post-draft` が `Context & Narrative` の skill として一貫して説明されている
+- main UX が `0 ask + optional override` になっている
+- `team-summary` / `slack` が main UX から外れている
+- 主題選定の 3 段フォールバックが `SKILL.md` だけで読める
+- 主題選定を Python helper に切り出さないと明記されている
+- `reader` の自動推定と `--reader` override の扱いが読める
+- workspace 指定が strict repo filter ではないと読める
+- mixed-scope 注記ルールが `sources[].scope` ベースで一意に読める
+- unit test を書かない理由と fixture review による代替検証が文書化されている
+
+この skill は、その日の一次情報から narrative draft を 1 コマンドで完走させる前提で使う。

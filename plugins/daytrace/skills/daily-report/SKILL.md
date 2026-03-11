@@ -1,73 +1,187 @@
 ---
 name: daily-report
 description: >
-  ローカル証跡を集約し、その日の活動を日報ドラフトとして自動生成する。
+  ローカル証跡を集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。
 user-invocable: true
 ---
 
 # Daily Report
 
-その日のローカル証跡から、提出・共有前の下書きとして使える日報ドラフトを自動生成する。
+その日のローカル証跡から、date-first で日報ドラフトを組み立てる。
+主目的は「その repo で何をしたか」ではなく、「その日全体で何をしていたか」を再構成すること。
 
 ## Goal
 
-- ローカル証跡を自動収集し、3-6項目の日本語日報ドラフトにまとめる
-- 各項目に根拠ソースを付ける
-- 明日のアクションを提案する
-- 不確実な点だけ最後に確認質問へ回す
+- 1日全体の活動を、日本語の日報ドラフトとして 3-6 項目に再構成する
+- `workspace default` ではなく `date-first default + optional workspace filter` として扱う
+- `自分用` と `共有用` の 2 モードで出し分ける
+- mode が分かれば ask せず、分からない時だけ入口で 1 回だけ確認する
+- low confidence は本文内の注記で扱い、途中で追加 ask せず完走する
 
 ## Inputs
 
 - 対象日
-  - 指定がなければ今日
-  - 単日指定が基本。必要なら `YYYY-MM-DD` を明示する
-- 対象 workspace
-  - 指定がなければ現在の作業ディレクトリ
+  - 指定がなければ `today`
+  - 単日指定を基本とし、必要なら `YYYY-MM-DD` を使う
+- mode
+  - `自分用`
+  - `共有用`
+- workspace
+  - 任意
+  - 主軸ではなく補助フィルタ
+  - 特定 workspace の git / file 根拠を強めたい時だけ使う
+  - 現状の source 実装では、workspace を指定しても `claude-history` / `codex-history` / `chrome-history` はその日全体の証跡を返しうる
+  - したがって strict な repo 限定指定ではなく、mixed-scope の内訳を制御する補助情報として扱う
+
+## Entry Contract
+
+入力は自然言語抽出と引数なし実行の 2 経路を前提にする。
+
+### 自然言語からの抽出
+
+- 「今日の自分用日報」「昨日の共有用レポート」などから日付と mode を抽出する
+- 「daytrace の日報」「`/path/to/repo` での日報」などから workspace を抽出する
+- mode が自然言語から抽出できた場合は ask しない
+
+### 引数なし実行
+
+- mode が取れなかった場合だけ、最初の 1 ターンで 1 問だけ確認する
+- 確認文面は `自分用ですか？ 共有用ですか？`
+- 日付は `today` を使う
+- workspace は未指定のまま date-first で進める
+
+### 追加 ask の禁止
+
+- 入口以外では質問しない
+- 途中で source 欠損や low confidence が見えても追加 ask しない
+- 入口で取れなかった情報はデフォルト値で埋める
 
 ## Data Collection
 
-必ず先に `aggregate.py` を実行し、中間 JSON を取得する。
+必ず最初に `aggregate.py` を 1 回だけ実行し、中間 JSON を取得する。
 
-`aggregate.py` はこの SKILL.md と同じ plugin 内の `scripts/` ディレクトリにある。
+`aggregate.py` はこの `SKILL.md` と同じ plugin 内の `scripts/` ディレクトリにある。
 この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
 
-今日の日報:
+date-first デフォルト:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date today
+python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions
 ```
 
-特定日の日報:
+特定日:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09
+python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09 --all-sessions
 ```
 
-別 workspace を明示する場合:
+workspace の git / file 根拠を current repo に固定したい場合:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --workspace /absolute/path/to/workspace --date today
+python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions --workspace /absolute/path/to/workspace
 ```
+
+この指定の意味:
+
+- `git-history` と `workspace-file-activity` は `--workspace` で絞り込まれる
+- `claude-history` / `codex-history` は `--all-sessions` が付くと workspace を無視する
+- `chrome-history` は現状常に workspace を無視する
+- したがって downstream の生成では `sources[].scope` を見て、repo ローカルの根拠と全日根拠を混同しない
 
 中間 JSON の主な読みどころ:
 
-- `sources`: source ごとの `success / skipped / error`
+- `sources`: source ごとの `success / skipped / error / scope`
 - `timeline`: 時系列イベント
 - `groups`: 近接イベントを束ねた活動グループ
 - `summary`: 件数と source 利用状況
 
+## Scope Contract
+
+この skill は date-first だが、source には `all-day` と `workspace` の 2 種類がある。
+
+- `all-day`
+  - その日全体を代表する証跡
+  - 例: `claude-history`, `codex-history`, `chrome-history`
+- `workspace`
+  - 指定 workspace または current working directory に依存する証跡
+  - 例: `git-history`, `workspace-file-activity`
+
+このため、workspace 未指定でも出力は完全な単一スコープにはならず、全日 source と cwd 起点の workspace source が混在しうる。
+workspace 指定時も mixed-scope は解消されず、repo ローカルの根拠密度が上がるだけで `all-day` source まで strict な repo filter にはならない。
+workspace は date-first の主軸ではなく補助フィルタだが、mixed-scope を隠さないこと。
+
 ## Execution Rules
 
-1. まず `aggregate.py` を 1 回だけ実行する
-2. `groups` を優先して読み、必要に応じて `timeline` と `sources` を参照する
-3. 日報の活動項目は 3-6 個に絞る
-4. 単なる列挙ではなく、「その日何を進めたか」が伝わる粒度に再構成する
-5. 根拠が弱い推定は断定しない
-6. source が欠けていても処理を止めず、分かる範囲で出す
+1. `aggregate.py` を 1 回だけ実行する
+2. 先に `sources` を読み、取得できた source と `scope` を把握する
+3. 次に `groups` を優先して読み、必要に応じて `timeline` を補助参照する
+4. 活動項目は 3-6 個に絞り、「その日何を進めたか」が伝わる粒度に再構成する
+5. `git-history + claude/codex-history` が重なるグループを主要活動候補として優先する
+6. browser 履歴は文脈補助として使い、単独では主項目を作りすぎない
+7. `workspace-file-activity` だけで意味が確定しない場合は「作業痕跡」として控えめに表現する
+8. workspace 指定があっても `all-day` source を repo 限定の根拠として扱わない
+9. source が欠けていても止まらず、分かる範囲で出す
+10. low confidence は本文内注記で処理し、確認セクションへ分離しない
+11. 途中で追加 ask しない
 
 ## Output Rules
 
-出力は日本語 Markdown。以下の順序を守る。
+出力は日本語 Markdown。
+mode によって構成と文体を変えるが、どちらも date-first の日報として出す。
+
+### 共通ルール
+
+- 先頭は必ず `## 日報 YYYY-MM-DD`
+- 活動項目は 3-6 個
+- 各項目に `根拠` と `Confidence` を付ける
+- `根拠` は source 名だけでなく、何のイベントを見たか短く添える
+- 同じ内容を重複して書かない
+- 明日のアクションを 2-4 項目付ける
+- `確認したい点` セクションは作らない
+
+### 自分用
+
+自分だけが後で読み返して思い出せることを優先する。
+
+- 構成: 時系列ベース
+- 語彙: メモ的でよい。省略可
+- 文量: 各項目 1-3 文
+- 未完了の扱い: 途中 / TODO / 詰まりをそのまま残してよい
+- 文脈補足: 最小限でよい
+
+推奨構成:
+
+```markdown
+## 日報 YYYY-MM-DD
+
+### 今日の流れ
+1. 見出し
+   内容: 1-3文
+   根拠: git-history の commit, codex-history の修正ログ
+   Confidence: high
+
+### 明日のとっかかり
+- 2-4項目
+```
+
+### 共有用
+
+第三者が読んで、その日の成果と残課題を把握できることを優先する。
+
+- 構成: カテゴリベース
+- 語彙: 第三者が読める表現
+- 文量: 各項目 2-4 文
+- 未完了の扱い: 成果と残課題を分けて書く
+- 文脈補足: 「なぜやったか」を 1 文添える
+
+推奨カテゴリ:
+
+- `実装`
+- `調査`
+- `設計 / 判断`
+- `明日のアクション`
+
+推奨構成:
 
 ```markdown
 ## 日報 YYYY-MM-DD
@@ -75,54 +189,66 @@ python3 <plugin-root>/scripts/aggregate.py --workspace /absolute/path/to/workspa
 ### 今日の概要
 - 1-2文で全体要約
 
-### 活動
-1. 見出し
-   内容: 2-4文
-   根拠: git-history, codex-history
-   Confidence: high
+### 実装
+- 見出し
+  - 内容: 2-4文
+  - 成果:
+  - 残課題:
+  - 根拠:
+  - Confidence:
+
+### 調査
+- 必要なら追加
+
+### 設計 / 判断
+- 必要なら追加
 
 ### 明日のアクション
 - 2-4項目
-
-### 確認したい点
-- low confidence の項目だけ
 ```
 
-各活動項目のルール:
+## Mixed-Scope Note Rules
 
-- 3-6項目
-- 1項目ごとに `根拠` と `Confidence` を必ず付ける
-- `根拠` は source 名だけでなく、可能なら何のイベントを見たか短く添える
-- 同じ内容を重複して書かない
-- browser 履歴だけの項目は補助情報扱いにし、主項目にしすぎない
-- `workspace-file-activity` だけで意味が確定しない場合は「作業痕跡」として控えめに表現する
+成功した `sources[]` の `scope` を見て、注記の要否を決める。
+
+- `all-day` と `workspace` の両方が含まれる場合
+  - 冒頭に 1 回だけ mixed-scope 注記を入れる
+  - 注記は `sources[].scope` を根拠に組み立てる
+  - 例:
+    - `Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。`
+    - `全日の活動を基準に再構成していますが、repo ローカルの根拠は daytrace workspace に限定されています。`
+- `all-day` のみ、または `workspace` のみの場合
+  - mixed-scope 注記は必須ではない
+- 注記は事実説明に留める
+  - 「この日報は不完全です」と過度に弱めない
+  - ただし coverage を誤認させる表現は避ける
 
 ## Confidence Handling
+
+`確認したい点` セクションは使わず、confidence は本文内で処理する。
 
 - `high`
   - そのまま本文に採用する
 - `medium`
-  - 本文に採用してよいが、推定を混ぜすぎない
+  - 本文に採用してよい
+  - 断定しすぎず、必要なら `と見られる` `中心だった` などの表現にする
 - `low`
-  - 本文に入れる場合は断定を避ける
-  - 最後の `確認したい点` に回す
-
-確認質問のルール:
-
-- 質問は low confidence 項目だけ
-- 最大 3 件まで
-- yes/no か短文で答えられる聞き方にする
-- high confidence / medium confidence の項目については原則質問しない
+  - 本文に入れる場合は inline 注記にする
+  - 例:
+    - `注記: ファイル変更からは確認できるが、最終的な意図は断定できない`
+    - `注記: Chrome 履歴由来の補助情報で、実装着手までは確認できていない`
+  - low confidence だけの独立セクションは作らない
+  - low confidence を理由に追加 ask しない
 
 ## Graceful Degrade
 
-source 欠損の判定は、まず `summary` と `sources` から行う。
+source 欠損の判定は `summary` と `sources` から行う。
 
 - `summary.no_sources_available == true` または `source_status_counts.success == 0`
   - `source が 0 本` とみなす
 - `source_status_counts.success` が 1-2
   - `source が 1-2 本だけ` とみなす
-- `sources[].status` に `skipped` / `error` があっても、成功 source が残っていれば処理継続する
+- `sources[].status` に `skipped` / `error` があっても、成功 source が残っていれば継続する
 
 ### source が 0 本
 
@@ -135,36 +261,93 @@ source 欠損の判定は、まず `summary` と `sources` から行う。
 - 利用可能なローカル証跡が見つからなかったため、自動生成できる情報はありませんでした。
 
 ### 明日のアクション
-- Git、Claude/Codex、Chrome など少なくとも1系統の証跡が取れる状態で再実行する
+- Git、Claude/Codex、Chrome など少なくとも 1 系統の証跡が取れる状態で再実行する
 ```
 
 ### source が 1-2 本だけ
 
 - 簡易日報として返す
+- `取得できた証跡は限定的` と冒頭に明記してよい
 - 断定的な振り返りを避ける
-- `取得できた証跡は限定的` と明記してよい
+- それでも mode に応じた構成は維持する
+- low confidence は本文内注記で処理する
 
-## Authoring Prompt
+## Sample Output
 
-中間 JSON を読んだら、以下の方針で日報を組み立てる。
+### 自分用
 
-- まず `sources` を見て、何が取れて何が欠けたかを把握する
-- 次に `groups` を上から順に見て、その日の主要な活動塊を抽出する
-- `git-history + claude/codex-history` が同じグループにある場合は、最優先で主要活動候補にする
-- 同じグループに browser の雑多な移動履歴と git / AI の作業痕跡が混在する場合は、1つの出来事に無理に束ねず、主要活動と補助情報を分けて記述する
-- `chrome-history` は文脈補助として使い、単独では強い結論を作らない
-- 進捗、実装、調査、整理、確認のどれに当たるかを短い動詞で表現する
-- 未完了の作業が見える場合は、明日のアクションに自然につなぐ
-- 事実と推定を混ぜない
+```markdown
+## 日報 2026-03-11
+
+### 今日の流れ
+1. aggregate の `scope` 追加まわりを確認して、daily-report 側の書き換え方針を固めた。
+   根拠: codex-history の仕様確認ログ, git-history の差分確認
+   Confidence: high
+
+2. `daily-report` を workspace 前提から date-first 前提へ直し、入口 ask と mode 差分を整理した。
+   根拠: workspace-file-activity の SKILL.md 編集, codex-history の文言調整ログ
+   Confidence: high
+
+3. mixed-scope 注記の文面は入れたが、実データでどの source が強く出るかはまだ観察中。
+   根拠: chrome-history の調査履歴, workspace-file-activity の編集痕跡
+   Confidence: medium
+   注記: 補助証跡由来のため、最終的な注記文は fixture 確認で微調整の余地あり
+
+### 明日のとっかかり
+- sample output と fixture 表現を見比べて wording を詰める
+- mixed-scope 注記が長すぎる場合は短縮版を作る
+```
+
+### 共有用
+
+```markdown
+## 日報 2026-03-11
+
+### 今日の概要
+- 日報 skill を date-first 前提へ再整理し、共有向けに読める mode 契約と mixed-scope 注記ルールを明文化した。
+
+> 注記: Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。
+
+### 実装
+- daily-report の仕様を `workspace default` から `date-first default + optional workspace filter` へ更新した。
+  - 成果: 対象スコープ、入口 ask、confidence の扱いを 1 つの契約として読み取れる形に整理した。
+  - 残課題: 実データを使った wording の最終確認は別途必要。
+  - 根拠: git-history の文書差分, codex-history の編集ログ
+  - Confidence: high
+
+### 設計 / 判断
+- `自分用` と `共有用` の差を、構成・語彙・未完了の扱いまで分けて定義した。
+  - 成果: 共有用では背景説明と成果 / 残課題の分離を必須にした。
+  - 残課題: 実際の生成文がこの差分を安定して守れるかは運用確認が必要。
+  - 根拠: SKILL.md の mode 定義, workspace-file-activity の更新痕跡
+  - Confidence: high
+
+### 調査
+- mixed-scope の説明は `sources[].scope` を見て自動で注記する前提に整理した。
+  - 成果: coverage の誤認を避けつつ、date-first の価値を落とさないルールにした。
+  - 残課題: 一部の補助証跡は意図を断定できないため、本文内注記で扱う。
+  - 根拠: aggregate.py の `sources[].scope`, sources.json の scope_mode
+  - Confidence: medium
+  - 注記: Chrome 履歴など補助証跡だけでの解釈は断定していない。
+
+### 明日のアクション
+- mixed-scope 注記を fixture ベースでレビューする
+- README / demo 側の文言と整合させる
+```
 
 ## Completion Check
 
 以下を満たすまで出力を確定しない。
 
-- 日報本文が 3-6 項目に収まっている
-- 各項目に根拠ソースがある
-- 明日のアクションがある
-- low confidence 項目だけが確認事項に分離されている
-- source 欠損時も空出力ではなく、空日報または簡易日報になっている
+- `daily-report` が date-first skill として一貫して説明されている
+- workspace が補助フィルタとして説明されている
+- workspace 指定が strict repo filter ではないと読める
+- `自分用` と `共有用` の差が構成・語彙・未完了の扱いまで見える
+- mode が自然言語から取れた場合は ask しないと読める
+- mode が取れない場合だけ入口で 1 回 ask すると読める
+- 途中で追加 ask しないと読める
+- `確認したい点` 依存の旧フローが残っていない
+- mixed-scope 注記ルールが `sources[].scope` ベースで一意に読める
+- source 欠損時も空日報または簡易日報で完走する
 
 この skill は、収集から日報ドラフト生成までを 1 コマンドで完走させる前提で使う。

@@ -34,14 +34,21 @@ aggregator は使わない。`skill-miner` 専用 CLI だけを使う。
 提案フェーズ:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --days 7
+python3 <plugin-root>/scripts/skill_miner_prepare.py
 ```
 
-全履歴を明示的に見る場合のみ:
+workspace 制限を外して広域観測する場合:
 
 ```bash
 python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
 ```
+
+補足:
+
+- デフォルト観測窓は 7 日
+- `--all-sessions` は workspace 制限を外すだけで、7 日窓は維持する
+- `workspace` モードだけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
+- full-history 相当の観測が必要な場合は、B0 用に `--all-sessions --days 3650 --dump-intents` のように明示する
 
 追加調査の detail 再取得:
 
@@ -64,13 +71,16 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 ## Execution Rules
 
 1. まず `skill_miner_prepare.py` を 1 回だけ実行する
-2. デフォルトは `--days 7`。`--all-sessions` を明示した時だけ日付制限を外す
-3. `candidates` と `unclustered` を `ready` / `needs_research` / `rejected` に分ける
-4. 正式提案は `proposal_ready=true` の候補だけを採用し、件数は **0-5 件** を正常系として扱う
-5. `needs_research` 候補だけ、必要な場合に限って `research_targets` を使って 1 回だけ追加調査する
-6. `skill_miner_research_judge.py` の結論を proposal に反映し、`提案成立 / 追加調査待ち / 今回は見送り` を返す
-7. `提案成立` がある時だけ、次セッションでどれを apply するかを確認する
-8. state file は持たない。実行モードは CLI 引数だけで決める
+2. デフォルト観測窓は `7` 日
+3. `--all-sessions` は workspace 制限を外すモードであり、無制限読み込みではない
+4. `workspace` モードは 7 日で開始し、packet / candidate が少なすぎる時だけ 30 日へ自動拡張する
+5. adaptive window は `workspace` モードにだけ持たせる
+6. 実行モードは CLI 引数だけで決める。state file は持たない
+7. `candidates` と `unclustered` を `ready` / `needs_research` / `rejected` に分ける
+8. 正式提案は `proposal_ready=true` の候補だけを採用し、件数は **0-5 件** を正常系として扱う
+9. `needs_research` 候補だけ、必要な場合に限って `research_targets` を使って 1 回だけ追加調査する
+10. `skill_miner_research_judge.py` の結論を proposal に反映し、`提案成立 / 追加調査待ち / 今回は見送り` を返す
+11. `提案成立` がある時だけ、次セッションでどれを apply するかを確認する
 
 ## Division of Labor
 
@@ -102,9 +112,15 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 `skill_miner_prepare.py` の主な読みどころ:
 
 - `config.days`
-  - デフォルト期間。通常は `7`
+  - 初期観測窓。通常は `7`
+- `config.effective_days`
+  - 実際に使われた観測窓。workspace adaptive window で `30` になる場合がある
 - `config.all_sessions`
-  - `true` の時だけ日付制限を無効化する
+  - `true` の時は workspace 制限だけを外す
+- `config.adaptive_window`
+  - workspace モードで 30 日へ拡張したか、その判定基準と初期件数
+- `summary.adaptive_window_expanded`
+  - adaptive window が発火したかどうか
 - `candidates[].support`
   - 出現回数、source 多様性、直近性
 - `candidates[].confidence`, `proposal_ready`, `triage_status`
@@ -269,7 +285,7 @@ diff preview 例:
 ## Completion Check
 
 - `prepare` は 1 回だけ実行している
-- 期間 contract は `--days 7` / `--all-sessions` に固定されている
+- 期間 contract は `7 日開始 + workspace-only adaptive 30 日` / `--all-sessions` に固定されている
 - 4 分類以外の古い説明が残っていない
 - proposal phase の根拠が `evidence_items[]` だけで表示できる
 - `0-5 件` を正常系として扱っている

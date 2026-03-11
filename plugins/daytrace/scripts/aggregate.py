@@ -12,12 +12,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from common import default_chrome_root, ensure_datetime, isoformat, parse_datetime, resolve_workspace
+from common import default_chrome_root, emit, ensure_datetime, isoformat, parse_datetime, resolve_workspace
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_GROUP_WINDOW_MINUTES = 15
 EVIDENCE_LIMIT = 5
+VALID_SCOPE_MODES = {"all-day", "workspace"}
 REQUIRED_SOURCE_FIELDS = {
     "name",
     "command",
@@ -26,6 +27,7 @@ REQUIRED_SOURCE_FIELDS = {
     "platforms",
     "supports_date_range",
     "supports_all_sessions",
+    "scope_mode",
 }
 REQUIRED_EVENT_FIELDS = {"source", "timestamp", "type", "summary", "details", "confidence"}
 
@@ -83,6 +85,10 @@ def load_sources(path: Path) -> list[dict[str, Any]]:
         missing = REQUIRED_SOURCE_FIELDS - set(entry.keys())
         if missing:
             raise ValueError(f"Source entry is missing fields: {sorted(missing)}")
+        if entry["scope_mode"] not in VALID_SCOPE_MODES:
+            raise ValueError(
+                f"scope_mode must be one of {sorted(VALID_SCOPE_MODES)} for {entry['name']}"
+            )
         sources.append(entry)
     return sources
 
@@ -132,6 +138,7 @@ def summarize_source_result(result: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "name": result["source"],
         "status": result["status"],
+        "scope": result["scope"],
         "events_count": len(result.get("events", [])),
     }
     for key in ("reason", "message", "command", "duration_sec"):
@@ -159,17 +166,29 @@ def normalize_event(event: dict[str, Any], source_name: str) -> dict[str, Any] |
     return event
 
 
-def normalize_source_payload(source_name: str, payload: dict[str, Any], *, command: list[str], duration_sec: float) -> dict[str, Any]:
+def _error_result(source: dict[str, Any], message: str, command: list[str], duration_sec: float) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "source": source["name"],
+        "scope": source["scope_mode"],
+        "message": message,
+        "events": [],
+        "command": command,
+        "duration_sec": round(duration_sec, 3),
+    }
+
+
+def normalize_source_payload(
+    source: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    command: list[str],
+    duration_sec: float,
+) -> dict[str, Any]:
+    source_name = source["name"]
     status = payload.get("status")
     if status not in {"success", "skipped", "error"}:
-        return {
-            "status": "error",
-            "source": source_name,
-            "message": "Source returned an unknown status",
-            "events": [],
-            "command": command,
-            "duration_sec": round(duration_sec, 3),
-        }
+        return _error_result(source, "Source returned an unknown status", command, duration_sec)
 
     normalized_events = []
     for raw_event in payload.get("events", []):
@@ -180,6 +199,7 @@ def normalize_source_payload(source_name: str, payload: dict[str, Any], *, comma
     normalized = {
         "status": status,
         "source": payload.get("source") or source_name,
+        "scope": source["scope_mode"],
         "events": normalized_events,
         "command": command,
         "duration_sec": round(duration_sec, 3),
@@ -211,50 +231,22 @@ def run_source(
         )
     except subprocess.TimeoutExpired:
         duration = datetime.now().timestamp() - started
-        return {
-            "status": "error",
-            "source": source["name"],
-            "message": "Source timed out",
-            "events": [],
-            "command": command,
-            "duration_sec": round(duration, 3),
-        }
+        return _error_result(source, "Source timed out", command, duration)
     except Exception as exc:
         duration = datetime.now().timestamp() - started
-        return {
-            "status": "error",
-            "source": source["name"],
-            "message": str(exc),
-            "events": [],
-            "command": command,
-            "duration_sec": round(duration, 3),
-        }
+        return _error_result(source, str(exc), command, duration)
 
     duration = datetime.now().timestamp() - started
     stdout = completed.stdout.strip()
     if not stdout:
-        return {
-            "status": "error",
-            "source": source["name"],
-            "message": completed.stderr.strip() or "Source returned empty stdout",
-            "events": [],
-            "command": command,
-            "duration_sec": round(duration, 3),
-        }
+        return _error_result(source, completed.stderr.strip() or "Source returned empty stdout", command, duration)
 
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError:
-        return {
-            "status": "error",
-            "source": source["name"],
-            "message": "Source returned invalid JSON",
-            "events": [],
-            "command": command,
-            "duration_sec": round(duration, 3),
-        }
+        return _error_result(source, "Source returned invalid JSON", command, duration)
 
-    normalized = normalize_source_payload(source["name"], payload, command=command, duration_sec=duration)
+    normalized = normalize_source_payload(source, payload, command=command, duration_sec=duration)
     if completed.returncode != 0 and normalized["status"] == "success":
         normalized["status"] = "error"
         normalized["message"] = completed.stderr.strip() or "Source exited with a non-zero status"
@@ -284,6 +276,7 @@ def select_sources(
                 {
                     "status": "skipped",
                     "source": source["name"],
+                    "scope": source["scope_mode"],
                     "reason": "unsupported_platform",
                     "events": [],
                     "command": shlex.split(source["command"]),
@@ -538,11 +531,9 @@ def main() -> None:
             "groups": groups,
             "summary": build_summary(source_results, timeline, groups),
         }
-        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
-        sys.stdout.write("\n")
+        emit(output)
     except Exception as exc:
-        json.dump({"status": "error", "message": str(exc)}, sys.stdout, ensure_ascii=False, indent=2)
-        sys.stdout.write("\n")
+        emit({"status": "error", "message": str(exc)})
         sys.exit(1)
 
 

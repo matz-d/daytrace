@@ -7,6 +7,7 @@
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
     "supports_all_sessions": false,
+    "scope_mode": "workspace",
     "prerequisites": [{"type": "git_repo"}],
     "confidence_category": "git"
   },
@@ -18,6 +19,7 @@
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
     "supports_all_sessions": true,
+    "scope_mode": "all-day",
     "prerequisites": [{"type": "path_exists", "path": "~/.claude/projects"}],
     "confidence_category": "ai_history"
   },
@@ -29,6 +31,7 @@
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
     "supports_all_sessions": true,
+    "scope_mode": "all-day",
     "prerequisites": [{"type": "all_paths_exist", "paths": ["~/.codex/history.jsonl", "~/.codex/sessions"]}],
     "confidence_category": "ai_history"
   },
@@ -40,6 +43,7 @@
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
     "supports_all_sessions": false,
+    "scope_mode": "all-day",
     "prerequisites": [{"type": "chrome_history_db"}],
     "confidence_category": "browser"
   },
@@ -51,6 +55,7 @@
     "platforms": ["darwin", "linux"],
     "supports_date_range": true,
     "supports_all_sessions": false,
+    "scope_mode": "workspace",
     "prerequisites": [{"type": "git_repo"}],
     "confidence_category": "file_activity"
   }

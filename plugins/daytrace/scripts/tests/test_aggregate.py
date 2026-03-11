@@ -18,6 +18,30 @@ def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def make_source_entry(
+    name: str,
+    command: str,
+    *,
+    supports_date_range: bool,
+    supports_all_sessions: bool,
+    confidence_category: str,
+    scope_mode: str,
+    platforms: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "command": command,
+        "required": False,
+        "timeout_sec": 5,
+        "platforms": platforms or ["darwin", "linux"],
+        "supports_date_range": supports_date_range,
+        "supports_all_sessions": supports_all_sessions,
+        "scope_mode": scope_mode,
+        "prerequisites": [],
+        "confidence_category": confidence_category,
+    }
+
+
 class AggregateCliTests(unittest.TestCase):
     def run_aggregate(self, sources_file: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(
@@ -122,6 +146,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": False,
+                            "scope_mode": "workspace",
                             "prerequisites": [],
                             "confidence_category": "git",
                         },
@@ -133,6 +158,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": True,
+                            "scope_mode": "all-day",
                             "prerequisites": [],
                             "confidence_category": "ai_history",
                         },
@@ -144,6 +170,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": True,
                             "supports_all_sessions": False,
+                            "scope_mode": "all-day",
                             "prerequisites": [],
                             "confidence_category": "browser",
                         },
@@ -155,6 +182,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["darwin", "linux"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "scope_mode": "all-day",
                             "prerequisites": [],
                             "confidence_category": "other",
                         },
@@ -166,6 +194,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["win32"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "scope_mode": "workspace",
                             "prerequisites": [],
                             "confidence_category": "other",
                         },
@@ -185,6 +214,19 @@ class AggregateCliTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["source_status_counts"]["skipped"], 1)
             self.assertEqual(payload["groups"][0]["sources"], ["assistant-source", "repo-source"])
             self.assertEqual(payload["groups"][0]["confidence_categories"], ["ai_history", "git"])
+            self.assertTrue(all("scope" in source for source in payload["sources"]))
+            self.assertTrue(
+                any(source["name"] == "assistant-source" and source["scope"] == "all-day" for source in payload["sources"])
+            )
+            self.assertTrue(
+                any(source["name"] == "repo-source" and source["scope"] == "workspace" for source in payload["sources"])
+            )
+            self.assertTrue(
+                any(source["name"] == "browser-source" and source["scope"] == "all-day" for source in payload["sources"])
+            )
+            self.assertTrue(
+                any(source["name"] == "broken-source" and source["scope"] == "all-day" for source in payload["sources"])
+            )
             self.assertTrue(any(source["name"] == "broken-source" and source["status"] == "error" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "unsupported-source" and source["status"] == "skipped" for source in payload["sources"]))
             self.assertIn("Source preflight:", completed.stderr)
@@ -207,6 +249,7 @@ class AggregateCliTests(unittest.TestCase):
                             "platforms": ["win32"],
                             "supports_date_range": False,
                             "supports_all_sessions": False,
+                            "scope_mode": "workspace",
                             "prerequisites": [],
                             "confidence_category": "other",
                         }
@@ -255,6 +298,7 @@ class AggregateCliTests(unittest.TestCase):
                         "platforms": ["darwin", "linux"],
                         "supports_date_range": True,
                         "supports_all_sessions": False,
+                        "scope_mode": "workspace",
                         "prerequisites": [],
                         "confidence_category": "git"
                     }],
@@ -265,6 +309,133 @@ class AggregateCliTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["config"]["group_window_minutes"], 5)
             self.assertEqual(len(payload["groups"]), 2)
+            self.assertEqual(payload["sources"][0]["scope"], "workspace")
+
+    def test_all_sessions_date_today_keeps_all_day_scope_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            all_day_stub = temp_path / "all_day_stub.py"
+            write_file(
+                all_day_stub,
+                textwrap.dedent(
+                    """
+                    import json
+                    import sys
+
+                    args = sys.argv[1:]
+                    since = args[args.index("--since") + 1] if "--since" in args else None
+                    until = args[args.index("--until") + 1] if "--until" in args else None
+                    payload = {
+                        "status": "success" if "--all-sessions" in args and since and since == until else "skipped",
+                        "source": "all-day-source",
+                        "events": []
+                    }
+                    if payload["status"] == "success":
+                        payload["events"] = [
+                            {
+                                "source": "all-day-source",
+                                "timestamp": "2026-03-11T09:00:00+09:00",
+                                "type": "session_summary",
+                                "summary": f"all-day event for {since}",
+                                "details": {},
+                                "confidence": "medium"
+                            }
+                        ]
+                    else:
+                        payload["reason"] = "unexpected_args"
+                    print(json.dumps(payload))
+                    """
+                ).strip(),
+            )
+            sources_file = temp_path / "sources.json"
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "all-day-source",
+                            f"python3 {all_day_stub}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="ai_history",
+                            scope_mode="all-day",
+                        )
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = self.run_aggregate(sources_file, "--date", "today")
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["sources"][0]["name"], "all-day-source")
+            self.assertEqual(payload["sources"][0]["scope"], "all-day")
+            self.assertEqual(payload["sources"][0]["status"], "success")
+            self.assertEqual(payload["sources"][0]["events_count"], 1)
+            self.assertEqual(len(payload["timeline"]), 1)
+            self.assertEqual(payload["timeline"][0]["source"], "all-day-source")
+
+    def test_workspace_argument_is_forwarded_for_workspace_scope_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            workspace_path = temp_path / "workspace"
+            workspace_path.mkdir()
+            workspace_stub = temp_path / "workspace_stub.py"
+            write_file(
+                workspace_stub,
+                textwrap.dedent(
+                    f"""
+                    import json
+                    import sys
+
+                    args = sys.argv[1:]
+                    workspace = args[args.index("--workspace") + 1] if "--workspace" in args else None
+                    payload = {{
+                        "status": "success" if workspace == {str(workspace_path.resolve())!r} else "skipped",
+                        "source": "workspace-source",
+                        "events": []
+                    }}
+                    if payload["status"] == "success":
+                        payload["events"] = [
+                            {{
+                                "source": "workspace-source",
+                                "timestamp": "2026-03-11T10:00:00+09:00",
+                                "type": "file_change",
+                                "summary": "workspace scoped event",
+                                "details": {{}},
+                                "confidence": "low"
+                            }}
+                        ]
+                    else:
+                        payload["reason"] = "workspace_not_forwarded"
+                    print(json.dumps(payload))
+                    """
+                ).strip(),
+            )
+            sources_file = temp_path / "sources.json"
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "workspace-source",
+                            f"python3 {workspace_stub}",
+                            supports_date_range=False,
+                            supports_all_sessions=False,
+                            confidence_category="file_activity",
+                            scope_mode="workspace",
+                        )
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = self.run_aggregate(sources_file, "--workspace", str(workspace_path))
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["sources"][0]["name"], "workspace-source")
+            self.assertEqual(payload["sources"][0]["scope"], "workspace")
+            self.assertEqual(payload["sources"][0]["status"], "success")
+            self.assertEqual(payload["sources"][0]["events_count"], 1)
+            self.assertEqual(len(payload["timeline"]), 1)
 
     def test_aggregate_returns_non_zero_on_fatal_error(self) -> None:
         missing_sources = Path("/tmp/daytrace-missing-sources.json")

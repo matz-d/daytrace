@@ -17,7 +17,9 @@ from skill_miner_common import (
     DEFAULT_RESEARCH_REF_LIMIT,
     DEFAULT_TOP_N,
     GENERIC_TASK_SHAPES,
+    GENERIC_TOOL_SIGNATURES,
     PREPARE_SOURCE,
+    extract_known_commands,
     build_claude_session_ref,
     build_codex_session_ref,
     build_candidate_quality,
@@ -48,6 +50,10 @@ from skill_miner_common import (
 DEFAULT_CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 DEFAULT_CODEX_HISTORY = Path.home() / ".codex" / "history.jsonl"
 DEFAULT_CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+DEFAULT_OBSERVATION_DAYS = 7
+WORKSPACE_ADAPTIVE_EXPANDED_DAYS = 30
+WORKSPACE_ADAPTIVE_MIN_PACKETS = 4
+WORKSPACE_ADAPTIVE_MIN_CANDIDATES = 1
 CLUSTER_MERGE_THRESHOLD = 0.60
 CLUSTER_NEAR_MATCH_THRESHOLD = 0.45
 
@@ -79,8 +85,8 @@ SIMILARITY_WEIGHT_TOTAL = (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare compressed skill-miner candidates from raw Claude/Codex history.")
     parser.add_argument("--workspace", default=".", help="Workspace path to filter by. Ignored with --all-sessions.")
-    parser.add_argument("--all-sessions", action="store_true", help="Ignore workspace filtering and scan all sessions.")
-    parser.add_argument("--days", type=int, default=7, help="Limit packets to the last N days. Ignored with --all-sessions.")
+    parser.add_argument("--all-sessions", action="store_true", help="Ignore workspace filtering while keeping the configured day window.")
+    parser.add_argument("--days", type=int, default=DEFAULT_OBSERVATION_DAYS, help="Limit packets to the last N days.")
     parser.add_argument("--claude-root", default=str(DEFAULT_CLAUDE_ROOT), help="Claude projects root.")
     parser.add_argument("--codex-history-file", default=str(DEFAULT_CODEX_HISTORY), help="Codex history.jsonl path.")
     parser.add_argument("--codex-sessions-root", default=str(DEFAULT_CODEX_SESSIONS), help="Codex sessions root.")
@@ -163,7 +169,7 @@ def read_claude_packets(root: Path, workspace: Path | None, gap_hours: int) -> t
                                 name = str(item.get("name") or "").lower()
                                 if name:
                                     tools.append(name)
-                    tools.extend(_commands_from_text(text))
+                    tools.extend(extract_known_commands(text))
 
                 packet_start = earliest_iso_timestamp(timestamps)
                 workspace_str = str(cwd) if cwd else None
@@ -290,7 +296,7 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
             user_messages = history_entry.get("user_messages", []) + user_messages
             start_timestamp = (
                 earliest_iso_timestamp([meta.get("timestamp")])
-                or _min_history_timestamp(history_entry.get("timestamps", []))
+                or earliest_iso_timestamp(history_entry.get("timestamps", []))
                 or earliest_iso_timestamp(timestamps)
                 or ""
             )
@@ -322,15 +328,6 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
         return [], source_status(CODEX_SOURCE, "error", message=str(exc), history_file=str(history_file), sessions_root=str(sessions_root))
 
 
-def _commands_from_text(text: str) -> list[str]:
-    from skill_miner_common import extract_known_commands
-
-    return extract_known_commands(text)
-
-
-def _min_history_timestamp(values: list[Any]) -> str | None:
-    return earliest_iso_timestamp(values)
-
 
 def _primary_non_generic_shape(packet: dict[str, Any]) -> str:
     task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
@@ -350,16 +347,21 @@ def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
     right_tokens = set().union(*(tokenize(compact_snippet(item, right.get("workspace"))) for item in right.get("representative_snippets", [])))
     snippet = jaccard_score(left_tokens, right_tokens)
     intent = jaccard_score(tokenize(str(left.get("primary_intent") or "")), tokenize(str(right.get("primary_intent") or "")))
-    task_shapes = overlap_score(set(left.get("task_shape", [])), set(right.get("task_shape", [])))
-    tools = jaccard_score(set(left.get("tool_signature", [])), set(right.get("tool_signature", [])))
+    left_task_shapes = set(left.get("task_shape", []))
+    right_task_shapes = set(right.get("task_shape", []))
+    left_tools = set(left.get("tool_signature", []))
+    right_tools = set(right.get("tool_signature", []))
+    task_shapes = overlap_score(left_task_shapes, right_task_shapes)
+    tools = jaccard_score(left_tools, right_tools)
     artifacts = overlap_score(set(left.get("artifact_hints", [])), set(right.get("artifact_hints", [])))
     rules = overlap_score(_rule_names(left), _rule_names(right))
-    same_specific_shape = 1.0 if _primary_non_generic_shape(left) and _primary_non_generic_shape(left) == _primary_non_generic_shape(right) else 0.0
-    generic_task_only = bool(left.get("task_shape")) and bool(right.get("task_shape")) and all(
-        shape in GENERIC_TASK_SHAPES for shape in set(left.get("task_shape", [])) | set(right.get("task_shape", []))
+    left_specific = _primary_non_generic_shape(left)
+    same_specific_shape = 1.0 if left_specific and left_specific == _primary_non_generic_shape(right) else 0.0
+    generic_task_only = bool(left_task_shapes) and bool(right_task_shapes) and all(
+        shape in GENERIC_TASK_SHAPES for shape in left_task_shapes | right_task_shapes
     )
-    generic_tool_only = bool(left.get("tool_signature")) and bool(right.get("tool_signature")) and all(
-        tool in {"bash", "read", "rg", "sed", "cat", "ls", "nl"} for tool in set(left.get("tool_signature", [])) | set(right.get("tool_signature", []))
+    generic_tool_only = bool(left_tools) and bool(right_tools) and all(
+        tool in GENERIC_TOOL_SIGNATURES for tool in left_tools | right_tools
     )
     score = (
         (task_shapes * SIMILARITY_TASK_SHAPES_WEIGHT)
@@ -387,6 +389,31 @@ def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[li
         if timestamp >= threshold:
             filtered.append(packet)
     return filtered, threshold.isoformat()
+
+
+def prepare_window_result(packets: list[dict[str, Any]], days: int) -> dict[str, Any]:
+    filtered_packets, date_window_start = filter_packets_by_days(packets, days)
+    candidates, unclustered, stats = cluster_packets(filtered_packets)
+    return {
+        "packets": filtered_packets,
+        "candidates": candidates,
+        "unclustered": unclustered,
+        "stats": stats,
+        "date_window_start": date_window_start,
+        "days": days,
+    }
+
+
+def adaptive_window_decision(window_result: dict[str, Any], initial_days: int) -> tuple[bool, str | None]:
+    if initial_days >= WORKSPACE_ADAPTIVE_EXPANDED_DAYS:
+        return False, None
+    packet_count = len(window_result["packets"])
+    candidate_count = len(window_result["candidates"])
+    if packet_count < WORKSPACE_ADAPTIVE_MIN_PACKETS and candidate_count < WORKSPACE_ADAPTIVE_MIN_CANDIDATES:
+        return True, "insufficient_packets"
+    if candidate_count < WORKSPACE_ADAPTIVE_MIN_CANDIDATES:
+        return True, "insufficient_candidates"
+    return False, None
 
 
 def evidence_summary_text(packet: dict[str, Any]) -> str:
@@ -751,10 +778,22 @@ def main() -> None:
         claude_packets, claude_status = read_claude_packets(claude_root, workspace, args.gap_hours)
         codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace)
         all_packets = claude_packets + codex_packets
-        date_window_start = None
+
+        initial_window = prepare_window_result(all_packets, args.days)
+        effective_window = initial_window
+        adaptive_expanded = False
+        adaptive_reason = None
         if not args.all_sessions:
-            all_packets, date_window_start = filter_packets_by_days(all_packets, args.days)
-        candidates, unclustered, stats = cluster_packets(all_packets)
+            should_expand, adaptive_reason = adaptive_window_decision(initial_window, args.days)
+            if should_expand:
+                effective_window = prepare_window_result(all_packets, WORKSPACE_ADAPTIVE_EXPANDED_DAYS)
+                adaptive_expanded = True
+
+        all_packets = effective_window["packets"]
+        candidates = effective_window["candidates"]
+        unclustered = effective_window["unclustered"]
+        stats = effective_window["stats"]
+        date_window_start = effective_window["date_window_start"]
         top_candidates = candidates[: max(0, args.top_n)]
         limited_unclustered = unclustered[: max(0, args.max_unclustered)]
 
@@ -772,15 +811,29 @@ def main() -> None:
                 "block_count": stats["block_count"],
                 "block_comparisons": stats["block_comparisons"],
                 "no_sources_available": len(all_packets) == 0,
+                "adaptive_window_expanded": adaptive_expanded,
             },
             "config": {
                 "days": args.days,
+                "effective_days": effective_window["days"],
                 "gap_hours": args.gap_hours,
                 "top_n": args.top_n,
                 "max_unclustered": args.max_unclustered,
                 "workspace": str(workspace) if workspace else None,
                 "all_sessions": args.all_sessions,
-                "date_window_start": None if args.all_sessions else date_window_start,
+                "observation_mode": "all-sessions" if args.all_sessions else "workspace",
+                "date_window_start": date_window_start,
+                "adaptive_window": {
+                    "enabled": not args.all_sessions,
+                    "expanded": adaptive_expanded,
+                    "fallback_days": WORKSPACE_ADAPTIVE_EXPANDED_DAYS,
+                    "packet_threshold": WORKSPACE_ADAPTIVE_MIN_PACKETS,
+                    "candidate_threshold": WORKSPACE_ADAPTIVE_MIN_CANDIDATES,
+                    "reason": adaptive_reason if adaptive_expanded else None,
+                    "initial_days": initial_window["days"],
+                    "initial_packet_count": len(initial_window["packets"]),
+                    "initial_candidate_count": len(initial_window["candidates"]),
+                },
             },
         }
         if args.dump_intents:

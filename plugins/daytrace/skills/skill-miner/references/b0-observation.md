@@ -16,17 +16,19 @@
 
 ## Command Template
 
-通常は full-history を使って観測する。
+通常運用とは分けて、B0 では明示的に長い観測窓を指定する。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions --top-n 5 --max-unclustered 5 --dump-intents
+python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions --days 3650 --top-n 5 --max-unclustered 5 --dump-intents
 ```
 
 補足:
 
-- B0 の優先順位判断は、原則として `--all-sessions` の観測を基準にする
-- `--days 7` は通常運用の挙動確認には使ってよいが、B0 の主判断には使わない
-- 例外的に full-history が取れない場合は、その制約を report に明記する
+- 通常運用の `skill-miner` は `--days 7` がデフォルトで、workspace モードだけ必要時に 30 日へ自動拡張する
+- `--all-sessions` 単体は workspace 制限を外すだけで、無制限観測ではない
+- B0 の優先順位判断は、原則として `--all-sessions + 明示的な長窓` の観測を基準にする
+- `--days 7` や adaptive 30 日は通常運用の挙動確認には使ってよいが、B0 の主判断には使わない
+- 例外的に full-history 相当が取れない場合は、その制約を report に明記する
 
 ## Required Metrics
 
@@ -108,7 +110,8 @@ B0 の実行後は、別の report に次を残す。
 - 実行日
 - 実行コマンド
 - 観測対象の scope
-  - full-history か、制約付きか
+  - full-history 相当か、制約付きか
+  - 通常運用の 7 日 / adaptive 30 日とは別条件で観測したか
 - 3 指標の実測値
 - oversized cluster などの補助所見
 - 今回の priority decision

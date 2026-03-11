@@ -87,6 +87,7 @@ Error shape:
 
 - `prerequisites`: preflight checks such as `git_repo`, `path_exists`, `all_paths_exist`, `glob_exists`, `chrome_history_db`
 - `confidence_category`: source role used by grouping confidence rules, such as `git`, `ai_history`, `browser`, `file_activity`
+- `scope_mode`: source-level scope semantics for mixed-scope aggregation. Use `all-day` for sources that represent the whole day and `workspace` for sources limited to the requested/current workspace
 
 ## Shared CLI conventions
 
@@ -106,11 +107,20 @@ Error shape:
 - `groups`: nearby events grouped with `evidence` and aggregated `confidence`
 - `summary`: source status counts, total event count, total group count, and `no_sources_available`
 
+Each entry in `sources[]` includes:
+
+- `name`: source name
+- `status`: `success`, `skipped`, or `error`
+- `scope`: copied from `sources.json.scope_mode` so downstream skills can tell whether that source represents `all-day` or `workspace` evidence
+- `events_count`: normalized event count
+- optional `reason`, `message`, `command`, `duration_sec`
+
 Aggregator behavior:
 
 - forwards `--workspace` to source CLIs and also runs them with that directory as `cwd`
 - prints a one-line preflight summary to `stderr` before collection starts
 - uses `sources.json` metadata to evaluate preflight availability and confidence categories without source-name conditionals
+- preserves mixed-scope behavior explicitly: `all-day` sources can describe the full day while `workspace` sources stay repo-local, and `sources[].scope` makes that visible to consumers
 
 ## Skill Miner CLIs
 
@@ -123,7 +133,9 @@ Purpose:
 
 - reads raw Claude/Codex JSONL directly
 - defaults to `--days 7`
-- disables the date window only when `--all-sessions` is explicitly set
+- keeps the configured day window even with `--all-sessions`
+- treats `--all-sessions` as a workspace-filter override, not an unlimited history mode
+- starts workspace mode at 7 days and expands to 30 days only when packet/candidate volume is too small
 - splits Claude history into logical sessions
 - emits compressed `candidates` and `unclustered` packets for proposal phase
 - can emit `intent_analysis` for B0 observation with `--dump-intents`
@@ -149,8 +161,12 @@ Top-level shape:
 Important fields:
 
 - `config.days`: default `7`
-- `config.all_sessions`: only explicit override for the date window
-- `config.date_window_start`: ISO 8601 threshold used when `all_sessions=false`
+- `config.effective_days`: actual observation window after adaptive expansion
+- `config.all_sessions`: disables workspace filtering but keeps the configured day window
+- `config.observation_mode`: `workspace` or `all-sessions`
+- `config.date_window_start`: ISO 8601 threshold used for the effective window
+- `config.adaptive_window`: workspace-only expansion metadata, including thresholds, initial counts, and whether 30-day fallback was used
+- `summary.adaptive_window_expanded`: whether workspace mode expanded from the initial window to 30 days
 - `candidates[].session_refs`: stable references for detail lookup
 - `candidates[].support`: packet counts and ranking evidence
 - `candidates[].confidence`, `proposal_ready`, `triage_status`: proposal quality and triage outcome
@@ -166,6 +182,7 @@ Contract notes:
 
 - `summary` in `evidence_items[]` prefers the session's `primary_intent` (the same normalized intent sampled in `intent_analysis.items`); when empty it falls back to an anonymized representative snippet from the conversation
 - `prepare` is the only phase that reads raw history for evidence chain construction
+- normal broad-scope execution is `--all-sessions --days 7`; use a larger explicit `--days` only when a longer observation window is intentionally needed
 - no state file is used; execution mode is determined only by CLI flags
 
 `candidates[].evidence_items[]` example:
