@@ -18,6 +18,7 @@
 - [TODO-D2-skill-miner.md](TODO-D2-skill-miner.md)
 - [TODO-D2a-skill-miner-compression.md](TODO-D2a-skill-miner-compression.md)
 - [TODO-D2b-skill-miner-proposal-quality.md](TODO-D2b-skill-miner-proposal-quality.md)
+- [TODO-D2c-skill-miner-v2.md](TODO-D2c-skill-miner-v2.md)
 - [TODO-D3-post-draft.md](TODO-D3-post-draft.md)
 
 ## Phase 3: Polish & Submit（3/19 - 3/22）
@@ -42,6 +43,9 @@ D2
 
 D2a
   → D2b（proposal quality / UX recovery は compression 導入後の改善）
+
+D2b
+  → D2c（weekly classification / evidence chain / CLAUDE.md apply / B0-Validation の再整理）
 
 A（packaging）は他と並行して進められる
 
