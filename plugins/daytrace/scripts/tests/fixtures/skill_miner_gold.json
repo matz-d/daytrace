@@ -51,8 +51,8 @@
     },
     {
       "id": "pkt-06",
-      "primary_intent": "Run formatting automatically before commit.",
-      "task_shape": ["run_tests"],
+      "primary_intent": "Configure formatting to run automatically before commit.",
+      "task_shape": ["edit_config"],
       "artifact_hints": ["config"],
       "repeated_rules": []
     }

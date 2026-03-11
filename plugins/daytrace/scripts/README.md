@@ -164,7 +164,7 @@ Important fields:
 
 Contract notes:
 
-- `summary` in `evidence_items[]` prefers `primary_intent`; when empty it falls back to a masked representative snippet
+- `summary` in `evidence_items[]` prefers the session's `primary_intent` (the same normalized intent sampled in `intent_analysis.items`); when empty it falls back to an anonymized representative snippet from the conversation
 - `prepare` is the only phase that reads raw history for evidence chain construction
 - no state file is used; execution mode is determined only by CLI flags
 

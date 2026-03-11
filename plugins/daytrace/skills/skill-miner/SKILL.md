@@ -131,6 +131,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 
 注意:
 
+- `primary_intent` は packet ごとの主目的を短く正規化した文字列
 - `summary` は `primary_intent` 優先、空なら snippet 由来
 - `proposal` 側は `evidence_items[]` を使って表示し、raw history を再読込しない
 - path は `[WORKSPACE]`、URL はドメインだけにマスクされる
@@ -251,7 +252,7 @@ diff preview 例:
 
 ```diff
 --- /dev/null
-+++ /repo/CLAUDE.md
++++ cwd/CLAUDE.md
 @@
 +## DayTrace Suggested Rules
 +
