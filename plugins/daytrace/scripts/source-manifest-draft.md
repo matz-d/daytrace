@@ -35,6 +35,12 @@
 - `confidence_category`
 - `prerequisites`
 
+補足:
+
+- manifest 入力 field 名は `confidence_category` とする
+- `confidence_category` は string または list of string を受け付ける
+- `manifest_fingerprint` 用の canonical payload では、これを正規化して `confidence_categories` という list field に変換する
+
 runtime-only orchestration fields として扱い、fingerprint から外す fields:
 
 - `required`
@@ -82,6 +88,12 @@ canonical payload:
   "prerequisites": [{"type": "git_repo"}]
 }
 ```
+
+補足:
+
+- これは raw manifest の例ではなく、fingerprint 計算に使う canonical payload の例
+- raw manifest では `confidence_category`
+- canonical payload では正規化後の `confidence_categories`
 
 ## Validation Policy
 

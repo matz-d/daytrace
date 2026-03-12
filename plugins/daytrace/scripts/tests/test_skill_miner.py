@@ -357,6 +357,50 @@ class SkillMinerTests(unittest.TestCase):
             self.assertIn("comparison", payload)
             self.assertGreaterEqual(payload["comparison"]["legacy_candidate_count"], 1)
 
+    def test_prepare_store_input_ignores_non_numeric_tool_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            import sqlite3
+
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            connection = sqlite3.connect(store_path)
+            row = connection.execute(
+                """
+                SELECT id, details_json
+                FROM observations
+                WHERE source_name = 'codex-history' AND event_type = 'tool_call'
+                LIMIT 1
+                """
+            ).fetchone()
+            self.assertIsNotNone(row)
+            observation_id = int(row[0])
+            details = json.loads(str(row[1]))
+            self.assertIsInstance(details.get("tools"), list)
+            details["tools"][0]["count"] = "abc"
+            connection.execute(
+                "UPDATE observations SET details_json = ? WHERE id = ?",
+                (json.dumps(details, ensure_ascii=False), observation_id),
+            )
+            connection.commit()
+            connection.close()
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "store")
+            self.assertGreaterEqual(payload["summary"]["total_packets"], 1)
+
     def test_prepare_auto_falls_back_to_raw_when_store_slice_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

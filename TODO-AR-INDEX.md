@@ -4,7 +4,7 @@
 
 親プラン:
 
-- [PLAN_architecture-refresh.md](/Users/makotomatuda/projects/lab/daytrace/PLAN_architecture-refresh.md)
+- [PLAN_architecture-refresh.md](PLAN_architecture-refresh.md)
 
 ## 実行順
 

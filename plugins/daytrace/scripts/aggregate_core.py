@@ -168,6 +168,8 @@ def run_source(
     )
     started = datetime.now().timestamp()
     try:
+        # `source` is expected to come from `source_registry.load_sources()`,
+        # which validates that `timeout_sec` exists and is a positive number.
         completed = subprocess.run(
             command,
             cwd=str(workspace),

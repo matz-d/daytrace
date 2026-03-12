@@ -54,9 +54,14 @@
 - `command_fingerprint`
 - `workspace`
 - `requested_date`
-- `since`
-- `until`
+- `since_value`
+- `until_value`
 - `all_sessions`
+
+補足:
+
+- fingerprint 対象の `since_value` / `until_value` は、source command へ実際に forward した resolved filter 値を指す
+- 実装上の一時変数名が `since` / `until` でも、永続化上の正準名は `since_value` / `until_value` とする
 
 運用ルール:
 
@@ -90,6 +95,21 @@
 - `summary`
 - `details`
 - `confidence`
+
+DB field mapping:
+
+- logical `source` -> normalized event の `source` -> `observations.source_name`
+- logical `timestamp` -> normalized event の `timestamp` -> `observations.occurred_at`
+- logical `type` -> normalized event の `type` -> `observations.event_type`
+- logical `summary` -> normalized event の `summary` -> `observations.summary`
+- logical `details` -> normalized event の `details` -> `observations.details_json`
+- logical `confidence` -> normalized event の `confidence` -> `observations.confidence`
+
+明示ルール:
+
+- `scope_mode` は `observations` row に保存するが、`event_fingerprint` には含めない
+- `source` は normalized event の source 名だけを指し、`scope_mode` を内包しない
+- fingerprint は DB row ではなく normalized event contract を基準に計算する
 
 含めないもの:
 

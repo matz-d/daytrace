@@ -462,7 +462,10 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
                     if not isinstance(tool, dict):
                         continue
                     name = str(tool.get("name") or "").strip().lower()
-                    count = int(tool.get("count") or 0)
+                    try:
+                        count = int(tool.get("count") or 0)
+                    except (TypeError, ValueError):
+                        count = 0
                     if name and count > 0:
                         tools.extend([name] * count)
 

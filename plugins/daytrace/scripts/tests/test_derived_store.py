@@ -228,8 +228,8 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(activities[0]["activity"]["summary"], "2 activities from ai-source, workspace-source")
             self.assertEqual(activities[1]["summary"], "Opened derived layer note")
 
-            connection = sqlite3.connect(store_path)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0], 2)
+            with sqlite3.connect(store_path) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0], 2)
 
     def test_get_activities_rebuilds_when_observations_change(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

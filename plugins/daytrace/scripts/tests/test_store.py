@@ -173,35 +173,35 @@ class StoreTests(unittest.TestCase):
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
             self.run_aggregate(sources_file, workspace, store_path)
 
-            connection = sqlite3.connect(store_path)
-            connection.row_factory = sqlite3.Row
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
+            with sqlite3.connect(store_path) as connection:
+                connection.row_factory = sqlite3.Row
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
-            workspace_row = connection.execute(
-                "SELECT * FROM source_runs WHERE source_name = 'workspace-source'"
-            ).fetchone()
-            assert workspace_row is not None
-            self.assertEqual(workspace_row["scope_mode"], "workspace")
-            self.assertEqual(workspace_row["workspace"], str(workspace.resolve()))
-            self.assertEqual(workspace_row["requested_date"], None)
-            self.assertEqual(workspace_row["since_value"], "2026-03-12")
-            self.assertEqual(workspace_row["until_value"], "2026-03-12")
-            self.assertEqual(workspace_row["all_sessions"], 1)
-            self.assertEqual(workspace_row["events_count"], 1)
-            self.assertRegex(workspace_row["manifest_fingerprint"], r"^[0-9a-f]{64}$")
-            self.assertEqual(json.loads(workspace_row["confidence_categories_json"]), ["git"])
-            self.assertRegex(workspace_row["command_fingerprint"], r"^[0-9a-f]{64}$")
+                workspace_row = connection.execute(
+                    "SELECT * FROM source_runs WHERE source_name = 'workspace-source'"
+                ).fetchone()
+                self.assertIsNotNone(workspace_row)
+                self.assertEqual(workspace_row["scope_mode"], "workspace")
+                self.assertEqual(workspace_row["workspace"], str(workspace.resolve()))
+                self.assertEqual(workspace_row["requested_date"], None)
+                self.assertEqual(workspace_row["since_value"], "2026-03-12")
+                self.assertEqual(workspace_row["until_value"], "2026-03-12")
+                self.assertEqual(workspace_row["all_sessions"], 1)
+                self.assertEqual(workspace_row["events_count"], 1)
+                self.assertRegex(workspace_row["manifest_fingerprint"], r"^[0-9a-f]{64}$")
+                self.assertEqual(json.loads(workspace_row["confidence_categories_json"]), ["git"])
+                self.assertRegex(workspace_row["command_fingerprint"], r"^[0-9a-f]{64}$")
 
-            observation_row = connection.execute(
-                "SELECT * FROM observations WHERE source_name = 'workspace-source'"
-            ).fetchone()
-            assert observation_row is not None
-            event_json = json.loads(observation_row["event_json"])
-            self.assertEqual(event_json["source"], "workspace-source")
-            self.assertEqual(event_json["type"], "commit")
-            self.assertRegex(observation_row["event_fingerprint"], r"^[0-9a-f]{64}$")
+                observation_row = connection.execute(
+                    "SELECT * FROM observations WHERE source_name = 'workspace-source'"
+                ).fetchone()
+                self.assertIsNotNone(observation_row)
+                event_json = json.loads(observation_row["event_json"])
+                self.assertEqual(event_json["source"], "workspace-source")
+                self.assertEqual(event_json["type"], "commit")
+                self.assertRegex(observation_row["event_fingerprint"], r"^[0-9a-f]{64}$")
 
     def test_rerun_reuses_same_source_runs_without_duplicate_observations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -209,9 +209,9 @@ class StoreTests(unittest.TestCase):
             self.run_aggregate(sources_file, workspace, store_path)
             self.run_aggregate(sources_file, workspace, store_path)
 
-            connection = sqlite3.connect(store_path)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
+            with sqlite3.connect(store_path) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
     def test_aggregate_returns_success_when_store_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -254,9 +254,9 @@ class StoreTests(unittest.TestCase):
             store_path.unlink()
             self.run_aggregate(sources_file, workspace, store_path)
 
-            connection = sqlite3.connect(store_path)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
+            with sqlite3.connect(store_path) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
 
 if __name__ == "__main__":
