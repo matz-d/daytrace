@@ -1,9 +1,13 @@
 # DayTrace
 
-ローカル証跡を集約して、日報・スキル提案・投稿下書きを自動生成する Claude Code plugin。
+> A local-first, zero-config Claude Code plugin that turns your daily traces into structured outputs — daily reports, narrative drafts, and skill proposals — all from one observation pipeline.
 
-Git コミット、Claude / Codex の会話履歴、Chrome 閲覧履歴、ファイル変更などを自動収集し、
-用途に応じた成果物をコマンド一発で生成します。
+ローカル証跡を集約して、日報・スキル提案・投稿下書きを自動生成する Claude Code plugin。
+外部通信なし・追加パッケージなし・設定なしで動作します。
+
+Git コミット、Claude / Codex の会話履歴、Chrome 閲覧履歴、ファイル変更を自動収集し、
+同じ観測結果から用途に応じた 3 つの成果物を自律的に生成します。
+source が足りない環境でも、利用可能な証跡だけで縮退動作します（graceful degrade）。
 
 ## できること
 
