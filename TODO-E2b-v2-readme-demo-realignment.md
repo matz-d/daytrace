@@ -1,16 +1,16 @@
-# TODO E2b. README / Demo Realignment for v2.3
+# TODO E2b. README / Judge Flow Realignment for v2.3
 
 Phase: Polish & Submit
 Depends on: C2, D1b, D3b, D2d（少なくとも文言が固まっていること）
 
 ## Goal
 
-README とデモ資産を v2.3 の product framing に合わせ、審査員に `date-first / date-first / scope-first` を短時間で誤解なく伝えられる状態にする。
+README と審査員向けの live 検証導線を v2.3 の product framing に合わせ、`date-first / date-first / scope-first` を短時間で誤解なく伝えられる状態にする。
 
 ## Non Goals
 
 - source CLI の新機能実装
-- demo 用の大規模 UI 追加
+- 固定 `demo/` fixture の再導入
 - 動画編集の完成
 
 ## Start Here
@@ -34,28 +34,24 @@ README とデモ資産を v2.3 の product framing に合わせ、審査員に `
 - [x] workspace の意味が skill ごとに違うことを README で明示する
 - [x] mixed-scope の説明を README に入れる
 - [x] 審査員向け最短検証手順を v2.3 に合わせて更新する
-- [x] `demo/fixtures/` に必要な成果物一覧を明文化する
-  - `daily-report-shared.md`
-  - `post-draft.md`
-  - `skill-miner-proposal.md`
-- [x] fallback plan を README または demo 手順書から辿れるようにする
+- [x] 固定 fixture ではなく、その場のローカル証跡を使う live 検証方針を README に明文化する
+- [x] fallback plan を README または judge runbook から辿れるようにする
 - [x] `TODO-E2-readme-demo.md` と役割が重複しないよう、必要ならリンクまたは引継ぎメモを追記する
 
 ## Target Files
 
 - `README.md`
-- `PLAN_update.v2.md`（必要なら demo asset 名の整合だけ）
+- `PLAN_update.v2.md`（必要なら live 検証前提への文言調整）
 - `TODO-E2-readme-demo.md`
-- `demo/fixtures/` 配下の説明文書または placeholder
 
 ## Verification
 
 - [x] README の冒頭だけ読んで 3 skill の役割差が説明できる
 - [x] mixed-scope と workspace semantics が README に残っている
-- [x] fallback 用 fixture 一覧が明文化されている
+- [x] README の最短検証手順が live 実行前提で読める
 
 ## Done Criteria
 
 - [x] README が v2.3 framing と矛盾しない
-- [x] demo fallback 資産の一覧が repo 内で共有できる
+- [x] `demo/` なしでも審査員向け導線が repo 内で共有できる
 - [x] 3 分デモの説明が product copy と一致している
