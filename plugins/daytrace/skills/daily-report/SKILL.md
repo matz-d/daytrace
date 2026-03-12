@@ -58,7 +58,10 @@ user-invocable: true
 
 ## Data Collection
 
-必ず最初に `aggregate.py` を 1 回だけ実行し、中間 JSON を取得する。
+必ず最初に `daily_report_projection.py` を 1 回だけ実行し、中間 JSON を取得する。
+
+この adapter は shared derived data を優先して読み、該当 slice が store に無い場合だけ内部で `aggregate.py` を 1 回実行して hydrate する。
+返却 JSON の主要 shape は `aggregate.py` 互換で、`sources` / `timeline` / `groups` / `summary` をそのまま読める。
 
 `aggregate.py` はこの `SKILL.md` と同じ plugin 内の `scripts/` ディレクトリにある。
 この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
@@ -66,19 +69,19 @@ user-invocable: true
 date-first デフォルト:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions
+python3 <plugin-root>/scripts/daily_report_projection.py --date today --all-sessions
 ```
 
 特定日:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09 --all-sessions
+python3 <plugin-root>/scripts/daily_report_projection.py --date 2026-03-09 --all-sessions
 ```
 
 workspace の git / file 根拠を current repo に固定したい場合:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions --workspace /absolute/path/to/workspace
+python3 <plugin-root>/scripts/daily_report_projection.py --date today --all-sessions --workspace /absolute/path/to/workspace
 ```
 
 この指定の意味:
@@ -112,7 +115,7 @@ workspace は date-first の主軸ではなく補助フィルタだが、mixed-s
 
 ## Execution Rules
 
-1. `aggregate.py` を 1 回だけ実行する
+1. `daily_report_projection.py` を 1 回だけ実行する
 2. 先に `sources` を読み、取得できた source と `scope` を把握する
 3. 次に `groups` を優先して読み、必要に応じて `timeline` を補助参照する
 4. 活動項目は 3-6 個に絞り、「その日何を進めたか」が伝わる粒度に再構成する

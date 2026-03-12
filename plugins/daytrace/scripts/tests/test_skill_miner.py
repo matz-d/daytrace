@@ -24,6 +24,7 @@ PREPARE = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "skill_miner_prepare.
 DETAIL = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "skill_miner_detail.py"
 RESEARCH_JUDGE = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "skill_miner_research_judge.py"
 PROPOSAL = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "skill_miner_proposal.py"
+AGGREGATE = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "aggregate.py"
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -239,6 +240,62 @@ class SkillMinerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success", msg=completed.stdout)
         return payload
 
+    def seed_store(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, store_path: Path) -> None:
+        sources_file = store_path.parent / "sources.json"
+        sources_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "claude-history",
+                        "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'claude_history.py'} --root {claude_root}",
+                        "required": False,
+                        "timeout_sec": 30,
+                        "platforms": ["darwin", "linux"],
+                        "supports_date_range": True,
+                        "supports_all_sessions": True,
+                        "scope_mode": "all-day",
+                        "prerequisites": [],
+                        "confidence_category": "ai_history",
+                    },
+                    {
+                        "name": "codex-history",
+                        "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'codex_history.py'} --history-file {codex_history} --sessions-root {codex_sessions}",
+                        "required": False,
+                        "timeout_sec": 30,
+                        "platforms": ["darwin", "linux"],
+                        "supports_date_range": True,
+                        "supports_all_sessions": True,
+                        "scope_mode": "all-day",
+                        "prerequisites": [],
+                        "confidence_category": "ai_history",
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                "python3",
+                str(AGGREGATE),
+                "--sources-file",
+                str(sources_file),
+                "--workspace",
+                str(workspace),
+                "--since",
+                "2026-03-01",
+                "--until",
+                "2026-03-12",
+                "--store-path",
+                str(store_path),
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+
     def test_prepare_builds_candidates_and_masks_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, claude_root, codex_history, codex_sessions = self.create_fixture(Path(temp_dir))
@@ -274,6 +331,123 @@ class SkillMinerTests(unittest.TestCase):
             masked_url = compact_snippet("See https://example.com/path?a=1#frag", str(workspace))
             self.assertEqual(masked_url, "See https://example.com")
 
+    def test_prepare_can_use_store_backed_observations_with_legacy_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+                "--compare-legacy",
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "store")
+            self.assertEqual(payload["config"]["input_fidelity"], "approximate")
+            self.assertGreaterEqual(payload["summary"]["total_packets"], 2)
+            self.assertGreaterEqual(len(payload["candidates"]), 1)
+            self.assertIn("comparison", payload)
+            self.assertGreaterEqual(payload["comparison"]["legacy_candidate_count"], 1)
+
+    def test_prepare_auto_falls_back_to_raw_when_store_slice_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+            stale_sources_file = root / "stale-sources.json"
+            stale_sources_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "claude-history",
+                            "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'claude_history.py'} --root {claude_root} --synthetic-change",
+                            "required": False,
+                            "timeout_sec": 30,
+                            "platforms": ["darwin", "linux"],
+                            "supports_date_range": True,
+                            "supports_all_sessions": True,
+                            "scope_mode": "all-day",
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
+                        },
+                        {
+                            "name": "codex-history",
+                            "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'codex_history.py'} --history-file {codex_history} --sessions-root {codex_sessions}",
+                            "required": False,
+                            "timeout_sec": 30,
+                            "platforms": ["darwin", "linux"],
+                            "supports_date_range": True,
+                            "supports_all_sessions": True,
+                            "scope_mode": "all-day",
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(stale_sources_file),
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "raw")
+            self.assertEqual(payload["config"]["input_fidelity"], "original")
+            self.assertGreaterEqual(payload["summary"]["total_packets"], 2)
+
+    def test_prepare_skips_pattern_persist_on_empty_store_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            store_path = root / "daytrace.sqlite3"
+            empty_claude = root / "empty_claude"
+            empty_claude.mkdir()
+            empty_codex_history = root / "empty_codex" / "history.jsonl"
+            empty_codex_history.parent.mkdir(parents=True, exist_ok=True)
+            empty_codex_history.write_text("", encoding="utf-8")
+            empty_codex_sessions = root / "empty_codex" / "sessions"
+            empty_codex_sessions.mkdir(parents=True, exist_ok=True)
+
+            import sqlite3
+            from store import bootstrap_store
+            bootstrap_store(store_path)
+
+            payload = self.run_prepare(
+                workspace,
+                empty_claude,
+                empty_codex_history,
+                empty_codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+            )
+
+            self.assertEqual(payload["summary"]["no_sources_available"], True)
+            connection = sqlite3.connect(store_path)
+            pattern_count = connection.execute("SELECT COUNT(*) FROM patterns").fetchone()[0]
+            self.assertEqual(pattern_count, 0, "patterns should not be persisted for empty results")
+
     def test_prepare_reports_effective_observation_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, claude_root, codex_history, codex_sessions = self.create_fixture(Path(temp_dir))
@@ -281,6 +455,7 @@ class SkillMinerTests(unittest.TestCase):
 
             self.assertEqual(payload["config"]["days"], 7)
             self.assertEqual(payload["config"]["effective_days"], 7)
+            self.assertEqual(payload["config"]["input_fidelity"], "original")
             self.assertEqual(payload["config"]["observation_mode"], "workspace")
             self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
             self.assertFalse(payload["config"]["adaptive_window"]["expanded"])

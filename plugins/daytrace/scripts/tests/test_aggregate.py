@@ -44,8 +44,18 @@ def make_source_entry(
 
 class AggregateCliTests(unittest.TestCase):
     def run_aggregate(self, sources_file: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+        store_path = sources_file.parent / "daytrace.sqlite3"
         completed = subprocess.run(
-            ["python3", str(AGGREGATE), "--sources-file", str(sources_file), "--all-sessions", *extra_args],
+            [
+                "python3",
+                str(AGGREGATE),
+                "--sources-file",
+                str(sources_file),
+                "--store-path",
+                str(store_path),
+                "--all-sessions",
+                *extra_args,
+            ],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,

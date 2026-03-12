@@ -35,6 +35,17 @@
 
 - [TODO-C2-v2-aggregate-scope-mode.md](TODO-C2-v2-aggregate-scope-mode.md)
 
+## Architecture Refresh
+
+- [TODO-AR-INDEX.md](TODO-AR-INDEX.md)
+- [TODO-AR1a-contract-baseline.md](TODO-AR1a-contract-baseline.md)
+- [TODO-AR1b-core-extraction.md](TODO-AR1b-core-extraction.md)
+- [TODO-AR2-store-introduction.md](TODO-AR2-store-introduction.md)
+- [TODO-AR3-derived-layers.md](TODO-AR3-derived-layers.md)
+- [TODO-AR4-skill-migration.md](TODO-AR4-skill-migration.md)
+- [TODO-AR4b-store-hardening.md](TODO-AR4b-store-hardening.md)
+- [TODO-AR5-source-registry.md](TODO-AR5-source-registry.md)
+
 ## 依存関係
 
 ```

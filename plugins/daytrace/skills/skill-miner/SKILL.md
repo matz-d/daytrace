@@ -34,19 +34,21 @@ aggregator は使わない。`skill-miner` 専用 CLI だけを使う。
 提案フェーズ:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py
+python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3
 ```
 
 workspace 制限を外して広域観測する場合:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
+python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3 --all-sessions
 ```
 
 補足:
 
 - デフォルト観測窓は 7 日
 - `--all-sessions` は workspace 制限を外すだけで、7 日窓は維持する
+- `--input-source auto` は store-backed `observations` を優先し、該当データが無い時だけ raw history へフォールバックする
+- `--store-path` を付けると candidate を `patterns` として store へ更新し、旧 raw path との比較が必要な期間は `--compare-legacy` を併用できる
 - `workspace` モード（`--all-sessions` を付けない通常実行。`--workspace` 未指定時は `cwd` を使う）だけ、packet / candidate が少なすぎる場合に 30 日へ自動拡張する
 - full-history 相当の観測が必要な場合は、B0 観測（改善優先度を決めるための実データ観測）用に `--all-sessions --days 3650 --dump-intents` のように明示する
 

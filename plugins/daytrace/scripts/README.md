@@ -7,6 +7,8 @@
 | Script | 役割 |
 |--------|------|
 | `aggregate.py` | 5 source を統合し中間 JSON を返すオーケストレーター |
+| `daily_report_projection.py` | store-backed `activities` から daily-report 用の aggregate 互換 JSON を返す adapter |
+| `post_draft_projection.py` | store-backed `activities` と cached `patterns` から post-draft 用の aggregate 互換 JSON を返す adapter |
 | `common.py` | 共有ユーティリティ（JSON I/O, エラー処理, CLI 引数） |
 | `git_history.py` | Git commit 履歴の source CLI |
 | `claude_history.py` | Claude 会話履歴の source CLI |
@@ -89,6 +91,38 @@ Error shape:
 - `confidence_category`: source role used by grouping confidence rules, such as `git`, `ai_history`, `browser`, `file_activity`
 - `scope_mode`: source-level scope semantics for mixed-scope aggregation. Use `all-day` for sources that represent the whole day and `workspace` for sources limited to the requested/current workspace
 
+## Manifest draft and identity
+
+The pre-AR2 manifest draft is documented in `source-manifest-draft.md`.
+
+Current loader rules:
+
+- built-in `sources.json` and future single-object drop-in manifests share the same logical shape
+- each source gets a stable `source_identity` where `source_id == name`
+- each source gets a `manifest_fingerprint` derived from the logical manifest fields only
+- runtime orchestration fields such as `required`, `timeout_sec`, and `platforms` are intentionally excluded from the fingerprint
+- duplicate source names are rejected so built-in and future user sources can share one registry namespace
+
+Validation policy:
+
+- reject missing required fields and type mismatches
+- allow unknown extra keys so future registry extensions do not break built-in manifests
+- keep prerequisite validation structural in the loader and defer subtype-specific checks to preflight evaluation
+
+## SQLite store
+
+`AR2` introduces a rebuildable SQLite store for `source_runs` and `observations`.
+
+- default store path: `~/.daytrace/daytrace.sqlite3`
+- override path: `aggregate.py --store-path /path/to/daytrace.sqlite3`
+- disable persistence for one run: `aggregate.py --no-store`
+- run context and fingerprint rules are documented in `store-run-context-note.md`
+
+`AR4` adds projection adapters on top of the store:
+
+- `daily_report_projection.py` reuses persisted `activities` and falls back to one `aggregate.py` hydration run only when the requested slice is missing
+- `post_draft_projection.py` does the same and also attaches cached `patterns` when a matching skill-miner window exists
+
 ## Shared CLI conventions
 
 - `--since` and `--until` accept ISO 8601 datetime or `YYYY-MM-DD`
@@ -96,6 +130,8 @@ Error shape:
 - `--group-window` overrides the default 15 minute grouping window
 - `--workspace` defaults to the current working directory where relevant
 - `--all-sessions` disables workspace filtering for Claude/Codex history
+- `--store-path` overrides the SQLite store location
+- `--no-store` skips store ingestion for that run
 - `--limit` caps returned events for manual inspection
 
 ## Aggregator output
@@ -163,6 +199,7 @@ Important fields:
 - `config.days`: default `7`
 - `config.effective_days`: actual observation window after adaptive expansion
 - `config.all_sessions`: disables workspace filtering but keeps the configured day window
+- `config.input_source`: `raw` or `store`
 - `config.observation_mode`: `workspace` or `all-sessions`
 - `config.date_window_start`: ISO 8601 threshold used for the effective window
 - `config.adaptive_window`: workspace-only expansion metadata, including thresholds, initial counts, and whether 30-day fallback was used
@@ -182,6 +219,10 @@ Contract notes:
 
 - `summary` in `evidence_items[]` prefers the session's `primary_intent` (the same normalized intent sampled in `intent_analysis.items`); when empty it falls back to an anonymized representative snippet from the conversation
 - `prepare` is the only phase that reads raw history for evidence chain construction
+- `--input-source store` reads persisted `claude-history` / `codex-history` observations instead of raw history
+- `--input-source auto` reuses the store only when the matching slice is complete for the current source manifest; missing, partial, degraded, stale, or unvalidated slices fall back to raw history
+- `--sources-file` lets auto mode validate the current manifest against a specific source registry instead of the built-in default
+- `--compare-legacy` adds a lightweight comparison summary between the selected path and the raw-history path
 - normal broad-scope execution is `--all-sessions --days 7`; use a larger explicit `--days` only when a longer observation window is intentionally needed
 - no state file is used; execution mode is determined only by CLI flags
 

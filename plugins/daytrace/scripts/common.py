@@ -194,6 +194,14 @@ def is_within_path(candidate: str | Path | None, root: str | Path | None) -> boo
         return False
 
 
+def current_platform() -> str:
+    if sys.platform.startswith("darwin"):
+        return "darwin"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return sys.platform
+
+
 def apply_limit(events: list[dict[str, Any]], limit: int | None) -> list[dict[str, Any]]:
     if limit is None or limit < 0:
         return events

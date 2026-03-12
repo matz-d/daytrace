@@ -63,7 +63,10 @@ user-invocable: true
 
 ## Data Collection
 
-必ず最初に `aggregate.py` を 1 回だけ実行し、中間 JSON を取得する。
+必ず最初に `post_draft_projection.py` を 1 回だけ実行し、中間 JSON を取得する。
+
+この adapter は shared derived data を優先して読み、該当 slice が store に無い場合だけ内部で `aggregate.py` を 1 回実行して hydrate する。
+返却 JSON の主要 shape は `aggregate.py` 互換で、`sources` / `timeline` / `groups` / `summary` をそのまま読める。cached `patterns` があれば追加で添付される。
 
 `aggregate.py` はこの `SKILL.md` と同じ plugin 内の `scripts/` ディレクトリにある。
 この `SKILL.md` のあるディレクトリから `../..` を辿った先を `<plugin-root>` として扱う。
@@ -71,19 +74,19 @@ user-invocable: true
 date-first デフォルト:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions
+python3 <plugin-root>/scripts/post_draft_projection.py --date today --all-sessions
 ```
 
 特定日:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date 2026-03-09 --all-sessions
+python3 <plugin-root>/scripts/post_draft_projection.py --date 2026-03-09 --all-sessions
 ```
 
 workspace の git / file 根拠を current repo に固定したい場合:
 
 ```bash
-python3 <plugin-root>/scripts/aggregate.py --date today --all-sessions --workspace /absolute/path/to/workspace
+python3 <plugin-root>/scripts/post_draft_projection.py --date today --all-sessions --workspace /absolute/path/to/workspace
 ```
 
 この指定の意味:
@@ -185,7 +188,7 @@ ask は使わず、読者と主題から以下を自動で決める。
 
 ## Execution Rules
 
-1. `aggregate.py` を 1 回だけ実行する
+1. `post_draft_projection.py` を 1 回だけ実行する
 2. 先に `sources` を読み、取得できた source と `scope` を把握する
 3. 次に `groups` を読み、主題選定の 3 段フォールバックで中心 group を決める
 4. 必要に応じて `timeline` を補助参照し、背景や前後関係を補う

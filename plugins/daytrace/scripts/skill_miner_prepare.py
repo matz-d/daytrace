@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from common import emit, ensure_datetime, error_response, resolve_workspace
+from aggregate_core import load_expected_sources, resolve_sources_file_path
+from common import current_platform, emit, ensure_datetime, error_response, resolve_workspace
+from derived_store import SLICE_COMPLETE, evaluate_slice_completeness, get_observations, persist_patterns_from_prepare
 from skill_miner_common import (
     CLAUDE_SOURCE,
     CODEX_SOURCE,
@@ -45,11 +48,14 @@ from skill_miner_common import (
     annotate_unclustered_packet,
     workspace_matches,
 )
+from store import resolve_store_path
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 DEFAULT_CODEX_HISTORY = Path.home() / ".codex" / "history.jsonl"
 DEFAULT_CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+DEFAULT_SOURCES_FILE = SCRIPT_DIR / "sources.json"
 DEFAULT_OBSERVATION_DAYS = 7
 WORKSPACE_ADAPTIVE_EXPANDED_DAYS = 30
 WORKSPACE_ADAPTIVE_MIN_PACKETS = 4
@@ -87,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=".", help="Workspace path to filter by. Ignored with --all-sessions.")
     parser.add_argument("--all-sessions", action="store_true", help="Ignore workspace filtering while keeping the configured day window.")
     parser.add_argument("--days", type=int, default=DEFAULT_OBSERVATION_DAYS, help="Limit packets to the last N days.")
+    parser.add_argument(
+        "--input-source",
+        choices=["raw", "store", "auto"],
+        default="raw",
+        help="Choose raw history, store-backed observations, or auto fallback.",
+    )
+    parser.add_argument("--store-path", help="Path to the DayTrace SQLite store. Used for store-backed prepare and pattern persistence.")
+    parser.add_argument("--sources-file", help="Path to sources.json used when validating store-backed auto input.")
     parser.add_argument("--claude-root", default=str(DEFAULT_CLAUDE_ROOT), help="Claude projects root.")
     parser.add_argument("--codex-history-file", default=str(DEFAULT_CODEX_HISTORY), help="Codex history.jsonl path.")
     parser.add_argument("--codex-sessions-root", default=str(DEFAULT_CODEX_SESSIONS), help="Codex sessions root.")
@@ -102,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dump-intents",
         action="store_true",
         help="Include anonymized primary_intent samples and summary metrics for B0 observation.",
+    )
+    parser.add_argument(
+        "--compare-legacy",
+        action="store_true",
+        help="When using store-backed prepare, also compute a raw-history comparison summary.",
     )
     return parser
 
@@ -327,6 +346,228 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
     except Exception as exc:  # pragma: no cover - defensive surface
         return [], source_status(CODEX_SOURCE, "error", message=str(exc), history_file=str(history_file), sessions_root=str(sessions_root))
 
+
+def collect_raw_packets(
+    *,
+    workspace: Path | None,
+    claude_root: Path,
+    codex_history_file: Path,
+    codex_sessions_root: Path,
+    gap_hours: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    claude_packets, claude_status = read_claude_packets(claude_root, workspace, gap_hours)
+    codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace)
+    return claude_packets + codex_packets, [claude_status, codex_status]
+
+
+def _dedupe_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for observation in observations:
+        key = (str(observation["source_name"]), str(observation["event_fingerprint"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(observation)
+    return deduped
+
+
+def _packet_from_claude_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    details = observation.get("details", {})
+    if not isinstance(details, dict):
+        details = {}
+    session_id = str(details.get("session_id") or "").strip() or None
+    file_path = str(details.get("file_path") or "").strip()
+    summary = str(observation.get("summary") or "")
+    summary_prefix = "Claude session: "
+    first_prompt = summary[len(summary_prefix) :] if summary.startswith(summary_prefix) else summary
+
+    user_messages: list[str] = []
+    if first_prompt:
+        user_messages.append(first_prompt)
+    user_highlights = details.get("user_highlights")
+    if isinstance(user_highlights, list):
+        user_messages.extend(str(item) for item in user_highlights if item)
+    elif not user_messages:
+        highlights = details.get("highlights")
+        if isinstance(highlights, list):
+            user_messages.extend(str(item) for item in highlights if item)
+
+    assistant_messages: list[str] = []
+    assistant_highlights = details.get("assistant_highlights")
+    if isinstance(assistant_highlights, list):
+        assistant_messages.extend(str(item) for item in assistant_highlights if item)
+    assistant_summary = str(details.get("assistant_summary") or "").strip()
+    if assistant_summary:
+        assistant_messages.append(assistant_summary)
+
+    session_ref = build_claude_session_ref(
+        file_path or f"store:{session_id or observation['event_fingerprint']}",
+        str(observation["occurred_at"]),
+    )
+    return build_packet(
+        packet_id=f"claude-store:{session_id or observation['event_fingerprint']}",
+        source=CLAUDE_SOURCE,
+        session_ref=session_ref,
+        session_id=session_id,
+        workspace=str(details.get("cwd") or observation.get("workspace") or ""),
+        timestamp=str(observation["occurred_at"]),
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        tools=[],
+    )
+
+
+def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    ordered = sorted(observations, key=lambda item: compare_iso_timestamps(item.get("occurred_at")))
+    anchor = ordered[-1]
+    session_id = None
+    workspace = None
+    timestamps: list[str] = []
+    user_messages: list[str] = []
+    assistant_messages: list[str] = []
+    tools: list[str] = []
+
+    for observation in ordered:
+        details = observation.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+        timestamps.append(str(observation["occurred_at"]))
+        if session_id is None:
+            raw_session_id = str(details.get("session_id") or "").strip()
+            session_id = raw_session_id or None
+        if workspace is None:
+            raw_workspace = str(details.get("cwd") or "").strip()
+            workspace = raw_workspace or None
+
+        event_type = str(observation.get("event_type") or "")
+        if event_type == "commentary":
+            user_highlights = details.get("user_highlights")
+            if isinstance(user_highlights, list):
+                user_messages.extend(str(item) for item in user_highlights if item)
+            assistant_highlights = details.get("assistant_highlights")
+            if isinstance(assistant_highlights, list):
+                assistant_messages.extend(str(item) for item in assistant_highlights if item)
+            summary = str(observation.get("summary") or "").strip()
+            if summary:
+                user_messages.append(summary)
+        elif event_type == "session_meta":
+            summary = str(observation.get("summary") or "").strip()
+            if summary:
+                assistant_messages.append(summary)
+        elif event_type == "tool_call":
+            tool_items = details.get("tools")
+            if isinstance(tool_items, list):
+                for tool in tool_items:
+                    if not isinstance(tool, dict):
+                        continue
+                    name = str(tool.get("name") or "").strip().lower()
+                    count = int(tool.get("count") or 0)
+                    if name and count > 0:
+                        tools.extend([name] * count)
+
+    timestamp = max(timestamps, key=compare_iso_timestamps)
+    session_ref = build_codex_session_ref(session_id or f"store-{anchor['event_fingerprint']}", timestamp)
+    return build_packet(
+        packet_id=f"codex-store:{session_id or anchor['event_fingerprint']}",
+        source=CODEX_SOURCE,
+        session_ref=session_ref,
+        session_id=session_id,
+        workspace=workspace,
+        timestamp=timestamp,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        tools=tools,
+    )
+
+
+def read_store_packets(
+    store_path: Path,
+    *,
+    workspace: Path | None,
+    all_sessions: bool,
+    max_days: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    threshold = (datetime.now(timezone.utc).astimezone() - timedelta(days=max_days)).isoformat()
+    observations = get_observations(
+        store_path,
+        workspace=workspace,
+        since=threshold,
+        all_sessions=all_sessions,
+        source_names=[CLAUDE_SOURCE, CODEX_SOURCE],
+    )
+    deduped_observations = _dedupe_observations(observations)
+    claude_observations = [observation for observation in deduped_observations if observation["source_name"] == CLAUDE_SOURCE]
+    codex_observations = [observation for observation in deduped_observations if observation["source_name"] == CODEX_SOURCE]
+
+    packets = [_packet_from_claude_observation(observation) for observation in claude_observations]
+    codex_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for observation in codex_observations:
+        details = observation.get("details", {})
+        session_id = None
+        if isinstance(details, dict):
+            raw_session_id = str(details.get("session_id") or "").strip()
+            session_id = raw_session_id or None
+        codex_groups[session_id or str(observation["event_fingerprint"])].append(observation)
+    for group in codex_groups.values():
+        packets.append(_packet_from_codex_observations(group))
+
+    statuses = [
+        source_status(
+            CLAUDE_SOURCE,
+            "success" if claude_observations else "skipped",
+            packets_count=len(claude_observations),
+            reason=None if claude_observations else "store_empty",
+        ),
+        source_status(
+            CODEX_SOURCE,
+            "success" if codex_observations else "skipped",
+            packets_count=len(codex_groups),
+            reason=None if codex_observations else "store_empty",
+        ),
+    ]
+    return packets, statuses
+
+
+SKILL_MINER_EXPECTED_SOURCES = {CLAUDE_SOURCE, CODEX_SOURCE}
+
+
+
+def _store_slice_sufficient(
+    store_path: Path,
+    *,
+    workspace: Path | None,
+    expected_sources_workspace: Path,
+    all_sessions: bool,
+    max_days: int,
+    sources_file: str | None,
+) -> bool:
+    """Check if auto mode can safely reuse the current store slice."""
+    threshold = (datetime.now(timezone.utc).astimezone() - timedelta(days=max_days)).isoformat()
+    resolved_sources_file = resolve_sources_file_path(
+        sources_file,
+        default_sources_file=DEFAULT_SOURCES_FILE,
+    )
+    try:
+        expected_names, expected_fingerprints = load_expected_sources(
+            resolved_sources_file,
+            platform_name=current_platform(),
+            workspace=expected_sources_workspace,
+            script_dir=SCRIPT_DIR,
+            restrict_to_names=SKILL_MINER_EXPECTED_SOURCES,
+        )
+    except Exception as exc:
+        print(f"[warn] failed to load sources from {resolved_sources_file}: {exc}", file=sys.stderr)
+        return False
+    completeness = evaluate_slice_completeness(
+        store_path,
+        workspace=workspace,
+        since=threshold,
+        all_sessions=all_sessions,
+        expected_source_names=expected_names,
+        expected_fingerprints=expected_fingerprints or None,
+    )
+    return completeness["status"] == SLICE_COMPLETE
 
 
 def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
@@ -777,19 +1018,76 @@ def _dedupe_matches(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def build_candidate_comparison(selected_candidates: list[dict[str, Any]], legacy_candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    selected_labels = [str(candidate.get("label") or "") for candidate in selected_candidates if candidate.get("label")]
+    legacy_labels = [str(candidate.get("label") or "") for candidate in legacy_candidates if candidate.get("label")]
+    selected_set = set(selected_labels)
+    legacy_set = set(legacy_labels)
+    return {
+        "selected_candidate_count": len(selected_candidates),
+        "legacy_candidate_count": len(legacy_candidates),
+        "shared_labels": sorted(selected_set & legacy_set),
+        "selected_only_labels": sorted(selected_set - legacy_set),
+        "legacy_only_labels": sorted(legacy_set - selected_set),
+    }
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
     try:
-        workspace = None if args.all_sessions else resolve_workspace(args.workspace)
+        resolved_workspace = resolve_workspace(args.workspace)
+        workspace = None if args.all_sessions else resolved_workspace
         claude_root = Path(args.claude_root).expanduser().resolve()
         codex_history_file = Path(args.codex_history_file).expanduser().resolve()
         codex_sessions_root = Path(args.codex_sessions_root).expanduser().resolve()
+        max_window_days = WORKSPACE_ADAPTIVE_EXPANDED_DAYS if not args.all_sessions else args.days
+        resolved_store_path = resolve_store_path(args.store_path) if args.store_path else None
 
-        claude_packets, claude_status = read_claude_packets(claude_root, workspace, args.gap_hours)
-        codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace)
-        all_packets = claude_packets + codex_packets
+        selected_input_source = "raw"
+        source_statuses: list[dict[str, Any]] = []
+        if args.input_source in {"store", "auto"}:
+            if resolved_store_path is None:
+                raise ValueError("--store-path is required when --input-source is store or auto")
+            store_packets, store_statuses = read_store_packets(
+                resolved_store_path,
+                workspace=workspace,
+                all_sessions=args.all_sessions,
+                max_days=max(max_window_days, args.days),
+            )
+            if args.input_source == "store":
+                all_packets = store_packets
+                source_statuses = store_statuses
+                selected_input_source = "store"
+            elif store_packets and _store_slice_sufficient(
+                resolved_store_path,
+                workspace=workspace,
+                expected_sources_workspace=resolved_workspace,
+                all_sessions=args.all_sessions,
+                max_days=max(max_window_days, args.days),
+                sources_file=args.sources_file,
+            ):
+                all_packets = store_packets
+                source_statuses = store_statuses
+                selected_input_source = "store"
+            else:
+                all_packets, source_statuses = collect_raw_packets(
+                    workspace=workspace,
+                    claude_root=claude_root,
+                    codex_history_file=codex_history_file,
+                    codex_sessions_root=codex_sessions_root,
+                    gap_hours=args.gap_hours,
+                )
+                selected_input_source = "raw"
+        else:
+            all_packets, source_statuses = collect_raw_packets(
+                workspace=workspace,
+                claude_root=claude_root,
+                codex_history_file=codex_history_file,
+                codex_sessions_root=codex_sessions_root,
+                gap_hours=args.gap_hours,
+            )
 
         initial_window = prepare_window_result(all_packets, args.days)
         effective_window = initial_window
@@ -814,7 +1112,7 @@ def main() -> None:
             "source": PREPARE_SOURCE,
             "candidates": top_candidates,
             "unclustered": limited_unclustered,
-            "sources": [claude_status, codex_status],
+            "sources": source_statuses,
             "summary": {
                 "total_packets": len(all_packets),
                 "total_candidates": len(candidates),
@@ -834,6 +1132,8 @@ def main() -> None:
                 "workspace": str(workspace) if workspace else None,
                 "all_sessions": args.all_sessions,
                 "observation_mode": "all-sessions" if args.all_sessions else "workspace",
+                "input_source": selected_input_source,
+                "input_fidelity": "approximate" if selected_input_source == "store" else "original",
                 "date_window_start": date_window_start,
                 "adaptive_window": {
                     "enabled": not args.all_sessions,
@@ -848,8 +1148,33 @@ def main() -> None:
                 },
             },
         }
+        if args.compare_legacy and selected_input_source == "store":
+            legacy_packets, _legacy_statuses = collect_raw_packets(
+                workspace=workspace,
+                claude_root=claude_root,
+                codex_history_file=codex_history_file,
+                codex_sessions_root=codex_sessions_root,
+                gap_hours=args.gap_hours,
+            )
+            legacy_window = prepare_window_result(legacy_packets, effective_window["days"])
+            payload["comparison"] = {
+                "legacy_input_source": "raw",
+                **build_candidate_comparison(top_candidates, legacy_window["candidates"][: max(0, args.top_n)]),
+            }
         if args.dump_intents:
             payload["intent_analysis"] = build_intent_analysis(all_packets)
+        if resolved_store_path is not None:
+            no_sources = payload.get("summary", {}).get("no_sources_available", False)
+            has_candidates = len(top_candidates) > 0
+            all_sources_failed = all(
+                s.get("status") != "success" for s in source_statuses
+            ) if source_statuses else True
+            should_persist = has_candidates and not no_sources and not all_sources_failed
+            if should_persist:
+                try:
+                    persist_patterns_from_prepare(payload, store_path=resolved_store_path)
+                except Exception as persist_exc:
+                    print(f"[warn] pattern persistence failed: {persist_exc}", file=sys.stderr)
         emit(payload)
     except Exception as exc:
         emit(error_response(PREPARE_SOURCE, str(exc)))

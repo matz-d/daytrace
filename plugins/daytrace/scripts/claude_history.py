@@ -159,6 +159,8 @@ def main() -> None:
                 "message_count": group["message_count"],
                 "user_message_count": group["user_count"],
                 "assistant_message_count": group["assistant_count"],
+                "user_highlights": group["user_excerpts"],
+                "assistant_highlights": group["assistant_excerpts"],
                 "highlights": group["user_excerpts"] + group["assistant_excerpts"],
             }
             if group["assistant_excerpts"]:
