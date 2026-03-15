@@ -1,0 +1,12 @@
+{
+  "name": "broken-user-drop-in",
+  "command": "python3 scripts/broken_user_drop_in.py",
+  "required": false,
+  "timeout_sec": 15,
+  "platforms": ["darwin", "linux"],
+  "supports_date_range": true,
+  "supports_all_sessions": false,
+  "scope_mode": "invalid-scope",
+  "prerequisites": [],
+  "confidence_category": "file_activity"
+}

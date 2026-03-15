@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -17,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from skill_miner_common import annotate_unclustered_packet, build_candidate_quality, build_proposal_sections, candidate_label, compact_snippet, judge_research_candidate
+from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, read_claude_packets, read_codex_packets, read_store_packets
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -211,6 +214,266 @@ class SkillMinerTests(unittest.TestCase):
 
         return workspace, claude_root, codex_history, codex_sessions
 
+    def create_wrapper_heavy_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        claude_root = root / "claude"
+        codex_history = root / "codex" / "history.jsonl"
+        codex_sessions = root / "codex" / "sessions"
+
+        claude_file = claude_root / "repo" / "session-wrapper.jsonl"
+        write_jsonl(
+            claude_file,
+            [
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T11:00:00+09:00",
+                    "message": {"role": "user", "content": "<command-name>/clear</command-name> <command-message>clear</command-message>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T11:00:15+09:00",
+                    "message": {"role": "user", "content": "<command-name>/simplify</command-name> <command-message>simplify</command-message>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T11:00:30+09:00",
+                    "message": {"role": "user", "content": "<task-notification>subagent started</task-notification>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T11:01:00+09:00",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            f"Inspect {workspace}/plugins/daytrace/scripts/skill_miner_prepare.py with `rg` and `git diff`, "
+                            "then write a markdown report about raw/store parity and include research targets."
+                        ),
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T11:02:00+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I will inspect the parity issue with rg, git diff, and python3, then write findings in markdown.",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T20:30:00+09:00",
+                    "message": {"role": "user", "content": "<command-name>/clear</command-name> <command-message>clear</command-message>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T20:30:15+09:00",
+                    "message": {"role": "user", "content": "<command-name>/simplify</command-name> <command-message>simplify</command-message>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T20:30:30+09:00",
+                    "message": {"role": "user", "content": "<task-notification>subagent started</task-notification>"},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T20:31:00+09:00",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            f"Inspect {workspace}/plugins/daytrace/scripts/skill_miner_prepare.py with `rg` and `git diff`, "
+                            "then write another markdown report about raw/store parity and keep the research targets."
+                        ),
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-wrapper",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T20:32:00+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I will inspect the script again with rg, git diff, and python3, then write the parity findings in markdown.",
+                            }
+                        ],
+                    },
+                },
+            ],
+        )
+
+        write_jsonl(
+            codex_history,
+            [
+                {"session_id": "codex-wrapper", "ts": 1773021000, "text": "Start a parity review session."},
+                {"session_id": "codex-wrapper", "ts": 1773021030, "text": "Keep the same wrapper handling as before."},
+                {"session_id": "codex-wrapper", "ts": 1773021060, "text": "Use the existing workflow and avoid unrelated changes."},
+                {
+                    "session_id": "codex-wrapper",
+                    "ts": 1773021090,
+                    "text": (
+                        f"Inspect {workspace}/plugins/daytrace/scripts/skill_miner_prepare.py, run `rg` and `git diff`, "
+                        "and write a markdown parity report with research targets."
+                    ),
+                },
+                {"session_id": "codex-wrapper-2", "ts": 1773053700, "text": "Start a second parity review session."},
+                {"session_id": "codex-wrapper-2", "ts": 1773053730, "text": "Keep the same wrapper handling as before."},
+                {"session_id": "codex-wrapper-2", "ts": 1773053760, "text": "Use the existing workflow and avoid unrelated changes."},
+                {
+                    "session_id": "codex-wrapper-2",
+                    "ts": 1773053790,
+                    "text": (
+                        f"Inspect {workspace}/plugins/daytrace/scripts/skill_miner_prepare.py, run `rg` and `git diff`, "
+                        "and write another markdown parity report with research targets."
+                    ),
+                },
+                {"session_id": "codex-build", "ts": 1773024600, "text": "Implement another feature and update config."},
+            ],
+        )
+
+        wrapper_rollout = codex_sessions / "2026" / "03" / "09" / "rollout-wrapper.jsonl"
+        wrapper_rollout_two = codex_sessions / "2026" / "03" / "09" / "rollout-wrapper-two.jsonl"
+        build_rollout = codex_sessions / "2026" / "03" / "09" / "rollout-build.jsonl"
+        write_jsonl(
+            wrapper_rollout,
+            [
+                {
+                    "timestamp": "2026-03-09T11:05:00+09:00",
+                    "type": "session_meta",
+                    "payload": {"id": "codex-wrapper", "timestamp": "2026-03-09T11:05:00+09:00", "cwd": str(workspace)},
+                },
+                {
+                    "timestamp": "2026-03-09T11:05:01+09:00",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "Continue the parity fix and keep command signals."},
+                },
+                {
+                    "timestamp": "2026-03-09T11:05:02+09:00",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "I will inspect the script, preserve rg/git/python3 signals, and report the drift."}],
+                    },
+                },
+                {
+                    "timestamp": "2026-03-09T11:05:03+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "rg -n parity plugins/daytrace/scripts/skill_miner_prepare.py"})},
+                },
+                {
+                    "timestamp": "2026-03-09T11:05:04+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "git diff -- plugins/daytrace/scripts/skill_miner_prepare.py"})},
+                },
+                {
+                    "timestamp": "2026-03-09T11:05:05+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "python3 plugins/daytrace/scripts/skill_miner_prepare.py --help"})},
+                },
+            ],
+        )
+        write_jsonl(
+            wrapper_rollout_two,
+            [
+                {
+                    "timestamp": "2026-03-09T20:35:00+09:00",
+                    "type": "session_meta",
+                    "payload": {"id": "codex-wrapper-2", "timestamp": "2026-03-09T20:35:00+09:00", "cwd": str(workspace)},
+                },
+                {
+                    "timestamp": "2026-03-09T20:35:01+09:00",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "Continue the parity fix and keep command signals."},
+                },
+                {
+                    "timestamp": "2026-03-09T20:35:02+09:00",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "I will inspect the script, preserve rg/git/python3 signals, and report the drift again."}],
+                    },
+                },
+                {
+                    "timestamp": "2026-03-09T20:35:03+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "rg -n parity plugins/daytrace/scripts/skill_miner_prepare.py"})},
+                },
+                {
+                    "timestamp": "2026-03-09T20:35:04+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "git diff -- plugins/daytrace/scripts/skill_miner_prepare.py"})},
+                },
+                {
+                    "timestamp": "2026-03-09T20:35:05+09:00",
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "python3 plugins/daytrace/scripts/skill_miner_prepare.py --help"})},
+                },
+            ],
+        )
+        write_jsonl(
+            build_rollout,
+            [
+                {
+                    "timestamp": "2026-03-09T12:10:00+09:00",
+                    "type": "session_meta",
+                    "payload": {"id": "codex-build", "timestamp": "2026-03-09T12:10:00+09:00", "cwd": str(workspace)},
+                },
+                {
+                    "timestamp": "2026-03-09T12:10:01+09:00",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "Implement another feature and edit config."},
+                },
+                {
+                    "timestamp": "2026-03-09T12:10:02+09:00",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "I will implement the feature and update the config."}],
+                    },
+                },
+            ],
+        )
+
+        return workspace, claude_root, codex_history, codex_sessions
+
     def run_prepare(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, *extra_args: str) -> dict:
         completed = subprocess.run(
             [
@@ -240,8 +503,8 @@ class SkillMinerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success", msg=completed.stdout)
         return payload
 
-    def seed_store(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, store_path: Path) -> None:
-        sources_file = store_path.parent / "sources.json"
+    def write_sources_file(self, root: Path, claude_root: Path, codex_history: Path, codex_sessions: Path) -> Path:
+        sources_file = root / "sources.json"
         sources_file.write_text(
             json.dumps(
                 [
@@ -274,6 +537,10 @@ class SkillMinerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        return sources_file
+
+    def seed_store(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, store_path: Path) -> None:
+        sources_file = self.write_sources_file(store_path.parent, claude_root, codex_history, codex_sessions)
         completed = subprocess.run(
             [
                 "python3",
@@ -356,6 +623,69 @@ class SkillMinerTests(unittest.TestCase):
             self.assertGreaterEqual(len(payload["candidates"]), 1)
             self.assertIn("comparison", payload)
             self.assertGreaterEqual(payload["comparison"]["legacy_candidate_count"], 1)
+            self.assertGreaterEqual(payload["comparison"]["label_overlap_ratio"], 0.5)
+            self.assertEqual(payload["comparison"]["warnings"], [])
+            self.assertEqual(payload["config"]["pattern_persist"]["status"], "persisted")
+
+    def test_prepare_auto_hydrates_store_for_workspace_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+                "--compare-legacy",
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "store")
+            self.assertGreaterEqual(len(payload["candidates"]), 1)
+            self.assertIn("comparison", payload)
+            self.assertGreaterEqual(payload["comparison"]["legacy_candidate_count"], 1)
+
+    def test_prepare_store_hydrates_missing_workspace_slice(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+                "--compare-legacy",
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "store")
+            self.assertGreaterEqual(len(payload["candidates"]), 1)
+            self.assertIn("comparison", payload)
+
+    def test_store_slice_bounds_are_stable_within_same_day(self) -> None:
+        reference_now = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc).astimezone()
+        later_same_day = reference_now + timedelta(minutes=5)
+
+        self.assertEqual(
+            _store_slice_bounds(reference_now=reference_now, days=30),
+            _store_slice_bounds(reference_now=later_same_day, days=30),
+        )
 
     def test_prepare_store_input_ignores_non_numeric_tool_counts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -400,6 +730,222 @@ class SkillMinerTests(unittest.TestCase):
 
             self.assertEqual(payload["config"]["input_source"], "store")
             self.assertGreaterEqual(payload["summary"]["total_packets"], 1)
+
+    def test_store_seed_preserves_logical_packets_and_command_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            connection = sqlite3.connect(store_path)
+            claude_row = connection.execute(
+                """
+                SELECT details_json
+                FROM observations
+                WHERE source_name = 'claude-history' AND event_type = 'session_summary'
+                LIMIT 1
+                """
+            ).fetchone()
+            codex_row = connection.execute(
+                """
+                SELECT details_json
+                FROM observations
+                WHERE source_name = 'codex-history' AND event_type = 'tool_call' AND details_json LIKE '%codex-review%'
+                LIMIT 1
+                """
+            ).fetchone()
+            connection.close()
+
+            self.assertIsNotNone(claude_row)
+            self.assertIsNotNone(codex_row)
+
+            claude_details = json.loads(str(claude_row[0]))
+            self.assertEqual(claude_details["logical_packet_count"], 2)
+            self.assertEqual(
+                [packet["started_at"] for packet in claude_details["logical_packets"]],
+                ["2026-03-09T00:00:00+09:00", "2026-03-09T09:30:00+09:00"],
+            )
+            self.assertIn("Review another PR under", claude_details["logical_packets"][1]["user_highlights"][0])
+            self.assertIn("/src/api.py", claude_details["logical_packets"][1]["user_highlights"][0])
+
+            codex_details = json.loads(str(codex_row[0]))
+            self.assertEqual(
+                [item["name"] for item in codex_details["tools"]],
+                ["rg", "git"],
+            )
+            self.assertIn("skill_miner_packet", claude_details["logical_packets"][0])
+            self.assertEqual(codex_details["skill_miner_packet"]["packet_id"], "codex:codex-review")
+
+    def test_prepare_store_matches_raw_candidate_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            raw_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            store_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+                "--compare-legacy",
+            )
+
+            raw_candidate = raw_payload["candidates"][0]
+            store_candidate = store_payload["candidates"][0]
+
+            self.assertEqual(store_payload["summary"]["total_packets"], raw_payload["summary"]["total_packets"])
+            self.assertEqual(store_candidate["label"], raw_candidate["label"])
+            self.assertEqual(store_candidate["common_task_shapes"], raw_candidate["common_task_shapes"])
+            self.assertEqual(store_candidate["artifact_hints"], raw_candidate["artifact_hints"])
+            self.assertEqual(store_candidate["common_tool_signatures"], raw_candidate["common_tool_signatures"])
+            self.assertEqual(store_candidate["triage_status"], raw_candidate["triage_status"])
+            self.assertEqual(store_candidate["confidence"], raw_candidate["confidence"])
+            self.assertEqual(
+                [(item["source"], item["summary"]) for item in store_candidate["evidence_items"]],
+                [(item["source"], item["summary"]) for item in raw_candidate["evidence_items"]],
+            )
+            self.assertEqual(
+                [(item["reason"], item["session_ref"].split(":", 1)[0]) for item in store_candidate["research_targets"]],
+                [(item["reason"], item["session_ref"].split(":", 1)[0]) for item in raw_candidate["research_targets"]],
+            )
+            self.assertEqual(
+                store_payload["comparison"]["shared_labels"],
+                [raw_candidate["label"]],
+            )
+
+    def test_store_packet_restoration_matches_raw_for_wrapper_heavy_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            raw_claude_packets, _ = read_claude_packets(claude_root, workspace, 8)
+            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace)
+            raw_packets = raw_claude_packets + raw_codex_packets
+            store_packets, _store_statuses = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            raw_by_packet = {packet["packet_id"]: packet for packet in raw_packets}
+            store_by_packet = {packet["packet_id"]: packet for packet in store_packets}
+            self.assertEqual(set(store_by_packet), set(raw_by_packet))
+            self.assertTrue(all(packet["_fidelity"] == "original" for packet in raw_packets))
+            self.assertTrue(all(packet["_fidelity"] == "canonical" for packet in store_packets))
+            for packet_id, raw_packet in raw_by_packet.items():
+                store_packet = store_by_packet[packet_id]
+                for key in [
+                    "primary_intent",
+                    "task_shape",
+                    "artifact_hints",
+                    "tool_signature",
+                    "representative_snippets",
+                ]:
+                    self.assertEqual(store_packet[key], raw_packet[key], msg=f"{packet_id} {key}")
+
+    def test_prepare_store_matches_raw_candidate_semantics_for_wrapper_heavy_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            raw_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            store_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+                "--compare-legacy",
+            )
+
+            raw_candidate = raw_payload["candidates"][0]
+            store_candidate = store_payload["candidates"][0]
+            self.assertEqual(store_candidate["label"], raw_candidate["label"])
+            self.assertEqual(store_candidate["common_task_shapes"], raw_candidate["common_task_shapes"])
+            self.assertEqual(store_candidate["artifact_hints"], raw_candidate["artifact_hints"])
+            self.assertEqual(store_candidate["common_tool_signatures"], raw_candidate["common_tool_signatures"])
+            self.assertEqual(store_candidate["triage_status"], raw_candidate["triage_status"])
+            self.assertEqual(store_candidate["confidence"], raw_candidate["confidence"])
+            self.assertEqual(
+                [(item["source"], item["summary"]) for item in store_candidate["evidence_items"]],
+                [(item["source"], item["summary"]) for item in raw_candidate["evidence_items"]],
+            )
+            self.assertEqual(
+                [(item["reason"], item["session_ref"].split(":", 1)[0]) for item in store_candidate["research_targets"]],
+                [(item["reason"], item["session_ref"].split(":", 1)[0]) for item in raw_candidate["research_targets"]],
+            )
+
+    def test_read_store_packets_prefers_latest_observation_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            raw_claude_packets, _ = read_claude_packets(claude_root, workspace, 8)
+            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace)
+            store_packets, _ = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            self.assertEqual(len(store_packets), len(raw_claude_packets) + len(raw_codex_packets))
+            self.assertEqual(
+                {packet["packet_id"] for packet in store_packets},
+                {packet["packet_id"] for packet in raw_claude_packets + raw_codex_packets},
+            )
+
+    def test_store_seed_includes_rollout_only_codex_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            write_jsonl(
+                codex_sessions / "2026" / "03" / "09" / "rollout-rollout-only.jsonl",
+                [
+                    {
+                        "timestamp": "2026-03-09T05:00:00+09:00",
+                        "type": "session_meta",
+                        "payload": {"id": "codex-rollout-only", "timestamp": "2026-03-09T05:00:00+09:00", "cwd": str(workspace)},
+                    },
+                    {
+                        "timestamp": "2026-03-09T05:00:01+09:00",
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "Review the rollout-only session and keep the findings-first format."},
+                    },
+                    {
+                        "timestamp": "2026-03-09T05:00:02+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "I will inspect the files and summarize findings by severity."}],
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T05:00:03+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "rg -n TODO src/server.py"}),
+                        },
+                    },
+                ],
+            )
+
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+            store_packets, _ = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            self.assertIn("codex:codex-rollout-only", {packet["packet_id"] for packet in store_packets})
 
     def test_prepare_auto_falls_back_to_raw_when_store_slice_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -458,6 +1004,88 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(payload["config"]["input_fidelity"], "original")
             self.assertGreaterEqual(payload["summary"]["total_packets"], 2)
 
+    def test_prepare_auto_reuses_store_on_repeated_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+
+            first_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+
+            second_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+
+            self.assertEqual(first_payload["config"]["input_source"], "store")
+            self.assertEqual(second_payload["config"]["input_source"], "store")
+            self.assertEqual(
+                first_payload["summary"]["total_packets"],
+                second_payload["summary"]["total_packets"],
+            )
+            self.assertEqual(
+                first_payload["summary"]["total_candidates"],
+                second_payload["summary"]["total_candidates"],
+            )
+
+    def test_prepare_all_sessions_store_backed_matches_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+
+            raw_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--all-sessions",
+            )
+
+            store_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--all-sessions",
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+
+            self.assertEqual(store_payload["config"]["input_source"], "store")
+            self.assertEqual(
+                raw_payload["summary"]["total_candidates"],
+                store_payload["summary"]["total_candidates"],
+            )
+            raw_labels = sorted(c["label"] for c in raw_payload["candidates"])
+            store_labels = sorted(c["label"] for c in store_payload["candidates"])
+            self.assertEqual(raw_labels, store_labels)
+
     def test_prepare_skips_pattern_persist_on_empty_store_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -491,6 +1119,199 @@ class SkillMinerTests(unittest.TestCase):
             connection = sqlite3.connect(store_path)
             pattern_count = connection.execute("SELECT COUNT(*) FROM patterns").fetchone()[0]
             self.assertEqual(pattern_count, 0, "patterns should not be persisted for empty results")
+            connection.close()
+            self.assertEqual(payload["config"]["pattern_persist"]["status"], "skipped")
+            self.assertEqual(payload["config"]["pattern_persist"]["reason"], "no_candidates")
+
+    def test_prepare_reports_pattern_persist_failure_without_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            broken_store_path = root / "broken-store"
+            broken_store_path.mkdir()
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    "--workspace",
+                    str(workspace),
+                    "--claude-root",
+                    str(claude_root),
+                    "--codex-history-file",
+                    str(codex_history),
+                    "--codex-sessions-root",
+                    str(codex_sessions),
+                    "--store-path",
+                    str(broken_store_path),
+                    "--top-n",
+                    "5",
+                    "--max-unclustered",
+                    "5",
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success", msg=completed.stdout)
+            self.assertEqual(payload["config"]["pattern_persist"]["status"], "failed")
+            self.assertIn("[warn] pattern persistence failed", completed.stderr)
+
+    def test_prepare_does_not_replace_patterns_on_unsafe_raw_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+
+            first_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--store-path",
+                str(store_path),
+            )
+            self.assertEqual(first_payload["config"]["pattern_persist"]["status"], "persisted")
+            expected_labels = sorted(candidate["label"] for candidate in first_payload["candidates"])
+
+            missing_history = root / "missing" / "history.jsonl"
+            missing_sessions = root / "missing" / "sessions"
+            second_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                missing_history,
+                missing_sessions,
+                "--store-path",
+                str(store_path),
+            )
+            self.assertEqual(second_payload["config"]["pattern_persist"]["status"], "skipped")
+            self.assertIn(
+                second_payload["config"]["pattern_persist"]["reason"],
+                {"no_candidates", "source_status_not_success:codex-history"},
+            )
+
+            connection = sqlite3.connect(store_path)
+            pattern_count = connection.execute("SELECT COUNT(*) FROM patterns").fetchone()[0]
+            labels = [row[0] for row in connection.execute("SELECT label FROM patterns ORDER BY label ASC").fetchall()]
+            connection.close()
+            self.assertGreater(pattern_count, 0)
+            self.assertEqual(labels, expected_labels)
+
+    def test_prepare_auto_falls_back_to_raw_when_store_slice_stays_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            partial_sources_file = root / "partial-sources.json"
+            partial_sources_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "claude-history",
+                            "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'claude_history.py'} --root {claude_root}",
+                            "required": False,
+                            "timeout_sec": 30,
+                            "platforms": ["darwin", "linux"],
+                            "supports_date_range": True,
+                            "supports_all_sessions": True,
+                            "scope_mode": "all-day",
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(AGGREGATE),
+                    "--sources-file",
+                    str(partial_sources_file),
+                    "--workspace",
+                    str(workspace),
+                    "--since",
+                    "2026-03-01",
+                    "--until",
+                    "2026-03-12",
+                    "--store-path",
+                    str(store_path),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+
+            broken_sources_file = root / "broken-sources.json"
+            broken_sources_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "claude-history",
+                            "command": f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'claude_history.py'} --root {claude_root}",
+                            "required": False,
+                            "timeout_sec": 30,
+                            "platforms": ["darwin", "linux"],
+                            "supports_date_range": True,
+                            "supports_all_sessions": True,
+                            "scope_mode": "all-day",
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
+                        },
+                        {
+                            "name": "codex-history",
+                            "command": (
+                                f"python3 {REPO_ROOT / 'plugins' / 'daytrace' / 'scripts' / 'codex_history.py'} "
+                                f"--history-file {root / 'missing' / 'history.jsonl'} "
+                                f"--sessions-root {root / 'missing' / 'sessions'}"
+                            ),
+                            "required": False,
+                            "timeout_sec": 30,
+                            "platforms": ["darwin", "linux"],
+                            "supports_date_range": True,
+                            "supports_all_sessions": True,
+                            "scope_mode": "all-day",
+                            "prerequisites": [],
+                            "confidence_category": "ai_history",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(broken_sources_file),
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "raw")
+            self.assertEqual(payload["config"]["input_fidelity"], "original")
+
+    def test_build_candidate_comparison_emits_warning_for_low_overlap(self) -> None:
+        comparison = build_candidate_comparison(
+            [{"label": "Review workflow"}, {"label": "Build workflow"}],
+            [{"label": "Research workflow"}],
+        )
+
+        self.assertEqual(len(comparison["shared_labels"]), 0)
+        self.assertEqual(comparison["label_overlap_ratio"], 0.0)
+        self.assertEqual(len(comparison["warnings"]), 1)
 
     def test_prepare_reports_effective_observation_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

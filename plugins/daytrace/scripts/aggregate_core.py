@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from common import default_chrome_root, ensure_datetime, parse_datetime
-from source_registry import load_sources
+from source_registry import DEFAULT_USER_SOURCES_DIR, load_registry
 
 
 DEFAULT_GROUP_WINDOW_MINUTES = 15
@@ -325,7 +325,13 @@ def load_expected_sources(
     script_dir: Path,
     restrict_to_names: set[str] | None = None,
 ) -> tuple[set[str], dict[str, str]]:
-    sources = load_sources(sources_file)
+    default_sources_file = (script_dir / "sources.json").resolve()
+    resolved_sources_file = sources_file.resolve()
+    sources = load_registry(
+        resolved_sources_file,
+        user_sources_dir=DEFAULT_USER_SOURCES_DIR,
+        include_user_sources=resolved_sources_file == default_sources_file,
+    )
     names = expected_source_names(
         sources,
         platform_name=platform_name,
@@ -474,6 +480,8 @@ def build_groups(
             }
             for event in events[:evidence_limit]
         ]
+        # Keep `timeline` and `groups[].events` pointing at the same event objects so
+        # the AR1a contract can expose `timeline[].group_id` without rebuilding copies.
         for event in events:
             event["group_id"] = group_id
 

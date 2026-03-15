@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -15,8 +16,10 @@ if str(SCRIPT_DIR) not in sys.path:
 from source_registry import (
     MANIFEST_KIND,
     SOURCE_IDENTITY_VERSION,
+    RegistryValidationError,
     build_source_identity,
     compute_manifest_fingerprint,
+    load_registry,
     load_sources,
 )
 
@@ -49,6 +52,43 @@ def make_source_entry(
 
 
 class SourceRegistryTests(unittest.TestCase):
+    def test_load_registry_merges_built_in_and_user_dropins(self) -> None:
+        fixture_root = SCRIPT_DIR / "tests" / "fixtures" / "source_registry"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            built_in_file = root / "sources.json"
+            built_in_file.write_text(json.dumps([make_source_entry("built-in-source")]), encoding="utf-8")
+            user_sources_dir = root / "sources.d"
+            user_sources_dir.mkdir()
+            shutil.copyfile(fixture_root / "user_drop_in.json", user_sources_dir / "user_drop_in.json")
+
+            sources = load_registry(built_in_file, user_sources_dir=user_sources_dir)
+
+            self.assertEqual([source["name"] for source in sources], ["built-in-source", "user-drop-in"])
+            user_source = next(source for source in sources if source["name"] == "user-drop-in")
+            self.assertEqual(user_source["registry_scope"], "user")
+            self.assertEqual(Path(user_source["manifest_path"]).name, "user_drop_in.json")
+
+    def test_load_registry_reports_invalid_user_manifest_machine_readably(self) -> None:
+        fixture_root = SCRIPT_DIR / "tests" / "fixtures" / "source_registry"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            built_in_file = root / "sources.json"
+            built_in_file.write_text(json.dumps([make_source_entry("built-in-source")]), encoding="utf-8")
+            user_sources_dir = root / "sources.d"
+            user_sources_dir.mkdir()
+            shutil.copyfile(fixture_root / "invalid_manifest.json", user_sources_dir / "invalid_manifest.json")
+
+            with self.assertRaises(RegistryValidationError) as context:
+                load_registry(built_in_file, user_sources_dir=user_sources_dir)
+
+            self.assertEqual(len(context.exception.issues), 1)
+            issue = context.exception.issues[0]
+            self.assertEqual(issue["kind"], "invalid_manifest")
+            self.assertEqual(issue["registry_scope"], "user")
+            self.assertEqual(Path(issue["path"]).name, "invalid_manifest.json")
+            self.assertIn("scope_mode must be one of", issue["message"])
+
     def test_built_in_sources_json_loads_with_identity_and_fingerprint(self) -> None:
         sources_file = SCRIPT_DIR / "sources.json"
         sources = load_sources(sources_file)

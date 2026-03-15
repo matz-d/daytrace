@@ -178,6 +178,8 @@ class ProjectionAdapterTests(unittest.TestCase):
         sources_file: Path,
         *extra_args: str,
         all_sessions: bool = True,
+        since: str = "2026-03-12",
+        until: str = "2026-03-12",
     ) -> dict:
         command = [
             "python3",
@@ -187,9 +189,9 @@ class ProjectionAdapterTests(unittest.TestCase):
             "--workspace",
             str(workspace),
             "--since",
-            "2026-03-12",
+            since,
             "--until",
-            "2026-03-12",
+            until,
             "--store-path",
             str(store_path),
             *extra_args,
@@ -208,23 +210,34 @@ class ProjectionAdapterTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success", msg=completed.stdout)
         return payload
 
-    def run_aggregate(self, sources_file: Path, workspace: Path, store_path: Path) -> dict:
+    def run_aggregate(
+        self,
+        sources_file: Path,
+        workspace: Path,
+        store_path: Path,
+        *,
+        since: str = "2026-03-12",
+        until: str = "2026-03-12",
+        all_sessions: bool = True,
+    ) -> dict:
+        command = [
+            "python3",
+            str(AGGREGATE),
+            "--sources-file",
+            str(sources_file),
+            "--workspace",
+            str(workspace),
+            "--since",
+            since,
+            "--until",
+            until,
+            "--store-path",
+            str(store_path),
+        ]
+        if all_sessions:
+            command.append("--all-sessions")
         completed = subprocess.run(
-            [
-                "python3",
-                str(AGGREGATE),
-                "--sources-file",
-                str(sources_file),
-                "--workspace",
-                str(workspace),
-                "--since",
-                "2026-03-12",
-                "--until",
-                "2026-03-12",
-                "--all-sessions",
-                "--store-path",
-                str(store_path),
-            ],
+            command,
             cwd=str(PLUGIN_ROOT),
             capture_output=True,
             text=True,
@@ -308,6 +321,118 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertEqual(payload["groups"], [])
             self.assertTrue(payload["summary"]["no_sources_available"])
 
+    def test_daily_projection_no_hydrate_reuses_covering_broader_slice(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+
+            payload = self.run_cli(
+                DAILY_PROJECTION,
+                store_path,
+                workspace,
+                sources_file,
+                "--no-hydrate",
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            self.assertEqual(len(payload["sources"]), 3)
+            self.assertEqual(len(payload["timeline"]), 3)
+            self.assertEqual(len(payload["groups"]), 2)
+            self.assertEqual(payload["summary"]["source_status_counts"]["success"], 3)
+            self.assertEqual(payload["config"]["slice_completeness"]["status"], "complete")
+
+    def test_daily_projection_no_hydrate_reports_partial_slice_completeness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sources_file, workspace, store_path = self.create_fixture(root)
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            extra_source = root / "extra_source.py"
+            write_file(
+                extra_source,
+                textwrap.dedent(
+                    """
+                    import json
+
+                    print(json.dumps({"status": "success", "source": "extra-source", "events": []}))
+                    """
+                ).strip(),
+            )
+            expanded_sources_file = root / "expanded-sources.json"
+            expanded_sources_file.write_text(
+                json.dumps(
+                    json.loads(sources_file.read_text(encoding="utf-8"))
+                    + [
+                        make_source_entry(
+                            "extra-source",
+                            f"python3 {extra_source}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="other",
+                            scope_mode="all-day",
+                        )
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_cli(
+                DAILY_PROJECTION,
+                store_path,
+                workspace,
+                expanded_sources_file,
+                "--no-hydrate",
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            self.assertEqual(payload["config"]["slice_completeness"]["status"], "partial")
+            self.assertEqual(payload["config"]["slice_completeness"]["missing_sources"], ["extra-source"])
+
+    def test_daily_projection_no_hydrate_dedupes_overlapping_covering_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            payload = self.run_cli(
+                DAILY_PROJECTION,
+                store_path,
+                workspace,
+                sources_file,
+                "--no-hydrate",
+            )
+
+            self.assertEqual(len(payload["sources"]), 3)
+            self.assertEqual(len(payload["timeline"]), 3)
+            self.assertEqual([group["event_count"] for group in payload["groups"]], [2, 1])
+
     def test_projection_timeline_has_group_id_matching_groups(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
@@ -334,6 +459,63 @@ class ProjectionAdapterTests(unittest.TestCase):
 
             for event in payload["timeline"]:
                 self.assertIn("group_id", event, f"post-draft timeline event missing group_id: {event.get('summary')}")
+
+    def test_daily_projection_broader_slice_sources_timeline_groups_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+
+            payload = self.run_cli(
+                DAILY_PROJECTION,
+                store_path,
+                workspace,
+                sources_file,
+                "--no-hydrate",
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            source_names_from_sources = sorted(s["name"] for s in payload["sources"])
+            source_names_from_timeline = sorted({e["source"] for e in payload["timeline"]})
+            source_names_from_groups = sorted(
+                {s for g in payload["groups"] for s in g["sources"]}
+            )
+
+            self.assertEqual(source_names_from_sources, ["ai-source", "browser-source", "workspace-source"])
+            self.assertEqual(source_names_from_timeline, source_names_from_sources)
+            self.assertEqual(source_names_from_groups, source_names_from_sources)
+
+            total_events_in_groups = sum(g["event_count"] for g in payload["groups"])
+            self.assertEqual(total_events_in_groups, len(payload["timeline"]))
+
+    def test_daily_projection_overlapping_slices_match_single_narrower(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+
+            # Narrower-only baseline
+            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-12", until="2026-03-12")
+            narrower_payload = self.run_cli(
+                DAILY_PROJECTION, store_path, workspace, sources_file, "--no-hydrate",
+            )
+
+            # Add broader run on top
+            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-01", until="2026-03-31")
+            overlapping_payload = self.run_cli(
+                DAILY_PROJECTION, store_path, workspace, sources_file, "--no-hydrate",
+            )
+
+            self.assertEqual(len(narrower_payload["timeline"]), len(overlapping_payload["timeline"]))
+            self.assertEqual(
+                [g["event_count"] for g in narrower_payload["groups"]],
+                [g["event_count"] for g in overlapping_payload["groups"]],
+            )
+            self.assertEqual(narrower_payload["summary"], overlapping_payload["summary"])
 
     def test_post_projection_includes_cached_patterns(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

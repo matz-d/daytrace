@@ -161,10 +161,20 @@ def sanitize_url_domain(raw_url: str) -> str:
 def mask_paths(text: str, workspace: str | None) -> str:
     masked = text
     if workspace:
-        normalized = str(Path(workspace).expanduser())
-        masked = masked.replace(normalized, "[WORKSPACE]")
+        aliases = _workspace_aliases(str(Path(workspace).expanduser()))
+        for alias in sorted(aliases, key=len, reverse=True):
+            masked = masked.replace(alias, "[WORKSPACE]")
     masked = PATH_PATTERN.sub(_replace_path_token, masked)
     return masked
+
+
+def _workspace_aliases(workspace: str) -> set[str]:
+    aliases = {workspace}
+    if workspace.startswith("/private/var/"):
+        aliases.add(workspace[len("/private") :])
+    elif workspace.startswith("/var/"):
+        aliases.add(f"/private{workspace}")
+    return aliases
 
 
 def _replace_path_token(match: re.Match[str]) -> str:
@@ -223,6 +233,93 @@ def extract_known_commands(text: str) -> list[str]:
         if lowered in COMMON_COMMANDS:
             commands.append(lowered)
     return commands
+
+
+def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) -> list[dict[str, Any]]:
+    logical_packets: list[dict[str, Any]] = []
+    packet_records: list[dict[str, Any]] = []
+    last_timestamp = None
+    last_sidechain = None
+    last_cwd = None
+
+    def flush_packet() -> None:
+        nonlocal packet_records
+        if not packet_records:
+            return
+        user_messages: list[str] = []
+        assistant_messages: list[str] = []
+        tools: list[str] = []
+        timestamps: list[str] = []
+        cwd = None
+        session_id = None
+        is_sidechain = False
+        for record in packet_records:
+            timestamps.append(str(record.get("timestamp")))
+            cwd = record.get("cwd") or cwd
+            session_id = record.get("sessionId") or session_id
+            is_sidechain = bool(record.get("isSidechain"))
+            text = claude_message_text(record.get("message"))
+            if record.get("type") == "user":
+                user_messages.append(text)
+            else:
+                assistant_messages.append(text)
+            message = record.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), list):
+                for item in message["content"]:
+                    if isinstance(item, dict) and item.get("type") == "tool_use":
+                        name = str(item.get("name") or "").lower()
+                        if name:
+                            tools.append(name)
+            tools.extend(extract_known_commands(text))
+
+        logical_packets.append(
+            {
+                "started_at": earliest_iso_timestamp(timestamps),
+                "ended_at": max(timestamps, key=compare_iso_timestamps, default=None),
+                "timestamps": timestamps,
+                "cwd": str(cwd) if cwd else None,
+                "session_id": str(session_id) if session_id else None,
+                "is_sidechain": is_sidechain,
+                "user_messages": user_messages,
+                "assistant_messages": assistant_messages,
+                "tools": tools,
+                "message_count": len(user_messages) + len(assistant_messages),
+                "user_message_count": len(user_messages),
+                "assistant_message_count": len(assistant_messages),
+            }
+        )
+        packet_records = []
+
+    for record in records:
+        record_type = record.get("type")
+        if record_type not in {"user", "assistant"}:
+            continue
+        if record.get("isMeta"):
+            continue
+        timestamp_value = record.get("timestamp")
+        current_timestamp = ensure_datetime(timestamp_value)
+        if current_timestamp is None:
+            continue
+        current_sidechain = bool(record.get("isSidechain"))
+        current_cwd = record.get("cwd")
+        should_split = False
+        if packet_records and last_timestamp is not None:
+            gap_seconds = current_timestamp.timestamp() - last_timestamp.timestamp()
+            if gap_seconds >= gap_hours * 60 * 60:
+                should_split = True
+        if packet_records and last_sidechain is not None and current_sidechain != last_sidechain:
+            should_split = True
+        if packet_records and last_cwd is not None and current_cwd != last_cwd:
+            should_split = True
+        if should_split:
+            flush_packet()
+        packet_records.append(record)
+        last_timestamp = current_timestamp
+        last_sidechain = current_sidechain
+        last_cwd = current_cwd
+
+    flush_packet()
+    return logical_packets
 
 
 def infer_task_shapes(texts: list[str], tools: list[str]) -> list[str]:

@@ -20,8 +20,8 @@ from aggregate_core import (
     summarize_source_result,
 )
 from common import current_platform, emit, isoformat, resolve_workspace
-from source_registry import load_sources, normalize_confidence_categories
-from store import persist_source_results, resolve_store_path
+from source_registry import DEFAULT_USER_SOURCES_DIR, RegistryValidationError, load_registry, normalize_confidence_categories
+from store import persist_source_result, resolve_store_path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -34,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--until", help="End datetime or date (inclusive).")
     parser.add_argument("--all-sessions", action="store_true", help="Pass --all-sessions to sources that support it.")
     parser.add_argument("--sources-file", default=str(SCRIPT_DIR / "sources.json"), help="Path to sources.json.")
+    parser.add_argument(
+        "--user-sources-dir",
+        help="Optional user drop-in manifest directory. Defaults to ~/.config/daytrace/sources.d when using built-in sources.json.",
+    )
     parser.add_argument("--source", action="append", dest="source_names", help="Specific source name(s) to run.")
     parser.add_argument("--group-window", type=int, default=DEFAULT_GROUP_WINDOW_MINUTES, help="Minutes for grouping nearby events.")
     parser.add_argument("--max-workers", type=int, help="Maximum concurrent source processes.")
@@ -50,10 +54,17 @@ def main() -> None:
         workspace = resolve_workspace(args.workspace)
         if args.group_window < 0:
             raise ValueError("--group-window must be >= 0")
+        default_sources_file = (SCRIPT_DIR / "sources.json").resolve()
         sources_file = Path(args.sources_file).expanduser().resolve()
+        include_user_sources = sources_file == default_sources_file or bool(args.user_sources_dir)
+        user_sources_dir = Path(args.user_sources_dir).expanduser().resolve() if args.user_sources_dir else DEFAULT_USER_SOURCES_DIR
         store_path = resolve_store_path(args.store_path)
         since_arg, until_arg = resolve_date_filters(args.date, args.since, args.until)
-        sources = load_sources(sources_file)
+        sources = load_registry(
+            sources_file,
+            user_sources_dir=user_sources_dir,
+            include_user_sources=include_user_sources,
+        )
         confidence_categories_by_source = {
             source["name"]: normalize_confidence_categories(source) for source in sources
         }
@@ -83,25 +94,29 @@ def main() -> None:
             max_workers=max_workers,
             script_dir=SCRIPT_DIR,
         )
-        store_error = None
+        store_errors: list[str] = []
         if not args.no_store:
             selected_names = {source["name"] for source in runnable_sources} | {result["source"] for result in skipped_sources}
             source_lookup = {source["name"]: source for source in sources if source["name"] in selected_names}
             normalized_date = since_arg if args.date else None
-            try:
-                persist_source_results(
-                    source_results,
-                    source_lookup,
-                    workspace=workspace,
-                    requested_date=normalized_date,
-                    since=since_arg,
-                    until=until_arg,
-                    all_sessions=args.all_sessions,
-                    store_path=store_path,
-                )
-            except Exception as store_exc:
-                store_error = str(store_exc)
-                print(f"[warn] store persistence failed: {store_error}", file=sys.stderr)
+            for result in source_results:
+                source_name = result.get("manifest_source_name", result["source"])
+                try:
+                    source = source_lookup[source_name]
+                    persist_source_result(
+                        result,
+                        source,
+                        workspace=workspace,
+                        requested_date=normalized_date,
+                        since=since_arg,
+                        until=until_arg,
+                        all_sessions=args.all_sessions,
+                        store_path=store_path,
+                    )
+                except Exception as store_exc:
+                    error_message = f"{source_name}: {store_exc}"
+                    store_errors.append(error_message)
+                    print(f"[warn] store persistence failed for {source_name}: {store_exc}", file=sys.stderr)
         timeline = collect_timeline(source_results)
         groups = build_groups(
             timeline,
@@ -124,10 +139,12 @@ def main() -> None:
                 },
                 "config": {
                     "sources_file": str(sources_file),
+                    "user_sources_dir": str(user_sources_dir) if include_user_sources else None,
                     "store_path": None if args.no_store else str(store_path),
                     "group_window_minutes": args.group_window,
                     "evidence_limit": EVIDENCE_LIMIT,
-                    **({"store_error": store_error} if store_error else {}),
+                    **({"store_error": store_errors[0]} if store_errors else {}),
+                    **({"store_errors": store_errors} if store_errors else {}),
                 },
                 "sources": [summarize_source_result(result) for result in sorted(source_results, key=lambda item: item["source"])],
                 "timeline": timeline,
@@ -135,6 +152,9 @@ def main() -> None:
                 "summary": build_summary(source_results, timeline, groups),
             }
         )
+    except RegistryValidationError as exc:
+        emit({"status": "error", "message": str(exc), "registry_errors": exc.issues})
+        sys.exit(1)
     except Exception as exc:
         emit({"status": "error", "message": str(exc)})
         sys.exit(1)

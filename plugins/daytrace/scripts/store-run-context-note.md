@@ -9,6 +9,12 @@
 - grouping 済みの `groups` はまだ保存しない
 - `observations` は grouped data ではなく normalized event 単位で保存する
 
+運用ポリシー:
+
+- store は rebuildable な best-effort cache として扱う
+- store 書き込み失敗は warning として残し、本処理の JSON payload 自体は返す
+- store slice を読む側は保存済みであることだけで信用せず、`completeness` を評価してから再利用する
+
 ## Store Location
 
 - default: `~/.daytrace/daytrace.sqlite3`
@@ -41,8 +47,9 @@
 
 補足:
 
-- `requested_date` は raw `--date` shorthand を保持する
+- `requested_date` は `--date today` / `yesterday` を正規化した ISO 日付を保持する
 - `since_value` / `until_value` は実際に source command へ forward した resolved filter を保持する
+- 元の shorthand を残したい場合は `filters_json` に持たせる
 - `filters_json` は将来の拡張用に opaque JSON として残す
 
 ## Run Identity And Idempotency
@@ -68,6 +75,11 @@
 - 同じ `run_fingerprint` の再実行では `source_runs` row を再利用する
 - 再実行時は既存 row を更新し、関連 `observations` を全置換する
 - これにより duplicate write を避けつつ、最新の source 結果へ追従する
+
+補足:
+
+- `aggregate_core.resolve_command_paths()` は script basename 前提の解決をしている
+- basename 前提の全面見直しは AR5 で扱い、この note では現行挙動として固定する
 
 ## `observations` Fixed Fields
 

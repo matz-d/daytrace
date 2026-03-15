@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import aggregate
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AGGREGATE = REPO_ROOT / "scripts" / "aggregate.py"
 
@@ -43,7 +52,12 @@ def make_source_entry(
 
 
 class AggregateCliTests(unittest.TestCase):
-    def run_aggregate(self, sources_file: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    def run_aggregate(
+        self,
+        sources_file: Path,
+        *extra_args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         store_path = sources_file.parent / "daytrace.sqlite3"
         completed = subprocess.run(
             [
@@ -59,6 +73,7 @@ class AggregateCliTests(unittest.TestCase):
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            env=env,
             check=False,
         )
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
@@ -242,6 +257,114 @@ class AggregateCliTests(unittest.TestCase):
             self.assertIn("Source preflight:", completed.stderr)
             self.assertIn("available=", completed.stderr)
             self.assertIn("skipped=unsupported-source(unsupported_platform)", completed.stderr)
+
+    def test_aggregate_store_persistence_is_fail_soft_per_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            git_stub = temp_path / "git_stub.py"
+            ai_stub = temp_path / "ai_stub.py"
+            sources_file = temp_path / "sources.json"
+
+            write_file(
+                git_stub,
+                textwrap.dedent(
+                    """
+                    import json
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "repo-source",
+                        "events": [
+                            {
+                                "source": "repo-source",
+                                "timestamp": "2026-03-09T10:00:00+09:00",
+                                "type": "commit",
+                                "summary": "Commit one",
+                                "details": {},
+                                "confidence": "high"
+                            }
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+            write_file(
+                ai_stub,
+                textwrap.dedent(
+                    """
+                    import json
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "assistant-source",
+                        "events": [
+                            {
+                                "source": "assistant-source",
+                                "timestamp": "2026-03-09T10:05:00+09:00",
+                                "type": "session_summary",
+                                "summary": "Claude summary",
+                                "details": {},
+                                "confidence": "medium"
+                            }
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "repo-source",
+                            f"python3 {git_stub}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="git",
+                            scope_mode="workspace",
+                        ),
+                        make_source_entry(
+                            "assistant-source",
+                            f"python3 {ai_stub}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="ai_history",
+                            scope_mode="all-day",
+                        ),
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+            persisted_sources: list[str] = []
+
+            def fake_persist(result: dict[str, object], source: dict[str, object], **_: object) -> None:
+                persisted_sources.append(str(source["name"]))
+                if source["name"] == "assistant-source":
+                    raise RuntimeError("simulated persist failure")
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with patch("aggregate.persist_source_result", side_effect=fake_persist):
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "aggregate.py",
+                        "--sources-file",
+                        str(sources_file),
+                        "--store-path",
+                        str(temp_path / "daytrace.sqlite3"),
+                        "--all-sessions",
+                    ],
+                ):
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        aggregate.main()
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(set(persisted_sources), {"assistant-source", "repo-source"})
+            self.assertEqual(payload["config"]["store_error"], "assistant-source: simulated persist failure")
+            self.assertEqual(payload["config"]["store_errors"], ["assistant-source: simulated persist failure"])
+            self.assertIn("[warn] store persistence failed for assistant-source", stderr.getvalue())
 
     def test_aggregate_handles_zero_runnable_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -460,6 +583,161 @@ class AggregateCliTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["status"], "error")
         self.assertIn("No such file", payload["message"])
+
+    def test_aggregate_discovers_and_runs_user_drop_in_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            built_in_stub = root / "built_in_stub.py"
+            user_stub = root / "user_stub.py"
+            write_file(
+                built_in_stub,
+                textwrap.dedent(
+                    """
+                    import json
+
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "built-in-source",
+                        "events": []
+                    }))
+                    """
+                ).strip(),
+            )
+            write_file(
+                user_stub,
+                textwrap.dedent(
+                    """
+                    import json
+
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "user-drop-in",
+                        "events": [
+                            {
+                                "source": "user-drop-in",
+                                "timestamp": "2026-03-12T09:15:00+09:00",
+                                "type": "file_change",
+                                "summary": "Captured user drop-in source",
+                                "details": {},
+                                "confidence": "medium"
+                            }
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+            sources_file = root / "sources.json"
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "built-in-source",
+                            f"python3 {built_in_stub}",
+                            supports_date_range=False,
+                            supports_all_sessions=False,
+                            confidence_category="git",
+                            scope_mode="workspace",
+                        )
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+            user_sources_dir = root / "sources.d"
+            user_sources_dir.mkdir()
+            write_file(
+                user_sources_dir / "user_drop_in.json",
+                json.dumps(
+                    {
+                        **make_source_entry(
+                            "user-drop-in",
+                            f"python3 {user_stub}",
+                            supports_date_range=False,
+                            supports_all_sessions=False,
+                            confidence_category="file_activity",
+                            scope_mode="workspace",
+                        )
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = self.run_aggregate(
+                sources_file,
+                "--workspace",
+                str(workspace),
+                "--user-sources-dir",
+                str(user_sources_dir),
+            )
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual([source["name"] for source in payload["sources"]], ["built-in-source", "user-drop-in"])
+            self.assertTrue(any(event["source"] == "user-drop-in" for event in payload["timeline"]))
+            self.assertEqual(payload["config"]["user_sources_dir"], str(user_sources_dir.resolve()))
+
+    def test_aggregate_reports_invalid_user_manifest_machine_readably(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sources_file = root / "sources.json"
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "built-in-source",
+                            "python3 /tmp/ok.py",
+                            supports_date_range=False,
+                            supports_all_sessions=False,
+                            confidence_category="git",
+                            scope_mode="workspace",
+                        )
+                    ]
+                ),
+            )
+            user_sources_dir = root / "sources.d"
+            user_sources_dir.mkdir()
+            write_file(
+                user_sources_dir / "invalid_manifest.json",
+                json.dumps(
+                    {
+                        "name": "broken-user-drop-in",
+                        "command": "python3 /tmp/broken.py",
+                        "required": False,
+                        "timeout_sec": 5,
+                        "platforms": ["darwin", "linux"],
+                        "supports_date_range": True,
+                        "supports_all_sessions": False,
+                        "scope_mode": "invalid-scope",
+                        "prerequisites": [],
+                        "confidence_category": "file_activity",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(AGGREGATE),
+                    "--sources-file",
+                    str(sources_file),
+                    "--user-sources-dir",
+                    str(user_sources_dir),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "error")
+            self.assertIn("registry_errors", payload)
+            self.assertEqual(payload["registry_errors"][0]["kind"], "invalid_manifest")
+            self.assertEqual(Path(payload["registry_errors"][0]["path"]).name, "invalid_manifest.json")
 
 
 if __name__ == "__main__":

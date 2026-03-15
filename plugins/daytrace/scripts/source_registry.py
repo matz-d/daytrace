@@ -20,6 +20,38 @@ REQUIRED_SOURCE_FIELDS = {
 }
 MANIFEST_KIND = "daytrace-source-manifest/v1"
 SOURCE_IDENTITY_VERSION = "daytrace-source-identity/v1"
+DEFAULT_USER_SOURCES_DIR = Path("~/.config/daytrace/sources.d")
+BUILT_IN_REGISTRY_SCOPE = "built-in"
+USER_REGISTRY_SCOPE = "user"
+
+
+class RegistryValidationError(ValueError):
+    def __init__(self, issues: list[dict[str, Any]], message: str | None = None) -> None:
+        self.issues = issues
+        if message is None:
+            if len(issues) == 1:
+                message = str(issues[0]["message"])
+            else:
+                message = f"Source registry validation failed with {len(issues)} issue(s)"
+        super().__init__(message)
+
+
+def registry_error(
+    *,
+    kind: str,
+    path: Path,
+    registry_scope: str,
+    message: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    issue = {
+        "kind": kind,
+        "path": str(path),
+        "registry_scope": registry_scope,
+        "message": message,
+    }
+    issue.update(extra)
+    return issue
 
 
 def normalize_confidence_categories(source: dict[str, Any]) -> list[str]:
@@ -125,22 +157,159 @@ def validate_source_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def load_sources(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as handle:
-        data = json.load(handle)
+def _load_manifest_data(
+    path: Path,
+    *,
+    registry_scope: str,
+    allow_array: bool,
+) -> list[dict[str, Any]]:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise RegistryValidationError(
+            [
+                registry_error(
+                    kind="invalid_json",
+                    path=path,
+                    registry_scope=registry_scope,
+                    message=f"Invalid JSON in source manifest: {exc.msg}",
+                    line=exc.lineno,
+                    column=exc.colno,
+                )
+            ]
+        ) from exc
 
     if isinstance(data, dict):
         data = [data]
-    if not isinstance(data, list):
-        raise ValueError("Source manifest file must contain a JSON object or array")
+    elif not allow_array or not isinstance(data, list):
+        expected_shape = "JSON object or array" if allow_array else "single JSON object"
+        raise RegistryValidationError(
+            [
+                registry_error(
+                    kind="invalid_shape",
+                    path=path,
+                    registry_scope=registry_scope,
+                    message=f"Source manifest file must contain a {expected_shape}",
+                )
+            ]
+        )
 
     sources = []
     seen_source_ids: set[str] = set()
-    for entry in data:
-        normalized = validate_source_entry(entry)
+    for index, entry in enumerate(data):
+        try:
+            normalized = validate_source_entry(entry)
+        except ValueError as exc:
+            raise RegistryValidationError(
+                [
+                    registry_error(
+                        kind="invalid_manifest",
+                        path=path,
+                        registry_scope=registry_scope,
+                        message=str(exc),
+                        entry_index=index,
+                    )
+                ]
+            ) from exc
         source_id = normalized["source_id"]
         if source_id in seen_source_ids:
-            raise ValueError(f"Duplicate source name in registry: {source_id}")
+            raise RegistryValidationError(
+                [
+                    registry_error(
+                        kind="duplicate_source",
+                        path=path,
+                        registry_scope=registry_scope,
+                        message=f"Duplicate source name in registry: {source_id}",
+                        source_name=source_id,
+                        entry_index=index,
+                    )
+                ]
+            )
         seen_source_ids.add(source_id)
+        normalized["registry_scope"] = registry_scope
+        normalized["manifest_path"] = str(path)
         sources.append(normalized)
     return sources
+
+
+def load_sources(path: Path) -> list[dict[str, Any]]:
+    return _load_manifest_data(path, registry_scope="explicit", allow_array=True)
+
+
+def load_built_in_sources(path: Path) -> list[dict[str, Any]]:
+    return _load_manifest_data(path, registry_scope=BUILT_IN_REGISTRY_SCOPE, allow_array=True)
+
+
+def discover_user_sources(user_sources_dir: Path | None = None) -> list[Path]:
+    resolved_dir = (user_sources_dir or DEFAULT_USER_SOURCES_DIR).expanduser()
+    if not resolved_dir.exists():
+        return []
+    if not resolved_dir.is_dir():
+        raise RegistryValidationError(
+            [
+                registry_error(
+                    kind="invalid_registry_path",
+                    path=resolved_dir,
+                    registry_scope=USER_REGISTRY_SCOPE,
+                    message="User sources path must be a directory",
+                )
+            ]
+        )
+    return sorted(path for path in resolved_dir.iterdir() if path.is_file() and path.suffix == ".json")
+
+
+def load_user_sources(user_sources_dir: Path | None = None) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    for manifest_path in discover_user_sources(user_sources_dir):
+        try:
+            sources.extend(_load_manifest_data(manifest_path, registry_scope=USER_REGISTRY_SCOPE, allow_array=False))
+        except RegistryValidationError as exc:
+            issues.extend(exc.issues)
+    if issues:
+        raise RegistryValidationError(issues)
+    return sources
+
+
+def load_registry(
+    built_in_sources_file: Path,
+    *,
+    user_sources_dir: Path | None = None,
+    include_user_sources: bool = True,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    seen_source_paths: dict[str, str] = {}
+
+    try:
+        sources.extend(load_built_in_sources(built_in_sources_file))
+    except RegistryValidationError as exc:
+        issues.extend(exc.issues)
+
+    if include_user_sources:
+        try:
+            sources.extend(load_user_sources(user_sources_dir))
+        except RegistryValidationError as exc:
+            issues.extend(exc.issues)
+
+    for source in sources:
+        source_id = str(source["source_id"])
+        manifest_path = str(source["manifest_path"])
+        if source_id in seen_source_paths:
+            issues.append(
+                registry_error(
+                    kind="duplicate_source",
+                    path=Path(manifest_path),
+                    registry_scope=str(source["registry_scope"]),
+                    message=f"Duplicate source name in registry: {source_id}",
+                    source_name=source_id,
+                    conflicting_path=seen_source_paths[source_id],
+                )
+            )
+            continue
+        seen_source_paths[source_id] = manifest_path
+
+    if issues:
+        raise RegistryValidationError(issues)
+    return sorted(sources, key=lambda item: str(item["name"]))

@@ -19,7 +19,7 @@ from derived_store import (
     get_activities,
     get_observations,
     get_patterns,
-    get_source_runs,
+    get_slice_source_runs,
 )
 from store import resolve_store_path
 
@@ -76,7 +76,7 @@ def _matching_source_runs(
     until: str | None,
     all_sessions: bool,
 ) -> list[dict[str, Any]]:
-    rows = get_source_runs(
+    return get_slice_source_runs(
         store_path,
         workspace=workspace,
         requested_date=requested_date,
@@ -84,12 +84,6 @@ def _matching_source_runs(
         until=until,
         all_sessions=all_sessions,
     )
-    latest_by_source: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        source_name = str(row["source_name"])
-        if source_name not in latest_by_source:
-            latest_by_source[source_name] = row
-    return [latest_by_source[name] for name in sorted(latest_by_source)]
 
 
 def _hydrate_store(
@@ -187,7 +181,7 @@ def build_projection_payload(
     needs_hydrate = False
     if not source_runs:
         needs_hydrate = True
-    elif expected_names and hydrate_missing:
+    elif expected_names:
         slice_completeness = evaluate_slice_completeness(
             resolved_store_path,
             workspace=resolved_workspace,
@@ -198,7 +192,7 @@ def build_projection_payload(
             expected_source_names=expected_names,
             expected_fingerprints=expected_fingerprints or None,
         )
-        needs_hydrate = slice_completeness["status"] != SLICE_COMPLETE
+        needs_hydrate = hydrate_missing and slice_completeness["status"] != SLICE_COMPLETE
 
     if needs_hydrate and hydrate_missing:
         _hydrate_store(
@@ -233,10 +227,10 @@ def build_projection_payload(
     observations = get_observations(
         resolved_store_path,
         workspace=resolved_workspace,
-        requested_date=normalized_date,
         since=resolved_since,
         until=resolved_until,
         all_sessions=all_sessions,
+        source_run_ids=[int(source_run["source_run_id"]) for source_run in source_runs],
     )
     activities = get_activities(
         resolved_store_path,

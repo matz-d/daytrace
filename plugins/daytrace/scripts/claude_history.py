@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
 
 from common import (
@@ -20,6 +19,7 @@ from common import (
     summarize_text,
     within_range,
 )
+from skill_miner_common import DEFAULT_GAP_HOURS, build_claude_logical_packets, build_claude_session_ref, build_packet
 
 
 SOURCE_NAME = "claude-history"
@@ -96,15 +96,14 @@ def main() -> None:
             emit(skipped_response(SOURCE_NAME, "not_found", root=str(root)))
             return
 
-        session_groups: dict[str, dict[str, object]] = {}
         jsonl_files = sorted(root.glob("**/*.jsonl"))
         if not jsonl_files:
             emit(skipped_response(SOURCE_NAME, "not_found", root=str(root)))
             return
 
+        events = []
         for path in jsonl_files:
-            group_key = str(path)
-            group = session_groups.setdefault(group_key, empty_group(path))
+            filtered_records: list[dict[str, object]] = []
             with path.open(encoding="utf-8") as handle:
                 for raw_line in handle:
                     raw_line = raw_line.strip()
@@ -114,37 +113,78 @@ def main() -> None:
                         record = json.loads(raw_line)
                     except json.JSONDecodeError:
                         continue
-
+                    if not isinstance(record, dict):
+                        continue
                     record_type = record.get("type")
                     if record_type not in {"user", "assistant"}:
                         continue
                     if record.get("isMeta"):
                         continue
-
                     timestamp = record.get("timestamp")
                     if not within_range(timestamp, start, end):
                         continue
+                    filtered_records.append(record)
 
-                    cwd = record.get("cwd")
-                    if workspace and not is_within_path(cwd, workspace):
-                        continue
+            all_logical_packets = build_claude_logical_packets(filtered_records, DEFAULT_GAP_HOURS)
+            matched_packets = [
+                lp for lp in all_logical_packets
+                if not workspace or is_within_path(lp.get("cwd"), workspace)
+            ]
+            if not matched_packets:
+                continue
 
-                    group["session_id"] = record.get("sessionId") or group["session_id"]
-                    group["cwd"] = cwd or group["cwd"]
-                    group["is_sidechain"] = bool(record.get("isSidechain")) or bool(group["is_sidechain"])
-                    group["timestamps"].append(timestamp)
-                    group["message_count"] = int(group["message_count"]) + 1
+            group = empty_group(path)
+            serialized_packets: list[dict[str, object]] = []
+            for packet_index, logical_packet in enumerate(matched_packets):
+                group["session_id"] = logical_packet.get("session_id") or group["session_id"]
+                group["cwd"] = logical_packet.get("cwd") or group["cwd"]
+                group["is_sidechain"] = bool(logical_packet.get("is_sidechain")) or bool(group["is_sidechain"])
+                group["timestamps"].extend(logical_packet.get("timestamps", []))
+                group["message_count"] = int(group["message_count"]) + int(logical_packet.get("message_count") or 0)
+                group["user_count"] = int(group["user_count"]) + int(logical_packet.get("user_message_count") or 0)
+                group["assistant_count"] = int(group["assistant_count"]) + int(logical_packet.get("assistant_message_count") or 0)
 
-                    message_text = claude_message_text(record.get("message"))
-                    if record_type == "user":
-                        group["user_count"] = int(group["user_count"]) + 1
-                        append_excerpt(group["user_excerpts"], message_text)
-                    else:
-                        group["assistant_count"] = int(group["assistant_count"]) + 1
-                        append_excerpt(group["assistant_excerpts"], message_text)
+                user_excerpts: list[str] = []
+                for message in logical_packet.get("user_messages", []):
+                    append_excerpt(user_excerpts, str(message))
+                    append_excerpt(group["user_excerpts"], str(message))
+                assistant_excerpts: list[str] = []
+                for message in logical_packet.get("assistant_messages", []):
+                    append_excerpt(assistant_excerpts, str(message))
+                    append_excerpt(group["assistant_excerpts"], str(message))
 
-        events = []
-        for group in session_groups.values():
+                assistant_summary = assistant_excerpts[-1] if assistant_excerpts else None
+                packet_start = logical_packet.get("started_at")
+                skill_miner_packet = build_packet(
+                    packet_id=f"claude:{path.parent.name}:{path.stem}:{packet_index:03d}",
+                    source=SOURCE_NAME,
+                    session_ref=build_claude_session_ref(str(path), packet_start),
+                    session_id=logical_packet.get("session_id"),
+                    workspace=logical_packet.get("cwd"),
+                    timestamp=packet_start,
+                    user_messages=[str(message) for message in logical_packet.get("user_messages", [])],
+                    assistant_messages=[str(message) for message in logical_packet.get("assistant_messages", [])],
+                    tools=[str(tool) for tool in logical_packet.get("tools", [])],
+                )
+                serialized_packets.append(
+                    {
+                        "packet_index": packet_index,
+                        "started_at": packet_start,
+                        "ended_at": logical_packet.get("ended_at"),
+                        "session_id": logical_packet.get("session_id"),
+                        "cwd": logical_packet.get("cwd"),
+                        "is_sidechain": logical_packet.get("is_sidechain"),
+                        "message_count": logical_packet.get("message_count"),
+                        "user_message_count": logical_packet.get("user_message_count"),
+                        "assistant_message_count": logical_packet.get("assistant_message_count"),
+                        "user_highlights": user_excerpts,
+                        "assistant_highlights": assistant_excerpts,
+                        "assistant_summary": assistant_summary,
+                        "tool_signals": list(logical_packet.get("tools", [])),
+                        "skill_miner_packet": skill_miner_packet,
+                    }
+                )
+
             timestamps = sorted(group["timestamps"])
             if not timestamps:
                 continue
@@ -162,6 +202,8 @@ def main() -> None:
                 "user_highlights": group["user_excerpts"],
                 "assistant_highlights": group["assistant_excerpts"],
                 "highlights": group["user_excerpts"] + group["assistant_excerpts"],
+                "logical_packets": serialized_packets,
+                "logical_packet_count": len(serialized_packets),
             }
             if group["assistant_excerpts"]:
                 details["assistant_summary"] = group["assistant_excerpts"][-1]

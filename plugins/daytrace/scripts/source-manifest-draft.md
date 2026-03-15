@@ -22,6 +22,7 @@
 - object shape is the same as each built-in manifest entry
 
 `source_registry.load_sources()` は array と single-object の両方を受け付ける。
+`source_registry.load_registry()` は built-in registry と user drop-in registry を同じ validation / identity ルールで束ねる。
 
 ## Logical Manifest Fields
 

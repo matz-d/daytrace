@@ -375,6 +375,67 @@ def _replace_observations(
         )
 
 
+def _persist_source_result(
+    connection: sqlite3.Connection,
+    result: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    workspace: Path,
+    requested_date: str | None,
+    since: str | None,
+    until: str | None,
+    all_sessions: bool,
+    collected_at: str,
+) -> None:
+    source_run_id = _upsert_source_run(
+        connection,
+        source,
+        result,
+        workspace=workspace,
+        requested_date=requested_date,
+        since=since,
+        until=until,
+        all_sessions=all_sessions,
+        collected_at=collected_at,
+    )
+    _replace_observations(
+        connection,
+        source_run_id=source_run_id,
+        result=result,
+        scope_mode=source["scope_mode"],
+        collected_at=collected_at,
+    )
+
+
+def persist_source_result(
+    result: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    workspace: Path,
+    requested_date: str | None,
+    since: str | None,
+    until: str | None,
+    all_sessions: bool,
+    store_path: Path,
+    collected_at: datetime | None = None,
+) -> None:
+    bootstrap_store(store_path)
+    collected_at_iso = (collected_at or datetime.now().astimezone()).isoformat()
+    with connect_store(store_path) as connection:
+        _persist_source_result(
+            connection,
+            result,
+            source,
+            workspace=workspace,
+            requested_date=requested_date,
+            since=since,
+            until=until,
+            all_sessions=all_sessions,
+            collected_at=collected_at_iso,
+        )
+        connection.commit()
+
+
 def persist_source_results(
     source_results: list[dict[str, Any]],
     source_lookup: dict[str, dict[str, Any]],
@@ -395,22 +456,15 @@ def persist_source_results(
             source = source_lookup.get(source_name)
             if source is None:
                 raise ValueError(f"Missing source metadata for persisted result: {source_name}")
-            source_run_id = _upsert_source_run(
+            _persist_source_result(
                 connection,
-                source,
                 result,
+                source,
                 workspace=workspace,
                 requested_date=requested_date,
                 since=since,
                 until=until,
                 all_sessions=all_sessions,
-                collected_at=collected_at_iso,
-            )
-            _replace_observations(
-                connection,
-                source_run_id=source_run_id,
-                result=result,
-                scope_mode=source["scope_mode"],
                 collected_at=collected_at_iso,
             )
         connection.commit()

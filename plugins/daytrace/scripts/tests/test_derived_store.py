@@ -18,6 +18,7 @@ from derived_store import (
     ACTIVITY_DERIVATION_VERSION,
     PATTERN_DERIVATION_VERSION,
     SLICE_COMPLETE,
+    SLICE_DEGRADED,
     SLICE_EMPTY,
     SLICE_PARTIAL,
     SLICE_STALE,
@@ -25,6 +26,7 @@ from derived_store import (
     get_activities,
     get_observations,
     get_patterns,
+    get_slice_source_runs,
     persist_patterns_from_prepare,
 )
 
@@ -180,23 +182,34 @@ class DerivedStoreTests(unittest.TestCase):
         )
         return sources_file, workspace, root / "daytrace.sqlite3"
 
-    def run_aggregate(self, sources_file: Path, workspace: Path, store_path: Path) -> None:
+    def run_aggregate(
+        self,
+        sources_file: Path,
+        workspace: Path,
+        store_path: Path,
+        *,
+        since: str = "2026-03-12",
+        until: str = "2026-03-12",
+        all_sessions: bool = True,
+    ) -> None:
+        command = [
+            "python3",
+            str(AGGREGATE),
+            "--sources-file",
+            str(sources_file),
+            "--workspace",
+            str(workspace),
+            "--since",
+            since,
+            "--until",
+            until,
+            "--store-path",
+            str(store_path),
+        ]
+        if all_sessions:
+            command.append("--all-sessions")
         completed = subprocess.run(
-            [
-                "python3",
-                str(AGGREGATE),
-                "--sources-file",
-                str(sources_file),
-                "--workspace",
-                str(workspace),
-                "--since",
-                "2026-03-12",
-                "--until",
-                "2026-03-12",
-                "--all-sessions",
-                "--store-path",
-                str(store_path),
-            ],
+            command,
             cwd=str(PLUGIN_ROOT),
             capture_output=True,
             text=True,
@@ -243,6 +256,73 @@ class DerivedStoreTests(unittest.TestCase):
             self.run_aggregate(sources_file, workspace, store_path)
             updated = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
             self.assertEqual(updated[0]["activity"]["events"][0]["summary"], "Updated workspace summary")
+
+    def test_evaluate_slice_completeness_reuses_covering_broader_slice(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+
+            result = evaluate_slice_completeness(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12",
+                all_sessions=True,
+                expected_source_names={"workspace-source", "ai-source", "browser-source"},
+            )
+            selected_runs = get_slice_source_runs(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12",
+                all_sessions=True,
+            )
+
+            self.assertEqual(result["status"], SLICE_COMPLETE)
+            self.assertEqual([run["source_name"] for run in selected_runs], ["ai-source", "browser-source", "workspace-source"])
+
+    def test_get_slice_source_runs_prefers_narrower_covering_run_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-12",
+                until="2026-03-12",
+            )
+
+            selected_runs = get_slice_source_runs(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12",
+                all_sessions=True,
+            )
+            activities = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                all_sessions=True,
+            )
+
+            self.assertEqual(len(selected_runs), 3)
+            self.assertEqual(len({run["run_fingerprint"] for run in selected_runs}), 3)
+            self.assertEqual([activity["event_count"] for activity in activities], [2, 1])
 
     def test_persist_patterns_from_prepare_and_query(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -321,6 +401,42 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(result["status"], SLICE_COMPLETE)
             self.assertEqual(result["missing_sources"], [])
 
+    def test_evaluate_slice_completeness_reports_skipped_sources_as_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sources_file, workspace, store_path = self.create_fixture(root)
+            base_sources = json.loads(sources_file.read_text(encoding="utf-8"))
+            expanded_sources_file = root / "sources-with-skipped.json"
+            expanded_sources_file.write_text(
+                json.dumps(
+                    base_sources
+                    + [
+                        make_source_entry(
+                            "skipped-source",
+                            "python3 skipped_source.py",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="other",
+                            scope_mode="all-day",
+                            platforms=["win32"],
+                        )
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.run_aggregate(expanded_sources_file, workspace, store_path)
+            result = evaluate_slice_completeness(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12",
+                all_sessions=True,
+                expected_source_names={"workspace-source", "ai-source", "browser-source", "skipped-source"},
+            )
+            self.assertEqual(result["status"], SLICE_DEGRADED)
+            self.assertEqual(result["skipped_sources"], ["skipped-source"])
+
     def test_evaluate_slice_completeness_stale_when_manifest_fingerprint_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
@@ -336,3 +452,65 @@ class DerivedStoreTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], SLICE_STALE)
             self.assertEqual(result["stale_sources"], ["workspace-source"])
+
+    def test_get_observations_from_broader_slice_respects_time_bounds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+
+            # Query a time window that excludes the first two events (09:00, 09:05)
+            observations = get_observations(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12T10:00:00+09:00",
+                until="2026-03-12T23:59:59+09:00",
+                source_run_ids=[
+                    int(run["source_run_id"])
+                    for run in get_slice_source_runs(
+                        store_path,
+                        workspace=workspace,
+                        since="2026-03-12",
+                        until="2026-03-12",
+                        all_sessions=True,
+                    )
+                ],
+            )
+
+            self.assertEqual(len(observations), 1)
+            self.assertEqual(observations[0]["source_name"], "browser-source")
+
+    def test_broader_and_narrower_slice_give_same_activities_for_overlapping_period(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+
+            # First: broader-only
+            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-01", until="2026-03-31")
+            broader_activities = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                all_sessions=True,
+            )
+
+            # Then: add narrower covering run
+            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-12", until="2026-03-12")
+            narrower_activities = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                all_sessions=True,
+            )
+
+            self.assertEqual(len(broader_activities), len(narrower_activities))
+            self.assertEqual(
+                [a["event_count"] for a in broader_activities],
+                [a["event_count"] for a in narrower_activities],
+            )

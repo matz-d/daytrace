@@ -98,6 +98,8 @@ The pre-AR2 manifest draft is documented in `source-manifest-draft.md`.
 Current loader rules:
 
 - built-in `sources.json` and future single-object drop-in manifests share the same logical shape
+- `source_registry.load_registry()` is the unified entrypoint for built-in + user drop-in discovery
+- user drop-ins are discovered from `~/.config/daytrace/sources.d/*.json`
 - each source gets a stable `source_identity` where `source_id == name`
 - each source gets a `manifest_fingerprint` derived from the logical manifest fields only
 - runtime orchestration fields such as `required`, `timeout_sec`, and `platforms` are intentionally excluded from the fingerprint
@@ -108,6 +110,7 @@ Validation policy:
 - reject missing required fields and type mismatches
 - allow unknown extra keys so future registry extensions do not break built-in manifests
 - keep prerequisite validation structural in the loader and defer subtype-specific checks to preflight evaluation
+- invalid registry entries are reported as machine-readable `registry_errors` in CLI error JSON
 
 ## SQLite store
 
@@ -132,6 +135,7 @@ Validation policy:
 - `--all-sessions` disables workspace filtering for Claude/Codex history
 - `--store-path` overrides the SQLite store location
 - `--no-store` skips store ingestion for that run
+- `--user-sources-dir` overrides the drop-in manifest directory for registry testing or custom installs (collection-only; auto-mode completeness validation always uses the default directory — use `--sources-file` for custom manifest validation)
 - `--limit` caps returned events for manual inspection
 
 ## Aggregator output
@@ -220,6 +224,8 @@ Contract notes:
 - `summary` in `evidence_items[]` prefers the session's `primary_intent` (the same normalized intent sampled in `intent_analysis.items`); when empty it falls back to an anonymized representative snippet from the conversation
 - `prepare` is the only phase that reads raw history for evidence chain construction
 - `--input-source store` reads persisted `claude-history` / `codex-history` observations instead of raw history
+- new store slices persist canonical skill-miner packet payloads inside source observation details; store-backed prepare reuses those payloads first and falls back to highlight-based reconstruction only for older slices
+- if a store slice was hydrated before canonical packet payloads were added, re-running aggregate for that window is recommended to recover raw/store parity
 - `--input-source auto` reuses the store only when the matching slice is complete for the current source manifest; missing, partial, degraded, stale, or unvalidated slices fall back to raw history
 - `--sources-file` lets auto mode validate the current manifest against a specific source registry instead of the built-in default
 - `--compare-legacy` adds a lightweight comparison summary between the selected path and the raw-history path

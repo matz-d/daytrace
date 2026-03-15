@@ -20,6 +20,7 @@ from common import (
     summarize_text,
     within_range,
 )
+from skill_miner_common import build_codex_session_ref, build_packet, codex_command_names, codex_message_text, earliest_iso_timestamp
 
 
 SOURCE_NAME = "codex-history"
@@ -40,11 +41,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def append_history_record(index: dict[str, dict[str, object]], session_id: str, timestamp, text) -> None:
-    session = index.setdefault(session_id, {"timestamps": [], "user_excerpts": []})
+    session = index.setdefault(session_id, {"timestamps": [], "user_excerpts": [], "user_messages": []})
     session["timestamps"].append(timestamp)
-    excerpt = summarize_text(text, 180)
+    text_value = str(text or "")
+    if text_value:
+        session["user_messages"].append(text_value)
+    excerpt = summarize_text(text_value, 180)
     if excerpt and excerpt not in session["user_excerpts"] and len(session["user_excerpts"]) < 3:
         session["user_excerpts"].append(excerpt)
+
+
+def append_excerpt(bucket: list[str], text: object) -> None:
+    excerpt = summarize_text(str(text or ""), 180)
+    if excerpt and excerpt not in bucket and len(bucket) < 3:
+        bucket.append(excerpt)
 
 
 def load_history_indexes(path: Path, start, end) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
@@ -105,8 +115,6 @@ def main() -> None:
             return
 
         full_history_index, filtered_history_index = load_history_indexes(history_file, start, end)
-        candidate_sessions = set(full_history_index.keys())
-
         rollout_files = sorted(sessions_root.glob("**/rollout-*.jsonl"))
         if not rollout_files:
             emit(skipped_response(SOURCE_NAME, "not_found", history_file=str(history_file), sessions_root=str(sessions_root)))
@@ -120,24 +128,23 @@ def main() -> None:
             session_id = meta.get("id")
             if not session_id:
                 continue
-            if candidate_sessions and session_id not in candidate_sessions:
-                continue
             mapped_rollouts[session_id] = rollout
 
         events = []
-        for session_id in sorted(candidate_sessions):
-            rollout = mapped_rollouts.get(session_id)
-            if rollout is None:
-                continue
+        for session_id, rollout in sorted(mapped_rollouts.items()):
 
             history_entry = filtered_history_index.get(session_id) or full_history_index.get(
-                session_id, {"timestamps": [], "user_excerpts": []}
+                session_id, {"timestamps": [], "user_excerpts": [], "user_messages": []}
             )
             tool_counter: Counter[str] = Counter()
             assistant_excerpts: list[str] = []
+            assistant_messages: list[str] = []
+            event_user_excerpts: list[str] = []
+            event_user_messages: list[str] = []
             meta_details: dict[str, object] | None = None
             commentary_timestamps: list[str] = []
             tool_timestamps: list[str] = []
+            packet_tool_names: list[str] = []
 
             with rollout.open(encoding="utf-8") as handle:
                 for raw_line in handle:
@@ -164,6 +171,10 @@ def main() -> None:
                     if record_type == "event_msg" and record.get("payload", {}).get("type") == "user_message":
                         if within_range(timestamp, start, end):
                             commentary_timestamps.append(timestamp)
+                            message = str(record.get("payload", {}).get("message") or "")
+                            if message:
+                                event_user_messages.append(message)
+                            append_excerpt(event_user_excerpts, message)
                         continue
 
                     if record_type != "response_item":
@@ -174,18 +185,55 @@ def main() -> None:
                     if payload_type == "message" and payload.get("role") == "assistant":
                         if within_range(timestamp, start, end):
                             commentary_timestamps.append(timestamp)
-                            excerpt = summarize_text(extract_text(payload.get("content")), 180)
-                            if excerpt and excerpt not in assistant_excerpts and len(assistant_excerpts) < 3:
-                                assistant_excerpts.append(excerpt)
+                            assistant_text = codex_message_text(payload)
+                            if assistant_text:
+                                assistant_messages.append(assistant_text)
+                            append_excerpt(assistant_excerpts, assistant_text)
                     elif payload_type == "function_call":
                         if within_range(timestamp, start, end):
-                            tool_counter[payload.get("name", "unknown")] += 1
+                            tool_names = codex_command_names(payload)
+                            if tool_names:
+                                packet_tool_names.extend(tool_names)
+                                for tool_name in tool_names:
+                                    tool_counter[tool_name] += 1
+                            else:
+                                fallback_name = str(payload.get("name", "unknown"))
+                                packet_tool_names.append(fallback_name)
+                                tool_counter[fallback_name] += 1
                             tool_timestamps.append(timestamp)
 
             if meta_details is None:
                 continue
 
             session_timestamp = meta_details.get("timestamp") or (history_entry["timestamps"][0] if history_entry["timestamps"] else None)
+            commentary_anchor = commentary_timestamps[-1] if commentary_timestamps else session_timestamp
+            merged_user_excerpts = list(history_entry["user_excerpts"])
+            for excerpt in event_user_excerpts:
+                if excerpt not in merged_user_excerpts and len(merged_user_excerpts) < 3:
+                    merged_user_excerpts.append(excerpt)
+            merged_user_messages = [str(message) for message in history_entry.get("user_messages", []) if str(message or "").strip()]
+            for message in event_user_messages:
+                if message and message not in merged_user_messages:
+                    merged_user_messages.append(message)
+            user_excerpt = merged_user_excerpts[0] if merged_user_excerpts else "No user prompt captured"
+            start_timestamp = (
+                earliest_iso_timestamp([meta_details.get("timestamp")])
+                or earliest_iso_timestamp(history_entry.get("timestamps", []))
+                or earliest_iso_timestamp(commentary_timestamps + tool_timestamps)
+                or None
+            )
+            skill_miner_packet = build_packet(
+                packet_id=f"codex:{session_id}",
+                source=SOURCE_NAME,
+                session_ref=build_codex_session_ref(session_id, start_timestamp),
+                session_id=session_id,
+                workspace=str(meta_details.get("cwd") or "") or None,
+                timestamp=start_timestamp,
+                user_messages=merged_user_messages,
+                assistant_messages=assistant_messages,
+                tools=packet_tool_names,
+            )
+
             session_summary = f"Codex session in {meta_details.get('cwd', 'unknown workspace')}"
             if within_range(session_timestamp, start, end) or (start is None and end is None):
                 events.append(
@@ -201,13 +249,11 @@ def main() -> None:
                             "cli_version": meta_details.get("cli_version"),
                             "model_provider": meta_details.get("model_provider"),
                             "git": meta_details.get("git"),
+                            "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "medium",
                     }
                 )
-
-            commentary_anchor = commentary_timestamps[-1] if commentary_timestamps else session_timestamp
-            user_excerpt = history_entry["user_excerpts"][0] if history_entry["user_excerpts"] else "No user prompt captured"
             if commentary_anchor and (within_range(commentary_anchor, start, end) or (start is None and end is None)):
                 events.append(
                     {
@@ -218,8 +264,9 @@ def main() -> None:
                         "details": {
                             "session_id": session_id,
                             "cwd": meta_details.get("cwd"),
-                            "user_highlights": history_entry["user_excerpts"],
+                            "user_highlights": merged_user_excerpts,
                             "assistant_highlights": assistant_excerpts,
+                            "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "medium",
                     }
@@ -238,6 +285,7 @@ def main() -> None:
                             "cwd": meta_details.get("cwd"),
                             "tools": [{"name": name, "count": count} for name, count in tool_counter.most_common()],
                             "total_calls": sum(tool_counter.values()),
+                            "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "high",
                     }

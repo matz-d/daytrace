@@ -129,6 +129,118 @@ def get_source_runs(
     return [_row_to_source_run(row) for row in rows]
 
 
+def _query_time_bounds(
+    *,
+    requested_date: str | None,
+    since: str | None,
+    until: str | None,
+) -> tuple[str | None, str | None]:
+    effective_since = since if since is not None else requested_date
+    effective_until = until if until is not None else requested_date
+    return (
+        _normalize_time_filter(effective_since, bound="start"),
+        _normalize_time_filter(effective_until, bound="end"),
+    )
+
+
+def _source_run_covers_query(
+    source_run: dict[str, Any],
+    *,
+    requested_date: str | None,
+    normalized_since: str | None,
+    normalized_until: str | None,
+) -> bool:
+    if requested_date is None and normalized_since is None and normalized_until is None:
+        return True
+
+    run_since = _normalize_time_filter(source_run.get("since_value"), bound="start")
+    run_until = _normalize_time_filter(source_run.get("until_value"), bound="end")
+    if normalized_since is not None:
+        if run_since is None:
+            return False
+        run_since_dt = parse_datetime(run_since, bound="start")
+        query_since_dt = parse_datetime(normalized_since, bound="start")
+        if run_since_dt is None or query_since_dt is None or run_since_dt > query_since_dt:
+            return False
+    if normalized_until is not None:
+        if run_until is None:
+            return False
+        run_until_dt = parse_datetime(run_until, bound="end")
+        query_until_dt = parse_datetime(normalized_until, bound="end")
+        if run_until_dt is None or query_until_dt is None or run_until_dt < query_until_dt:
+            return False
+    return True
+
+
+def _source_run_priority(source_run: dict[str, Any], *, requested_date: str | None) -> tuple[float, float, float, int]:
+    run_since = parse_datetime(source_run.get("since_value"), bound="start")
+    run_until = parse_datetime(source_run.get("until_value"), bound="end")
+    if run_since is None or run_until is None:
+        window_span = float("inf")
+    else:
+        window_span = max((run_until - run_since).total_seconds(), 0.0)
+    collected_at = parse_datetime(source_run.get("collected_at"), bound="end")
+    collected_at_key = -(collected_at.timestamp()) if collected_at is not None else float("inf")
+    requested_date_match = 0.0 if requested_date is not None and source_run.get("requested_date") == requested_date else 1.0
+    return (
+        requested_date_match,
+        window_span,
+        collected_at_key,
+        -int(source_run["source_run_id"]),
+    )
+
+
+def get_slice_source_runs(
+    store_path: str | Path | None = None,
+    *,
+    workspace: str | Path | None = None,
+    requested_date: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    all_sessions: bool | None = None,
+    source_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    normalized_store_path = resolve_store_path(store_path)
+    bootstrap_store(normalized_store_path)
+    candidate_runs = get_source_runs(
+        normalized_store_path,
+        workspace=workspace,
+        all_sessions=all_sessions,
+        source_names=source_names,
+    )
+    normalized_since, normalized_until = _query_time_bounds(
+        requested_date=requested_date,
+        since=since,
+        until=until,
+    )
+
+    if requested_date is None and normalized_since is None and normalized_until is None:
+        latest_by_source: dict[str, dict[str, Any]] = {}
+        for source_run in candidate_runs:
+            source_name = str(source_run["source_name"])
+            if source_name not in latest_by_source:
+                latest_by_source[source_name] = source_run
+        return [latest_by_source[name] for name in sorted(latest_by_source)]
+
+    selected_by_source: dict[str, dict[str, Any]] = {}
+    for source_run in candidate_runs:
+        if not _source_run_covers_query(
+            source_run,
+            requested_date=requested_date,
+            normalized_since=normalized_since,
+            normalized_until=normalized_until,
+        ):
+            continue
+        source_name = str(source_run["source_name"])
+        current = selected_by_source.get(source_name)
+        if current is None or _source_run_priority(source_run, requested_date=requested_date) < _source_run_priority(
+            current,
+            requested_date=requested_date,
+        ):
+            selected_by_source[source_name] = source_run
+    return [selected_by_source[name] for name in sorted(selected_by_source)]
+
+
 SLICE_COMPLETE = "complete"
 SLICE_PARTIAL = "partial"
 SLICE_DEGRADED = "degraded"
@@ -154,9 +266,10 @@ def evaluate_slice_completeness(
       present_sources: set of source names in the slice
       missing_sources: set of expected sources not in the slice
       error_sources: set of sources with error status
+      skipped_sources: set of sources with skipped status
       stale_sources: set of sources with mismatched manifest fingerprint
     """
-    source_runs = get_source_runs(
+    source_runs = get_slice_source_runs(
         store_path,
         workspace=workspace,
         requested_date=requested_date,
@@ -176,6 +289,10 @@ def evaluate_slice_completeness(
     error_sources = {
         name for name, run in latest_by_source.items()
         if name in expected_source_names and run["status"] == "error"
+    }
+    skipped_sources = {
+        name for name, run in latest_by_source.items()
+        if name in expected_source_names and run["status"] == "skipped"
     }
     stale_sources: set[str] = set()
     if expected_fingerprints:
@@ -204,6 +321,7 @@ def evaluate_slice_completeness(
         "present_sources": sorted(relevant_present),
         "missing_sources": sorted(missing),
         "error_sources": sorted(error_sources),
+        "skipped_sources": sorted(skipped_sources),
         "stale_sources": sorted(stale_sources),
         "source_run_count": len(source_runs),
     }
@@ -218,17 +336,21 @@ def get_observations(
     until: str | None = None,
     all_sessions: bool | None = None,
     source_names: list[str] | None = None,
+    source_run_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_store_path = resolve_store_path(store_path)
     bootstrap_store(normalized_store_path)
     normalized_workspace = _normalize_workspace_filter(workspace)
+    selected_source_run_ids = list(source_run_ids) if source_run_ids is not None else None
+    if selected_source_run_ids is not None and not selected_source_run_ids:
+        return []
 
     clauses = []
     parameters: list[Any] = []
     if normalized_workspace is not None:
         clauses.append("sr.workspace = ?")
         parameters.append(normalized_workspace)
-    if requested_date is not None:
+    if requested_date is not None and selected_source_run_ids is None:
         clauses.append("sr.requested_date = ?")
         parameters.append(requested_date)
     normalized_since = _normalize_time_filter(since, bound="start")
@@ -246,6 +368,10 @@ def get_observations(
         placeholders = ", ".join("?" for _ in source_names)
         clauses.append(f"o.source_name IN ({placeholders})")
         parameters.extend(source_names)
+    if selected_source_run_ids is not None:
+        placeholders = ", ".join("?" for _ in selected_source_run_ids)
+        clauses.append(f"o.source_run_id IN ({placeholders})")
+        parameters.extend(selected_source_run_ids)
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
@@ -506,14 +632,31 @@ def get_activities(
         all_sessions=all_sessions,
         group_window_minutes=group_window_minutes,
     )
-    observations = preloaded_observations if preloaded_observations is not None else get_observations(
-        normalized_store_path,
-        workspace=workspace,
-        requested_date=requested_date,
-        since=since,
-        until=until,
-        all_sessions=all_sessions,
-    )
+    if preloaded_observations is not None:
+        observations = preloaded_observations
+    else:
+        selected_source_run_ids = None
+        if requested_date is not None or since is not None or until is not None:
+            selected_source_run_ids = [
+                int(source_run["source_run_id"])
+                for source_run in get_slice_source_runs(
+                    normalized_store_path,
+                    workspace=workspace,
+                    requested_date=requested_date,
+                    since=since,
+                    until=until,
+                    all_sessions=all_sessions,
+                )
+            ]
+        observations = get_observations(
+            normalized_store_path,
+            workspace=workspace,
+            requested_date=requested_date,
+            since=since,
+            until=until,
+            all_sessions=all_sessions,
+            source_run_ids=selected_source_run_ids,
+        )
     current_input_fingerprint = compute_activities_input_fingerprint(
         observations,
         group_window_minutes=group_window_minutes,
