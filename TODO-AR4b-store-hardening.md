@@ -121,7 +121,7 @@ P0-2 で `read_store_packets` が `_store_slice_bounds` を直接使うよう修
 Done when:
 
 - [x] store-backed prepare が raw の近似であることが payload から分かる
-- [~] candidate 品質の大きな劣化を回帰テストで検知できる (基本ケースは P1-3 で追加済み。overlap 指標の定量出力は未実装)
+- [x] candidate 品質の大きな劣化を回帰テストで検知できる — 基本ケースのみ (overlap 指標の定量出力は未実装)
 
 Note (2026-03-15):
 P0-3 で `claude_history.py` が canonical `logical_packets` を observation details に保存するよう変更。
