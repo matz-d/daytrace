@@ -1,0 +1,444 @@
+{
+  "status": "success",
+  "source": "claude-history",
+  "events": [
+    {
+      "source": "claude-history",
+      "timestamp": "2026-03-10T09:05:00+09:00",
+      "type": "session_summary",
+      "summary": "Claude session: Review the fake API diff and return findings by severity.",
+      "details": {
+        "cwd": "__WORKSPACE__",
+        "session_id": "claude-review-a",
+        "file_path": "/fixtures/claude-review-a.jsonl",
+        "is_sidechain": false,
+        "message_count": 2,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "user_highlights": [
+          "Review the fake API diff and return findings by severity."
+        ],
+        "assistant_highlights": [
+          "I will inspect the fake diff and keep file-line refs."
+        ],
+        "highlights": [
+          "Review the fake API diff and return findings by severity.",
+          "I will inspect the fake diff and keep file-line refs."
+        ],
+        "assistant_summary": "I will inspect the fake diff and keep file-line refs.",
+        "logical_packet_count": 1,
+        "logical_packets": [
+          {
+            "packet_index": 0,
+            "started_at": "2026-03-10T09:00:00+09:00",
+            "ended_at": "2026-03-10T09:05:00+09:00",
+            "session_id": "claude-review-a",
+            "cwd": "__WORKSPACE__",
+            "is_sidechain": false,
+            "message_count": 2,
+            "user_message_count": 1,
+            "assistant_message_count": 1,
+            "user_highlights": [
+              "Review the fake API diff and return findings by severity."
+            ],
+            "assistant_highlights": [
+              "I will inspect the fake diff and keep file-line refs."
+            ],
+            "assistant_summary": "I will inspect the fake diff and keep file-line refs.",
+            "tool_signals": [
+              "rg",
+              "git"
+            ],
+            "skill_miner_packet": {
+              "packet_id": "claude:e2e:review-a:000",
+              "source": "claude-history",
+              "session_ref": "claude:/fixtures/claude-review-a.jsonl:2026-03-10T09:00:00+09:00",
+              "session_id": "claude-review-a",
+              "workspace": "__WORKSPACE__",
+              "timestamp": "2026-03-10T09:00:00+09:00",
+              "top_tool": "rg",
+              "tool_signature": [
+                "rg",
+                "git"
+              ],
+              "task_shape": [
+                "review_changes",
+                "summarize_findings"
+              ],
+              "artifact_hints": [
+                "review",
+                "code"
+              ],
+              "primary_intent": "Review the fake API diff and return findings by severity.",
+              "representative_snippets": [
+                "Review the fake API diff and return findings by severity.",
+                "I will inspect the fake diff and keep file-line refs."
+              ],
+              "repeated_rules": [
+                {
+                  "normalized": "findings-first",
+                  "raw_snippet": "keep findings first"
+                },
+                {
+                  "normalized": "file-line-refs",
+                  "raw_snippet": "keep file-line refs"
+                }
+              ],
+              "support": {
+                "message_count": 2,
+                "tool_call_count": 2
+              }
+            }
+          }
+        ]
+      },
+      "confidence": "medium"
+    },
+    {
+      "source": "claude-history",
+      "timestamp": "2026-03-11T10:04:00+09:00",
+      "type": "session_summary",
+      "summary": "Claude session: Review another fake server diff and keep findings first.",
+      "details": {
+        "cwd": "__WORKSPACE__",
+        "session_id": "claude-review-b",
+        "file_path": "/fixtures/claude-review-b.jsonl",
+        "is_sidechain": false,
+        "message_count": 2,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "user_highlights": [
+          "Review another fake server diff and keep findings first."
+        ],
+        "assistant_highlights": [
+          "I will return findings by severity with file-line refs."
+        ],
+        "highlights": [
+          "Review another fake server diff and keep findings first.",
+          "I will return findings by severity with file-line refs."
+        ],
+        "assistant_summary": "I will return findings by severity with file-line refs.",
+        "logical_packet_count": 1,
+        "logical_packets": [
+          {
+            "packet_index": 0,
+            "started_at": "2026-03-11T10:00:00+09:00",
+            "ended_at": "2026-03-11T10:04:00+09:00",
+            "session_id": "claude-review-b",
+            "cwd": "__WORKSPACE__",
+            "is_sidechain": false,
+            "message_count": 2,
+            "user_message_count": 1,
+            "assistant_message_count": 1,
+            "user_highlights": [
+              "Review another fake server diff and keep findings first."
+            ],
+            "assistant_highlights": [
+              "I will return findings by severity with file-line refs."
+            ],
+            "assistant_summary": "I will return findings by severity with file-line refs.",
+            "tool_signals": [
+              "rg",
+              "git"
+            ],
+            "skill_miner_packet": {
+              "packet_id": "claude:e2e:review-b:000",
+              "source": "claude-history",
+              "session_ref": "claude:/fixtures/claude-review-b.jsonl:2026-03-11T10:00:00+09:00",
+              "session_id": "claude-review-b",
+              "workspace": "__WORKSPACE__",
+              "timestamp": "2026-03-11T10:00:00+09:00",
+              "top_tool": "rg",
+              "tool_signature": [
+                "rg",
+                "git"
+              ],
+              "task_shape": [
+                "review_changes",
+                "summarize_findings"
+              ],
+              "artifact_hints": [
+                "review",
+                "code"
+              ],
+              "primary_intent": "Review another fake server diff and keep findings first.",
+              "representative_snippets": [
+                "Review another fake server diff and keep findings first.",
+                "I will return findings by severity with file-line refs."
+              ],
+              "repeated_rules": [
+                {
+                  "normalized": "findings-first",
+                  "raw_snippet": "keep findings first"
+                },
+                {
+                  "normalized": "file-line-refs",
+                  "raw_snippet": "file-line refs"
+                }
+              ],
+              "support": {
+                "message_count": 2,
+                "tool_call_count": 2
+              }
+            }
+          }
+        ]
+      },
+      "confidence": "medium"
+    },
+    {
+      "source": "claude-history",
+      "timestamp": "2026-03-12T11:03:00+09:00",
+      "type": "session_summary",
+      "summary": "Claude session: Review the fake release patch and keep the same findings format.",
+      "details": {
+        "cwd": "__WORKSPACE__",
+        "session_id": "claude-review-c",
+        "file_path": "/fixtures/claude-review-c.jsonl",
+        "is_sidechain": false,
+        "message_count": 2,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "user_highlights": [
+          "Review the fake release patch and keep the same findings format."
+        ],
+        "assistant_highlights": [
+          "I will inspect the patch and list findings by severity."
+        ],
+        "highlights": [
+          "Review the fake release patch and keep the same findings format.",
+          "I will inspect the patch and list findings by severity."
+        ],
+        "assistant_summary": "I will inspect the patch and list findings by severity.",
+        "logical_packet_count": 1,
+        "logical_packets": [
+          {
+            "packet_index": 0,
+            "started_at": "2026-03-12T11:00:00+09:00",
+            "ended_at": "2026-03-12T11:03:00+09:00",
+            "session_id": "claude-review-c",
+            "cwd": "__WORKSPACE__",
+            "is_sidechain": false,
+            "message_count": 2,
+            "user_message_count": 1,
+            "assistant_message_count": 1,
+            "user_highlights": [
+              "Review the fake release patch and keep the same findings format."
+            ],
+            "assistant_highlights": [
+              "I will inspect the patch and list findings by severity."
+            ],
+            "assistant_summary": "I will inspect the patch and list findings by severity.",
+            "tool_signals": [
+              "rg",
+              "git"
+            ],
+            "skill_miner_packet": {
+              "packet_id": "claude:e2e:review-c:000",
+              "source": "claude-history",
+              "session_ref": "claude:/fixtures/claude-review-c.jsonl:2026-03-12T11:00:00+09:00",
+              "session_id": "claude-review-c",
+              "workspace": "__WORKSPACE__",
+              "timestamp": "2026-03-12T11:00:00+09:00",
+              "top_tool": "rg",
+              "tool_signature": [
+                "rg",
+                "git"
+              ],
+              "task_shape": [
+                "review_changes",
+                "summarize_findings"
+              ],
+              "artifact_hints": [
+                "review",
+                "code"
+              ],
+              "primary_intent": "Review the fake release patch and keep the same findings format.",
+              "representative_snippets": [
+                "Review the fake release patch and keep the same findings format.",
+                "I will inspect the patch and list findings by severity."
+              ],
+              "repeated_rules": [
+                {
+                  "normalized": "findings-first",
+                  "raw_snippet": "same findings format"
+                },
+                {
+                  "normalized": "file-line-refs",
+                  "raw_snippet": "line refs"
+                }
+              ],
+              "support": {
+                "message_count": 2,
+                "tool_call_count": 2
+              }
+            }
+          }
+        ]
+      },
+      "confidence": "medium"
+    },
+    {
+      "source": "claude-history",
+      "timestamp": "2026-03-13T14:02:00+09:00",
+      "type": "session_summary",
+      "summary": "Claude session: Prepare the fake daily brief in markdown.",
+      "details": {
+        "cwd": "__WORKSPACE__",
+        "session_id": "claude-report-a",
+        "file_path": "/fixtures/claude-report-a.jsonl",
+        "is_sidechain": false,
+        "message_count": 2,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "user_highlights": [
+          "Prepare the fake daily brief in markdown."
+        ],
+        "assistant_highlights": [
+          "I will draft the fake report in markdown."
+        ],
+        "highlights": [
+          "Prepare the fake daily brief in markdown.",
+          "I will draft the fake report in markdown."
+        ],
+        "assistant_summary": "I will draft the fake report in markdown.",
+        "logical_packet_count": 1,
+        "logical_packets": [
+          {
+            "packet_index": 0,
+            "started_at": "2026-03-13T14:00:00+09:00",
+            "ended_at": "2026-03-13T14:02:00+09:00",
+            "session_id": "claude-report-a",
+            "cwd": "__WORKSPACE__",
+            "is_sidechain": false,
+            "message_count": 2,
+            "user_message_count": 1,
+            "assistant_message_count": 1,
+            "user_highlights": [
+              "Prepare the fake daily brief in markdown."
+            ],
+            "assistant_highlights": [
+              "I will draft the fake report in markdown."
+            ],
+            "assistant_summary": "I will draft the fake report in markdown.",
+            "tool_signals": [
+              "python3"
+            ],
+            "skill_miner_packet": {
+              "packet_id": "claude:e2e:report-a:000",
+              "source": "claude-history",
+              "session_ref": "claude:/fixtures/claude-report-a.jsonl:2026-03-13T14:00:00+09:00",
+              "session_id": "claude-report-a",
+              "workspace": "__WORKSPACE__",
+              "timestamp": "2026-03-13T14:00:00+09:00",
+              "top_tool": "python3",
+              "tool_signature": [
+                "python3"
+              ],
+              "task_shape": [
+                "prepare_report",
+                "write_markdown"
+              ],
+              "artifact_hints": [
+                "report",
+                "markdown"
+              ],
+              "primary_intent": "Prepare the fake daily brief in markdown.",
+              "representative_snippets": [
+                "Prepare the fake daily brief in markdown.",
+                "I will draft the fake report in markdown."
+              ],
+              "repeated_rules": [],
+              "support": {
+                "message_count": 2,
+                "tool_call_count": 1
+              }
+            }
+          }
+        ]
+      },
+      "confidence": "medium"
+    },
+    {
+      "source": "claude-history",
+      "timestamp": "2026-03-14T15:02:00+09:00",
+      "type": "session_summary",
+      "summary": "Claude session: Prepare another fake weekly report draft.",
+      "details": {
+        "cwd": "__WORKSPACE__",
+        "session_id": "claude-report-b",
+        "file_path": "/fixtures/claude-report-b.jsonl",
+        "is_sidechain": false,
+        "message_count": 2,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "user_highlights": [
+          "Prepare another fake weekly report draft."
+        ],
+        "assistant_highlights": [
+          "I will keep the same fake report structure."
+        ],
+        "highlights": [
+          "Prepare another fake weekly report draft.",
+          "I will keep the same fake report structure."
+        ],
+        "assistant_summary": "I will keep the same fake report structure.",
+        "logical_packet_count": 1,
+        "logical_packets": [
+          {
+            "packet_index": 0,
+            "started_at": "2026-03-14T15:00:00+09:00",
+            "ended_at": "2026-03-14T15:02:00+09:00",
+            "session_id": "claude-report-b",
+            "cwd": "__WORKSPACE__",
+            "is_sidechain": false,
+            "message_count": 2,
+            "user_message_count": 1,
+            "assistant_message_count": 1,
+            "user_highlights": [
+              "Prepare another fake weekly report draft."
+            ],
+            "assistant_highlights": [
+              "I will keep the same fake report structure."
+            ],
+            "assistant_summary": "I will keep the same fake report structure.",
+            "tool_signals": [
+              "python3"
+            ],
+            "skill_miner_packet": {
+              "packet_id": "claude:e2e:report-b:000",
+              "source": "claude-history",
+              "session_ref": "claude:/fixtures/claude-report-b.jsonl:2026-03-14T15:00:00+09:00",
+              "session_id": "claude-report-b",
+              "workspace": "__WORKSPACE__",
+              "timestamp": "2026-03-14T15:00:00+09:00",
+              "top_tool": "python3",
+              "tool_signature": [
+                "python3"
+              ],
+              "task_shape": [
+                "prepare_report",
+                "write_markdown"
+              ],
+              "artifact_hints": [
+                "report",
+                "markdown"
+              ],
+              "primary_intent": "Prepare another fake weekly report draft.",
+              "representative_snippets": [
+                "Prepare another fake weekly report draft.",
+                "I will keep the same fake report structure."
+              ],
+              "repeated_rules": [],
+              "support": {
+                "message_count": 2,
+                "tool_call_count": 1
+              }
+            }
+          }
+        ]
+      },
+      "confidence": "medium"
+    }
+  ]
+}

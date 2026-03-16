@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
+from common import isoformat_or_now
 from source_registry import normalize_confidence_categories
 
 SCHEMA_VERSION = 2
@@ -420,7 +421,7 @@ def persist_source_result(
     collected_at: datetime | None = None,
 ) -> None:
     bootstrap_store(store_path)
-    collected_at_iso = (collected_at or datetime.now().astimezone()).isoformat()
+    collected_at_iso = isoformat_or_now(collected_at)
     with connect_store(store_path) as connection:
         _persist_source_result(
             connection,
@@ -449,7 +450,7 @@ def persist_source_results(
     collected_at: datetime | None = None,
 ) -> None:
     bootstrap_store(store_path)
-    collected_at_iso = (collected_at or datetime.now().astimezone()).isoformat()
+    collected_at_iso = isoformat_or_now(collected_at)
     with connect_store(store_path) as connection:
         for result in source_results:
             source_name = result.get("manifest_source_name", result["source"])

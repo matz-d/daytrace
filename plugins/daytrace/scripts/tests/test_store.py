@@ -8,7 +8,14 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPT_DIR) not in __import__("sys").path:
+    __import__("sys").path.insert(0, str(SCRIPT_DIR))
+
+from store import persist_source_result
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +52,52 @@ def make_source_entry(
 
 class StoreTests(unittest.TestCase):
     maxDiff = None
+
+    def test_persist_source_result_normalizes_naive_collected_at(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            store_path = Path(temp_dir) / "daytrace.sqlite3"
+            source = {
+                "name": "workspace-source",
+                "source_id": "workspace-source-v1",
+                "source_identity": {"identity_version": "1"},
+                "manifest_fingerprint": "a" * 64,
+                "scope_mode": "workspace",
+                "confidence_category": "git",
+            }
+            result = {
+                "status": "success",
+                "source": "workspace-source",
+                "events": [
+                    {
+                        "source": "workspace-source",
+                        "timestamp": "2026-03-12T09:00:00+09:00",
+                        "type": "commit",
+                        "summary": "Persist workspace event",
+                        "details": {"workspace": str(workspace)},
+                        "confidence": "high",
+                    }
+                ],
+                "command": ["python3", "workspace_source.py"],
+                "duration_sec": 0.1,
+            }
+
+            persist_source_result(
+                result,
+                source,
+                workspace=workspace,
+                requested_date=None,
+                since="2026-03-12",
+                until="2026-03-12",
+                all_sessions=False,
+                store_path=store_path,
+                collected_at=datetime(2026, 3, 12, 10, 30, 0),
+            )
+
+            with sqlite3.connect(store_path) as connection:
+                collected_at = connection.execute("SELECT collected_at FROM source_runs").fetchone()[0]
+            self.assertRegex(collected_at, r"^2026-03-12T10:30:00[+-]\d{2}:\d{2}$")
 
     def create_fixture(self, root: Path) -> tuple[Path, Path, Path]:
         workspace = root / "workspace"

@@ -1260,7 +1260,7 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
     lines.append("## 提案成立")
     if ready:
         for index, candidate in enumerate(ready, start=1):
-            lines.extend(_proposal_item_lines(index, candidate, include_classification=True))
+            lines.extend(proposal_item_lines(index, candidate, include_classification=True))
     else:
         lines.append("今回は有力候補なし")
 
@@ -1268,7 +1268,7 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
     lines.append("## 追加調査待ち")
     if needs_research:
         for index, candidate in enumerate(needs_research, start=1):
-            lines.extend(_proposal_item_lines(index, candidate, include_classification=False))
+            lines.extend(proposal_item_lines(index, candidate, include_classification=False))
     else:
         lines.append("なし")
 
@@ -1276,7 +1276,7 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
     lines.append("## 今回は見送り")
     if rejected:
         for index, candidate in enumerate(rejected[:5], start=1):
-            lines.extend(_rejected_item_lines(index, candidate))
+            lines.extend(rejected_item_lines(index, candidate))
     else:
         lines.append("なし")
 
@@ -1286,15 +1286,12 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
     return "\n".join(lines)
 
 
-def _proposal_item_lines(index: int, candidate: dict[str, Any], *, include_classification: bool) -> list[str]:
+def proposal_item_lines(index: int, candidate: dict[str, Any], *, include_classification: bool) -> list[str]:
     lines = [f"{index}. {candidate.get('label', 'Unnamed candidate')}"]
     if include_classification:
         lines.append(f"   分類: {candidate.get('suggested_kind', 'TBD')}")
     lines.append(f"   confidence: {candidate.get('confidence', 'unknown')}")
-    lines.append(f"   根拠: {candidate.get('evidence_summary', 'n/a')}")
-    evidence_lines = _evidence_item_lines(candidate)
-    if evidence_lines:
-        lines.extend(evidence_lines)
+    lines.extend(build_evidence_chain_lines(candidate))
     judgment = candidate.get("research_judgment")
     if include_classification:
         lines.append(f"   期待効果: {candidate.get('label', 'この候補')} の再利用フローを安定化できる")
@@ -1305,7 +1302,7 @@ def _proposal_item_lines(index: int, candidate: dict[str, Any], *, include_class
     return lines
 
 
-def _rejected_item_lines(index: int, candidate: dict[str, Any]) -> list[str]:
+def rejected_item_lines(index: int, candidate: dict[str, Any]) -> list[str]:
     label = candidate.get("label") or candidate.get("primary_intent") or candidate.get("packet_id") or "reference item"
     reason = candidate.get("confidence_reason") or candidate.get("evidence_summary") or "根拠不足"
     return [
@@ -1314,11 +1311,14 @@ def _rejected_item_lines(index: int, candidate: dict[str, Any]) -> list[str]:
     ]
 
 
-def _evidence_item_lines(candidate: dict[str, Any]) -> list[str]:
+def build_evidence_chain_lines(candidate: dict[str, Any]) -> list[str]:
+    lines = ["   根拠:"]
     evidence_items = candidate.get("evidence_items")
-    if not isinstance(evidence_items, list):
-        return []
-    lines: list[str] = []
+    if not isinstance(evidence_items, list) or not evidence_items:
+        fallback = str(candidate.get("evidence_summary") or "n/a")
+        lines.append(f"   - {fallback}")
+        return lines
+
     for item in evidence_items[:3]:
         if not isinstance(item, dict):
             continue
@@ -1326,7 +1326,7 @@ def _evidence_item_lines(candidate: dict[str, Any]) -> list[str]:
         source = str(item.get("source") or "").strip()
         summary = str(item.get("summary") or "").strip()
         if not summary:
-            continue
+            summary = "summary unavailable"
         prefix_parts = [value for value in (timestamp, source) if value]
         prefix = " ".join(prefix_parts)
         if prefix:

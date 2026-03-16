@@ -1,0 +1,81 @@
+{
+  "status": "success",
+  "source": "skill-miner-prepare",
+  "candidates": [
+    {
+      "candidate_id": "cand-review-flow",
+      "label": "review changes (review, code)",
+      "triage_status": "ready",
+      "proposal_ready": true,
+      "confidence": "strong",
+      "suggested_kind": "CLAUDE.md",
+      "evidence_summary": "2 packets / recurring findings-first review flow",
+      "confidence_reason": "2 packets with the same review policy",
+      "evidence_items": [
+        {
+          "session_ref": "codex:fake-review-a:1",
+          "timestamp": "2026-03-10T09:00:00+09:00",
+          "source": "codex-history",
+          "summary": "Review the fake API diff and report findings by severity."
+        },
+        {
+          "session_ref": "claude:fake-review-b:2",
+          "timestamp": "2026-03-11T13:15:00+09:00",
+          "source": "claude-history",
+          "summary": "Keep file-line references in the fake review summary."
+        }
+      ]
+    },
+    {
+      "candidate_id": "cand-daily-brief",
+      "label": "prepare report (report, markdown)",
+      "triage_status": "ready",
+      "proposal_ready": true,
+      "confidence": "medium",
+      "suggested_kind": "skill",
+      "evidence_summary": "3 packets / recurring fake daily-brief draft flow",
+      "confidence_reason": "Repeated report drafting pattern",
+      "evidence_items": []
+    },
+    {
+      "candidate_id": "cand-sync-hook",
+      "label": "edit config (config)",
+      "triage_status": "needs_research",
+      "proposal_ready": false,
+      "confidence": "weak",
+      "suggested_kind": "hook",
+      "evidence_summary": "6 packets / fake config sync cluster",
+      "confidence_reason": "巨大クラスタで fake deploy sync と fake lint sync が混在している可能性がある",
+      "evidence_items": [
+        {
+          "session_ref": "codex:fake-config-a:3",
+          "timestamp": "2026-03-12T08:30:00+09:00",
+          "source": "codex-history",
+          "summary": "Update fake config sync before commit for the sample project."
+        }
+      ]
+    },
+    {
+      "candidate_id": "cand-single-note",
+      "label": "write markdown (note)",
+      "triage_status": "rejected",
+      "proposal_ready": false,
+      "confidence": "insufficient",
+      "confidence_reason": "single occurrence in a fake note-only session",
+      "evidence_summary": "1 packet / isolated markdown note"
+    }
+  ],
+  "unclustered": [
+    {
+      "packet_id": "codex:fake-once",
+      "source": "codex-history",
+      "primary_intent": "Investigate a one-off fake import warning.",
+      "timestamp": "2026-03-13T16:45:00+09:00",
+      "confidence_reason": "single observed packet only"
+    }
+  ],
+  "summary": {
+    "total_packets": 8,
+    "total_candidates": 4
+  }
+}

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aggregate_core import DEFAULT_GROUP_WINDOW_MINUTES, build_groups
-from common import parse_datetime
+from common import isoformat_or_now, parse_datetime
 from store import bootstrap_store, canonical_json, connect_store, resolve_store_path, stable_hash
 
 
@@ -747,7 +747,7 @@ def persist_patterns_from_prepare(
         days=days,
     )
     input_fingerprint = compute_patterns_input_fingerprint(prepare_payload)
-    derived_at_iso = (derived_at or datetime.now().astimezone()).isoformat()
+    derived_at_iso = isoformat_or_now(derived_at)
 
     with connect_store(normalized_store_path) as connection:
         existing_fp = connection.execute(

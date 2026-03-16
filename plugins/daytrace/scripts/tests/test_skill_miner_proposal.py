@@ -14,7 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from skill_miner_common import build_proposal_sections, merge_judgment_into_candidate
+from skill_miner_common import DEFAULT_TOP_N, build_proposal_sections, merge_judgment_into_candidate
 from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
@@ -25,6 +25,34 @@ from skill_miner_proposal import (
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PROPOSAL = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "skill_miner_proposal.py"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+GOLDEN_PREPARE = FIXTURES_DIR / "skill_miner_proposal_prepare.json"
+GOLDEN_MARKDOWN = FIXTURES_DIR / "golden_proposal.md"
+
+
+def _render_markdown_from_fixture() -> str:
+    completed = subprocess.run(
+        ["python3", str(PROPOSAL), "--prepare-file", str(GOLDEN_PREPARE)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+    payload = json.loads(completed.stdout)
+    if payload.get("status") != "success":
+        raise AssertionError(payload)
+    return str(payload["markdown"])
+
+
+def _update_golden_markdown() -> None:
+    GOLDEN_MARKDOWN.write_text(_render_markdown_from_fixture(), encoding="utf-8")
+
+
+if "--update-golden" in sys.argv:
+    sys.argv.remove("--update-golden")
+    _update_golden_markdown()
 
 
 def _ready_candidate(**overrides: Any) -> dict[str, Any]:
@@ -287,6 +315,40 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("Rejected-4", markdown)
         self.assertNotIn("Rejected-5", markdown)
 
+    def test_build_markdown_renders_all_ready_candidates_up_to_default_top_n(self) -> None:
+        ready = [
+            _ready_candidate(candidate_id=f"ready-{index}", label=f"Ready-{index}")
+            for index in range(1, DEFAULT_TOP_N + 1)
+        ]
+
+        markdown = build_markdown(ready, [], [])
+
+        for index in range(1, DEFAULT_TOP_N + 1):
+            self.assertIn(f"{index}. Ready-{index}", markdown)
+
+    def test_build_markdown_renders_all_needs_research_candidates_up_to_default_top_n(self) -> None:
+        needs_research = [
+            _needs_research_candidate(candidate_id=f"needs-{index}", label=f"Needs-{index}")
+            for index in range(1, DEFAULT_TOP_N + 1)
+        ]
+
+        markdown = build_markdown([], needs_research, [])
+
+        for index in range(1, DEFAULT_TOP_N + 1):
+            self.assertIn(f"{index}. Needs-{index}", markdown)
+
+    def test_build_markdown_truncates_rejected_section_to_current_limit(self) -> None:
+        rejected = [
+            {"label": f"Rejected-{index}", "confidence_reason": "reason"}
+            for index in range(10)
+        ]
+
+        markdown = build_markdown([], [], rejected)
+
+        for index in range(5):
+            self.assertIn(f"Rejected-{index}", markdown)
+        self.assertNotIn("Rejected-5", markdown)
+
 
 class ProposalCLITests(unittest.TestCase):
     """Integration tests for skill_miner_proposal.py CLI."""
@@ -352,6 +414,12 @@ class ProposalCLITests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["summary"]["ready_count"], 1)
             self.assertEqual(payload["summary"]["needs_research_count"], 0)
+
+    def test_cli_markdown_matches_golden_fixture(self) -> None:
+        self.assertEqual(
+            _render_markdown_from_fixture(),
+            GOLDEN_MARKDOWN.read_text(encoding="utf-8").rstrip("\n"),
+        )
 
     def test_cli_with_missing_prepare_file_returns_error(self) -> None:
         completed = subprocess.run(

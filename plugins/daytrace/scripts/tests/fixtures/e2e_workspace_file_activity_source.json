@@ -1,0 +1,76 @@
+{
+  "status": "success",
+  "source": "workspace-file-activity",
+  "events": [
+    {
+      "source": "workspace-file-activity",
+      "timestamp": "2026-03-10T09:06:00+09:00",
+      "type": "untracked_file",
+      "summary": "Untracked file activity: notes/review-plan.md",
+      "details": {
+        "workspace": "__WORKSPACE__",
+        "repo_root": "__WORKSPACE__",
+        "path": "notes/review-plan.md",
+        "size_bytes": 320,
+        "mtime_epoch": 1773101160.0
+      },
+      "confidence": "low"
+    },
+    {
+      "source": "workspace-file-activity",
+      "timestamp": "2026-03-11T10:06:00+09:00",
+      "type": "untracked_file",
+      "summary": "Untracked file activity: drafts/fake-findings.md",
+      "details": {
+        "workspace": "__WORKSPACE__",
+        "repo_root": "__WORKSPACE__",
+        "path": "drafts/fake-findings.md",
+        "size_bytes": 512,
+        "mtime_epoch": 1773187560.0
+      },
+      "confidence": "low"
+    },
+    {
+      "source": "workspace-file-activity",
+      "timestamp": "2026-03-12T11:04:00+09:00",
+      "type": "untracked_file",
+      "summary": "Untracked file activity: tmp/release-check.txt",
+      "details": {
+        "workspace": "__WORKSPACE__",
+        "repo_root": "__WORKSPACE__",
+        "path": "tmp/release-check.txt",
+        "size_bytes": 144,
+        "mtime_epoch": 1773271440.0
+      },
+      "confidence": "low"
+    },
+    {
+      "source": "workspace-file-activity",
+      "timestamp": "2026-03-13T14:03:00+09:00",
+      "type": "untracked_file",
+      "summary": "Untracked file activity: reports/fake-daily-brief.md",
+      "details": {
+        "workspace": "__WORKSPACE__",
+        "repo_root": "__WORKSPACE__",
+        "path": "reports/fake-daily-brief.md",
+        "size_bytes": 640,
+        "mtime_epoch": 1773358980.0
+      },
+      "confidence": "low"
+    },
+    {
+      "source": "workspace-file-activity",
+      "timestamp": "2026-03-14T15:03:00+09:00",
+      "type": "untracked_file",
+      "summary": "Untracked file activity: reports/fake-weekly-brief.md",
+      "details": {
+        "workspace": "__WORKSPACE__",
+        "repo_root": "__WORKSPACE__",
+        "path": "reports/fake-weekly-brief.md",
+        "size_bytes": 704,
+        "mtime_epoch": 1773445380.0
+      },
+      "confidence": "low"
+    }
+  ]
+}

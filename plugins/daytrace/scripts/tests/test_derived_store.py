@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -357,6 +358,43 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(patterns[0]["derivation_version"], PATTERN_DERIVATION_VERSION)
             self.assertEqual(patterns[0]["pattern"]["candidate_id"], "candidate-001")
             self.assertEqual(patterns[0]["label"], "Review workflow")
+
+    def test_persist_patterns_from_prepare_normalizes_naive_derived_at(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "daytrace.sqlite3"
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            payload = {
+                "status": "success",
+                "source": "skill-miner-prepare",
+                "candidates": [
+                    {
+                        "candidate_id": "candidate-001",
+                        "label": "Review workflow",
+                        "score": 0.82,
+                        "support": {"total_packets": 3},
+                        "session_refs": ["codex:abc"],
+                        "evidence_items": [],
+                    }
+                ],
+                "summary": {"total_candidates": 1},
+                "config": {
+                    "workspace": str(workspace.resolve()),
+                    "observation_mode": "workspace",
+                    "days": 7,
+                    "effective_days": 7,
+                },
+            }
+
+            persist_patterns_from_prepare(
+                payload,
+                store_path=store_path,
+                derived_at=datetime(2026, 3, 12, 11, 45, 0),
+            )
+
+            patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
+            self.assertEqual(len(patterns), 1)
+            self.assertRegex(patterns[0]["derived_at"], r"^2026-03-12T11:45:00[+-]\d{2}:\d{2}$")
 
     def test_evaluate_slice_completeness_empty_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

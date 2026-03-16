@@ -23,6 +23,7 @@ from skill_miner_common import (
 )
 from skill_miner_prepare import (
     SIMILARITY_ARTIFACT_WEIGHT,
+    SIMILARITY_WEIGHT_BUDGET,
     SIMILARITY_INTENT_WEIGHT,
     SIMILARITY_RULE_WEIGHT,
     SIMILARITY_SNIPPET_WEIGHT,
@@ -164,6 +165,18 @@ def legacy_cluster_packets(packets: list[dict[str, object]]) -> tuple[list[dict[
 
 class SkillMinerQualityV2Tests(unittest.TestCase):
     def test_similarity_score_weight_budget_matches_v2_targets(self) -> None:
+        self.assertEqual(
+            SIMILARITY_WEIGHT_BUDGET,
+            {
+                "task_shapes": 0.22,
+                "specific_shape_bonus": 0.08,
+                "intent": 0.15,
+                "snippet": 0.10,
+                "artifacts": 0.20,
+                "rules": 0.20,
+                "tools": 0.05,
+            },
+        )
         self.assertAlmostEqual(SIMILARITY_TASK_SHAPES_WEIGHT + SIMILARITY_SPECIFIC_SHAPE_BONUS, 0.30)
         self.assertAlmostEqual(SIMILARITY_INTENT_WEIGHT + SIMILARITY_SNIPPET_WEIGHT, 0.25)
         self.assertAlmostEqual(SIMILARITY_ARTIFACT_WEIGHT, 0.20)
@@ -278,6 +291,85 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
             _similarity_score_from_features(left_features, right_features),
             similarity_score(left, right),
         )
+
+    def test_similarity_score_title_match_only_stays_within_intent_budget(self) -> None:
+        left = {
+            "workspace": "/tmp/workspace",
+            "primary_intent": "Draft the fake skill proposal summary",
+            "representative_snippets": [],
+            "task_shape": [],
+            "artifact_hints": [],
+            "repeated_rules": [],
+            "tool_signature": [],
+        }
+        right = {
+            "workspace": "/tmp/workspace",
+            "primary_intent": "Draft the fake skill proposal summary",
+            "representative_snippets": [],
+            "task_shape": [],
+            "artifact_hints": [],
+            "repeated_rules": [],
+            "tool_signature": [],
+        }
+
+        self.assertEqual(similarity_score(left, right), round(SIMILARITY_INTENT_WEIGHT, 3))
+
+    def test_similarity_score_path_match_only_stays_within_snippet_budget(self) -> None:
+        left = {
+            "workspace": "/tmp/workspace",
+            "primary_intent": "",
+            "representative_snippets": ["Inspect /tmp/workspace/fake_skills/demo_alpha.py"],
+            "task_shape": [],
+            "artifact_hints": [],
+            "repeated_rules": [],
+            "tool_signature": [],
+        }
+        right = {
+            "workspace": "/tmp/workspace",
+            "primary_intent": "",
+            "representative_snippets": ["Inspect /tmp/workspace/fake_skills/demo_alpha.py"],
+            "task_shape": [],
+            "artifact_hints": [],
+            "repeated_rules": [],
+            "tool_signature": [],
+        }
+
+        self.assertEqual(similarity_score(left, right), round(SIMILARITY_SNIPPET_WEIGHT, 3))
+
+    def test_similarity_score_full_match_is_clamped_to_one(self) -> None:
+        packet = {
+            "workspace": "/tmp/workspace",
+            "primary_intent": "Implement the fake skill sync flow",
+            "representative_snippets": ["Implement /tmp/workspace/fake_skills/sync_flow.py and keep fake tests green."],
+            "task_shape": ["implement_feature", "run_tests"],
+            "artifact_hints": ["code", "config"],
+            "repeated_rules": [{"normalized": "tests-before-close", "raw_snippet": "tests-before-close"}],
+            "tool_signature": ["python3", "pytest"],
+        }
+
+        self.assertEqual(similarity_score(packet, packet), 1.0)
+
+    def test_similarity_score_full_mismatch_is_clamped_to_zero(self) -> None:
+        left = {
+            "workspace": None,
+            "primary_intent": "nebula lattice zircon",
+            "representative_snippets": ["aurora_quartz_v1"],
+            "task_shape": ["implement_feature"],
+            "artifact_hints": ["code"],
+            "repeated_rules": [{"normalized": "tests-before-close", "raw_snippet": "tests-before-close"}],
+            "tool_signature": ["python3", "pytest"],
+        }
+        right = {
+            "workspace": None,
+            "primary_intent": "saffron monolith cinder",
+            "representative_snippets": ["umbra_helix_v9"],
+            "task_shape": ["prepare_report"],
+            "artifact_hints": ["markdown"],
+            "repeated_rules": [{"normalized": "findings-first", "raw_snippet": "findings-first"}],
+            "tool_signature": ["rg", "sed"],
+        }
+
+        self.assertEqual(similarity_score(left, right), 0.0)
 
     def test_compare_iso_timestamps_and_recent_count_respect_actual_time(self) -> None:
         packets = [

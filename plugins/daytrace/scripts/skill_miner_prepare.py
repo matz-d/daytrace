@@ -82,23 +82,24 @@ FIDELITY_CANONICAL = "canonical"
 # - artifacts: 0.20
 # - rules: 0.20
 # - tools: 0.05
-SIMILARITY_TASK_SHAPES_WEIGHT = 0.22
-SIMILARITY_SPECIFIC_SHAPE_BONUS = 0.08
-SIMILARITY_INTENT_WEIGHT = 0.15
-SIMILARITY_SNIPPET_WEIGHT = 0.10
-SIMILARITY_ARTIFACT_WEIGHT = 0.20
-SIMILARITY_RULE_WEIGHT = 0.20
-SIMILARITY_TOOL_WEIGHT = 0.05
+SIMILARITY_WEIGHT_BUDGET = {
+    "task_shapes": 0.22,
+    "specific_shape_bonus": 0.08,
+    "intent": 0.15,
+    "snippet": 0.10,
+    "artifacts": 0.20,
+    "rules": 0.20,
+    "tools": 0.05,
+}
+SIMILARITY_TASK_SHAPES_WEIGHT = SIMILARITY_WEIGHT_BUDGET["task_shapes"]
+SIMILARITY_SPECIFIC_SHAPE_BONUS = SIMILARITY_WEIGHT_BUDGET["specific_shape_bonus"]
+SIMILARITY_INTENT_WEIGHT = SIMILARITY_WEIGHT_BUDGET["intent"]
+SIMILARITY_SNIPPET_WEIGHT = SIMILARITY_WEIGHT_BUDGET["snippet"]
+SIMILARITY_ARTIFACT_WEIGHT = SIMILARITY_WEIGHT_BUDGET["artifacts"]
+SIMILARITY_RULE_WEIGHT = SIMILARITY_WEIGHT_BUDGET["rules"]
+SIMILARITY_TOOL_WEIGHT = SIMILARITY_WEIGHT_BUDGET["tools"]
 SIMILARITY_GENERIC_ONLY_PENALTY = 0.08
-SIMILARITY_WEIGHT_TOTAL = (
-    SIMILARITY_TASK_SHAPES_WEIGHT
-    + SIMILARITY_SPECIFIC_SHAPE_BONUS
-    + SIMILARITY_INTENT_WEIGHT
-    + SIMILARITY_SNIPPET_WEIGHT
-    + SIMILARITY_ARTIFACT_WEIGHT
-    + SIMILARITY_RULE_WEIGHT
-    + SIMILARITY_TOOL_WEIGHT
-)
+SIMILARITY_WEIGHT_TOTAL = sum(SIMILARITY_WEIGHT_BUDGET.values())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -646,6 +647,9 @@ def _hydrate_store_slice(
     until: str,
     sources_file: str | None,
 ) -> None:
+    # We intentionally allow overlapping hydrate windows here.
+    # `evaluate_slice_completeness()` already reuses broader covering slices before hydration,
+    # and `read_store_packets()` collapses overlapping observations across source_run boundaries.
     command = [
         "python3",
         str(SCRIPT_DIR / "aggregate.py"),

@@ -1,9 +1,9 @@
 ---
 name: skill-miner
 description: >
-  Claude / Codex 履歴から反復パターンを抽出し、
-  `CLAUDE.md` / `skill` / `hook` / `agent` のどれに固定すべきかを評価し、
-  proposal を返す。
+  Claude / Codex 履歴から反復パターンや定着させたい作法を抽出し、
+  recurring workflow / repeated instruction を
+  `CLAUDE.md` / `skill` / `hook` / `agent` のどれに固定すべきか評価して proposal を返す。
 user-invocable: true
 ---
 
@@ -79,7 +79,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 5. adaptive window は `workspace` モードにだけ持たせる
 6. 実行モードは CLI 引数だけで決める。state file は持たない
 7. `candidates` と `unclustered` を `ready` / `needs_research` / `rejected` に分ける
-8. 正式提案は `proposal_ready=true` の候補だけを採用し、件数は **0-5 件** を正常系として扱う
+8. 正式提案は `proposal_ready=true` の候補だけを採用し、返却件数は `prepare` 側の `top_n` に従う（デフォルト `10`）。`0 件` でも正常系として扱う
 9. `needs_research` 候補だけ、必要な場合に限って `research_targets` を使って 1 回だけ追加調査する
 10. `skill_miner_research_judge.py` の結論を proposal に反映し、`提案成立 / 追加調査待ち / 今回は見送り` を返す
 11. `提案成立` がある時だけ、次セッションでどれを apply するかを確認する
@@ -194,7 +194,7 @@ B0 観測の方法と優先順位ルールは `references/b0-observation.md` を
 
 ルール:
 
-- 正式提案は **0-5 件** を正常系とする
+- 正式提案の返却件数は `prepare` 側の `top_n` に従う（デフォルト `10`）
 - `0 件` でも失敗扱いにせず、理由と次回への示唆を返す
 - `needs_research` 候補は必要な場合だけ detail を取る
 
@@ -233,6 +233,7 @@ proposal は次の 3 区分で返す。
 - `提案成立` だけを重要度順に並べる
 - `追加調査待ち` には `保留理由` を必ず書く
 - `今回は見送り` には 1 文で理由を書く
+- `提案成立` が 1 件以上ある時だけ、末尾に候補選択プロンプトを付けて次セッションの apply / draft 選択へ進める
 
 ## Deep Research Rules
 
@@ -290,4 +291,4 @@ diff preview 例:
 - 期間 contract は `7 日開始 + workspace-only adaptive 30 日` / `--all-sessions` に固定されている
 - 4 分類以外の古い説明が残っていない
 - proposal phase の根拠が `evidence_items[]` だけで表示できる
-- `0-5 件` を正常系として扱っている
+- `0 件` を正常系として扱い、返却上限は `prepare` の `top_n` と一致している

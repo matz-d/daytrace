@@ -79,13 +79,20 @@ def isoformat(value: datetime | str | int | float | None) -> str | None:
     return current.isoformat() if current else None
 
 
+def isoformat_or_now(value: datetime | str | int | float | None) -> str:
+    normalized = ensure_datetime(value) if value is not None else datetime.now().astimezone()
+    return normalized.isoformat()
+
+
 def within_range(value: datetime | str | int | float | None, start: datetime | None, end: datetime | None) -> bool:
     current = ensure_datetime(value)
+    normalized_start = ensure_datetime(start)
+    normalized_end = ensure_datetime(end)
     if current is None:
         return False
-    if start and current < start:
+    if normalized_start and current < normalized_start:
         return False
-    if end and current > end:
+    if normalized_end and current > normalized_end:
         return False
     return True
 

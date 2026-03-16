@@ -258,6 +258,154 @@ class AggregateCliTests(unittest.TestCase):
             self.assertIn("available=", completed.stderr)
             self.assertIn("skipped=unsupported-source(unsupported_platform)", completed.stderr)
 
+    def test_aggregate_all_error_sources_keep_sources_but_emit_no_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            err_a = temp_path / "err_a.py"
+            err_b = temp_path / "err_b.py"
+            sources_file = temp_path / "sources.json"
+
+            for path, name in ((err_a, "err-a"), (err_b, "err-b")):
+                write_file(
+                    path,
+                    textwrap.dedent(
+                        f"""
+                        import json
+
+                        print(json.dumps({{
+                            "status": "error",
+                            "source": "{name}",
+                            "message": "simulated failure",
+                            "events": []
+                        }}))
+                        """
+                    ).strip(),
+                )
+
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "err-a",
+                            f"python3 {err_a}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="other",
+                            scope_mode="all-day",
+                        ),
+                        make_source_entry(
+                            "err-b",
+                            f"python3 {err_b}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="other",
+                            scope_mode="workspace",
+                        ),
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = self.run_aggregate(sources_file)
+            payload = json.loads(completed.stdout)
+
+            self.assertEqual(len(payload["sources"]), 2)
+            self.assertTrue(all(source["status"] == "error" for source in payload["sources"]))
+            self.assertEqual(payload["timeline"], [])
+            self.assertEqual(payload["groups"], [])
+            self.assertEqual(payload["summary"]["total_events"], 0)
+            self.assertEqual(payload["summary"]["source_status_counts"], {"success": 0, "skipped": 0, "error": 2})
+
+    def test_aggregate_excludes_error_source_events_from_timeline_and_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            success_stub = temp_path / "success_stub.py"
+            error_stub = temp_path / "error_stub.py"
+            sources_file = temp_path / "sources.json"
+
+            write_file(
+                success_stub,
+                textwrap.dedent(
+                    """
+                    import json
+
+                    print(json.dumps({
+                        "status": "success",
+                        "source": "success-source",
+                        "events": [
+                            {
+                                "source": "success-source",
+                                "timestamp": "2026-03-09T10:00:00+09:00",
+                                "type": "commit",
+                                "summary": "success event",
+                                "details": {},
+                                "confidence": "high"
+                            }
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+            write_file(
+                error_stub,
+                textwrap.dedent(
+                    """
+                    import json
+
+                    print(json.dumps({
+                        "status": "error",
+                        "source": "error-source",
+                        "message": "simulated failure",
+                        "events": [
+                            {
+                                "source": "error-source",
+                                "timestamp": "2026-03-09T10:01:00+09:00",
+                                "type": "commit",
+                                "summary": "should not reach aggregate timeline",
+                                "details": {},
+                                "confidence": "low"
+                            }
+                        ]
+                    }))
+                    """
+                ).strip(),
+            )
+
+            write_file(
+                sources_file,
+                json.dumps(
+                    [
+                        make_source_entry(
+                            "success-source",
+                            f"python3 {success_stub}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="git",
+                            scope_mode="workspace",
+                        ),
+                        make_source_entry(
+                            "error-source",
+                            f"python3 {error_stub}",
+                            supports_date_range=True,
+                            supports_all_sessions=True,
+                            confidence_category="other",
+                            scope_mode="all-day",
+                        ),
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+            completed = self.run_aggregate(sources_file)
+            payload = json.loads(completed.stdout)
+
+            self.assertEqual([event["source"] for event in payload["timeline"]], ["success-source"])
+            self.assertEqual(len(payload["groups"]), 1)
+            self.assertEqual(payload["groups"][0]["sources"], ["success-source"])
+            self.assertEqual(payload["summary"]["source_status_counts"], {"success": 1, "skipped": 0, "error": 1})
+            self.assertTrue(any(source["name"] == "error-source" and source["status"] == "error" for source in payload["sources"]))
+
     def test_aggregate_store_persistence_is_fail_soft_per_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

@@ -13,13 +13,20 @@ import textwrap
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9 fallback
+    ZoneInfo = None
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from skill_miner_common import annotate_unclustered_packet, build_candidate_quality, build_proposal_sections, candidate_label, compact_snippet, judge_research_candidate
-from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, read_claude_packets, read_codex_packets, read_store_packets
+import skill_miner_prepare
+from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, filter_packets_by_days, read_claude_packets, read_codex_packets, read_store_packets
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -213,6 +220,25 @@ class SkillMinerTests(unittest.TestCase):
         )
 
         return workspace, claude_root, codex_history, codex_sessions
+
+    def _require_new_york_tz(self) -> "ZoneInfo":
+        if ZoneInfo is None:
+            self.skipTest("zoneinfo is unavailable")
+        try:
+            return ZoneInfo("America/New_York")
+        except Exception as exc:  # pragma: no cover - depends on system tzdata
+            self.skipTest(f"America/New_York timezone unavailable: {exc}")
+
+    def _filter_packets_at(self, packets: list[dict[str, object]], *, now: datetime, tz: "ZoneInfo", days: int) -> tuple[list[dict[str, object]], str | None]:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tzinfo=None):  # type: ignore[override]
+                if tzinfo is None:
+                    return now.replace(tzinfo=None)
+                return now.astimezone(tzinfo)
+
+        with patch.object(skill_miner_prepare, "LOCAL_TZ", tz), patch.object(skill_miner_prepare, "datetime", FixedDateTime):
+            return filter_packets_by_days(packets, days)
 
     def create_wrapper_heavy_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         workspace = root / "workspace"
@@ -686,6 +712,40 @@ class SkillMinerTests(unittest.TestCase):
             _store_slice_bounds(reference_now=reference_now, days=30),
             _store_slice_bounds(reference_now=later_same_day, days=30),
         )
+
+    def test_filter_packets_by_days_keeps_spring_forward_packets_on_boundary_day(self) -> None:
+        new_york = self._require_new_york_tz()
+        packets = [
+            {"packet_id": "spring-a", "timestamp": "2026-03-08T01:59:00-05:00"},
+            {"packet_id": "spring-b", "timestamp": "2026-03-08T03:01:00-04:00"},
+        ]
+
+        filtered, date_window_start = self._filter_packets_at(
+            packets,
+            now=datetime(2026, 3, 15, 12, 0, tzinfo=new_york),
+            tz=new_york,
+            days=7,
+        )
+
+        self.assertEqual([packet["packet_id"] for packet in filtered], ["spring-a", "spring-b"])
+        self.assertEqual(date_window_start, "2026-03-08T00:00:00-05:00")
+
+    def test_filter_packets_by_days_keeps_fall_back_packets_in_repeated_hour(self) -> None:
+        new_york = self._require_new_york_tz()
+        packets = [
+            {"packet_id": "fall-a", "timestamp": "2026-11-01T01:59:00-04:00"},
+            {"packet_id": "fall-b", "timestamp": "2026-11-01T01:01:00-05:00"},
+        ]
+
+        filtered, date_window_start = self._filter_packets_at(
+            packets,
+            now=datetime(2026, 11, 8, 12, 0, tzinfo=new_york),
+            tz=new_york,
+            days=7,
+        )
+
+        self.assertEqual([packet["packet_id"] for packet in filtered], ["fall-a", "fall-b"])
+        self.assertEqual(date_window_start, "2026-11-01T00:00:00-04:00")
 
     def test_prepare_store_input_ignores_non_numeric_tool_counts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1787,6 +1847,50 @@ class SkillMinerTests(unittest.TestCase):
             claude_status = next(item for item in payload["sources"] if item["name"] == "claude-history")
             self.assertEqual(claude_status["status"], "skipped")
             self.assertEqual(claude_status["reason"], "permission_denied")
+
+    def test_prepare_excludes_error_source_packets_from_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, _codex_history, codex_sessions = self.create_fixture(root)
+            broken_history = root / "broken-history"
+            broken_history.mkdir()
+            write_jsonl(
+                claude_root / "repo" / "session-b.jsonl",
+                [
+                    {
+                        "type": "user",
+                        "cwd": str(workspace),
+                        "sessionId": "claude-review-2",
+                        "isSidechain": False,
+                        "timestamp": "2026-03-10T08:00:00+09:00",
+                        "message": {
+                            "role": "user",
+                            "content": f"Review another server PR under {workspace}/src/server.py and keep findings-first output.",
+                        },
+                    },
+                    {
+                        "type": "assistant",
+                        "cwd": str(workspace),
+                        "sessionId": "claude-review-2",
+                        "isSidechain": False,
+                        "timestamp": "2026-03-10T08:05:00+09:00",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "text", "text": "I will inspect the diff and list findings by severity with file-line refs."}
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            payload = self.run_prepare(workspace, claude_root, broken_history, codex_sessions)
+
+            self.assertTrue(any(status["name"] == "codex-history" and status["status"] == "error" for status in payload["sources"]))
+            self.assertGreaterEqual(len(payload["candidates"]), 1)
+            for candidate in payload["candidates"]:
+                self.assertEqual(candidate["support"]["codex_packets"], 0)
+                self.assertTrue(all(item["source"] == "claude-history" for item in candidate.get("evidence_items", [])))
 
     def test_prepare_ignores_broken_jsonl_lines(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -7,5 +7,34 @@
   },
   "homepage": "https://github.com/KaishuShito/agi-lab-skills-marketplace",
   "license": "MIT",
-  "keywords": ["daily-report", "activity-trace", "skill-mining", "post-draft"]
+  "keywords": ["daily-report", "activity-trace", "skill-mining", "post-draft"],
+  "skills": [
+    {
+      "name": "daily-report",
+      "path": "skills/daily-report/SKILL.md",
+      "description": "ローカル証跡を集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。 今日の自分用日報、共有用レポート、昨日の活動まとめを作りたい時に使う。",
+      "scripts": [
+        "scripts/daily_report_projection.py"
+      ]
+    },
+    {
+      "name": "skill-miner",
+      "path": "skills/skill-miner/SKILL.md",
+      "description": "Claude / Codex 履歴から反復パターンや定着させたい作法を抽出し、 recurring workflow / repeated instruction を `CLAUDE.md` / `skill` / `hook` / `agent` のどれに固定すべきか評価して proposal を返す。",
+      "scripts": [
+        "scripts/skill_miner_prepare.py",
+        "scripts/skill_miner_detail.py",
+        "scripts/skill_miner_research_judge.py",
+        "scripts/skill_miner_proposal.py"
+      ]
+    },
+    {
+      "name": "post-draft",
+      "path": "skills/post-draft/SKILL.md",
+      "description": "1日の活動ログから、その日全体の流れを読者向け narrative draft に再構成する。記事を書きたい、ブログにまとめたい、ふりかえりを書きたい、学びを共有したい時に使う。topic / reader は任意で上書きできる。",
+      "scripts": [
+        "scripts/post_draft_projection.py"
+      ]
+    }
+  ]
 }
