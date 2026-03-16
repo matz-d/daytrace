@@ -25,6 +25,7 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class ClaudeHistoryTests(unittest.TestCase):
+    @unittest.skipIf(os.getuid() == 0, "root bypasses file permissions")
     def test_permission_denied_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

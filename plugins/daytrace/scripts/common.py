@@ -57,7 +57,7 @@ def parse_datetime(value: str | None, *, bound: str = "start") -> datetime | Non
     elif parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=LOCAL_TZ)
 
-    return parsed.astimezone(LOCAL_TZ)
+    return parsed
 
 
 def ensure_datetime(value: datetime | str | int | float | None) -> datetime | None:
@@ -66,9 +66,9 @@ def ensure_datetime(value: datetime | str | int | float | None) -> datetime | No
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=LOCAL_TZ)
-        return value.astimezone(LOCAL_TZ)
+        return value
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc).astimezone(LOCAL_TZ)
+        return datetime.fromtimestamp(value, tz=timezone.utc)
     if isinstance(value, str):
         return parse_datetime(value)
     raise TypeError(f"Unsupported datetime value: {value!r}")

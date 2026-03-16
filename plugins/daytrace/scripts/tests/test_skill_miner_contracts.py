@@ -468,8 +468,10 @@ class SkillMinerContractTests(unittest.TestCase):
 
             self.assertEqual(source["status"], "success")
             self.assertEqual(len(packets), 1)
-            self.assertEqual(packets[0]["timestamp"], "2026-03-10T09:00:00+09:00")
-            self.assertEqual(packets[0]["session_ref"], f"codex:codex-bad-meta:{int(datetime.fromisoformat('2026-03-10T09:00:00+09:00').timestamp())}")
+            expected_epoch = int(datetime.fromisoformat("2026-03-10T09:00:00+09:00").timestamp())
+            actual_epoch = int(datetime.fromisoformat(packets[0]["timestamp"]).timestamp())
+            self.assertEqual(actual_epoch, expected_epoch)
+            self.assertEqual(packets[0]["session_ref"], f"codex:codex-bad-meta:{expected_epoch}")
 
 
 if __name__ == "__main__":
