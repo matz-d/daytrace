@@ -279,7 +279,7 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertTrue(source_runs)
             self.assertEqual(source_runs[0]["confidence_categories"], [])
             self.assertEqual(source_runs[0]["filters"], {})
-            self.assertEqual(source_runs[0]["command"], {})
+            self.assertEqual(source_runs[0]["command"], [])
             self.assertIn("decode_warnings", source_runs[0])
 
     def test_get_activities_derives_and_persists_grouped_rows(self) -> None:

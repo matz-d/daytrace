@@ -124,7 +124,7 @@ def _row_to_source_run(row: sqlite3.Row) -> dict[str, Any]:
         "until_value": row["until_value"],
         "all_sessions": bool(row["all_sessions"]),
         "filters": _safe_json_loads(row, "filters_json", default={}, warnings=warnings, expected_type=dict),
-        "command": _safe_json_loads(row, "command_json", default={}, warnings=warnings, expected_type=dict),
+        "command": _safe_json_loads(row, "command_json", default=[], warnings=warnings, expected_type=list),
         "reason": row["reason"],
         "message": row["message"],
         "duration_sec": float(row["duration_sec"]),

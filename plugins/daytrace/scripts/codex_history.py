@@ -205,7 +205,14 @@ def main() -> None:
             if meta_details is None:
                 continue
 
-            session_timestamp = meta_details.get("timestamp") or (history_entry["timestamps"][0] if history_entry["timestamps"] else None)
+            session_timestamp = (
+                meta_details.get("timestamp")
+                or (history_entry["timestamps"][0] if history_entry["timestamps"] else None)
+                or earliest_iso_timestamp(commentary_timestamps + tool_timestamps)
+                or None
+            )
+            if session_timestamp is None:
+                continue
             commentary_anchor = commentary_timestamps[-1] if commentary_timestamps else session_timestamp
             merged_user_excerpts = list(history_entry["user_excerpts"])
             for excerpt in event_user_excerpts:

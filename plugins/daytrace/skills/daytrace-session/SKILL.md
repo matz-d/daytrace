@@ -145,13 +145,24 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 [DayTrace] 調査完了: 1 件を「ready」に昇格
 ```
 
-5. 提案の組み立て:
-   - prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡して最終 proposal を生成する
+5. 分類判定（LLM が担当）:
+   - `ready` および昇格した候補それぞれに `suggested_kind` を付与する
+   - 分類ルールは `skills/skill-miner/SKILL.md` の Classification Rules に従う
+   - 値は `CLAUDE.md` / `skill` / `hook` / `agent` のいずれか
+   - 分類結果を候補 dict に書き込んでから次のステップに渡す
+   - 判断ログ:
+
+```
+[DayTrace] 候補を分類しました: #1 → CLAUDE.md, #2 → skill
+```
+
+6. 提案の組み立て:
+   - 分類済みの候補を含む prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡して最終 proposal を生成する
    - `proposal.py` が返す `markdown` フィールドをそのまま出力する
    - `ready` が 0 件の場合: その旨と次回への示唆を 1-2 文で出す
 
-6. 自動判断 — CLAUDE.md 適用候補:
-   - 条件: `ready` 候補の中に `CLAUDE.md` 分類が 1 件以上
+7. 自動判断 — CLAUDE.md 適用候補:
+   - 条件: `ready` 候補の中に `suggested_kind == "CLAUDE.md"` が 1 件以上
    - 満たす場合: `skill-miner` skill の Immediate Apply Spec に従い diff preview を表示する
    - 判断ログ:
 
@@ -202,7 +213,7 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 1. Phase 1 の判断ログ
 2. Phase 2 の日報出力（`daily-report` SKILL.md の Output Rules に準拠）
 3. Phase 2 の共有用日報（条件付き）
-4. Phase 3 の判断ログ + 提案出力（`skill-miner` SKILL.md の Proposal Format に準拠）
+4. Phase 3 の判断ログ + 分類結果 + 提案出力（`skill-miner` SKILL.md の Proposal Format に準拠）
 5. Phase 3 の CLAUDE.md diff preview（条件付き）
 6. Phase 4 の判断ログ + 下書き出力（`post-draft` SKILL.md の Output Rules に準拠）
 7. Phase 5 のセッションサマリ
@@ -215,7 +226,7 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 各フェーズの出力ルールは個別 skill の SKILL.md を参照する。
 
 - Phase 2: `skills/daily-report/SKILL.md` — Output Rules, Confidence Handling, Mixed-Scope Note Rules, Graceful Degrade
-- Phase 3: `skills/skill-miner/SKILL.md` — Proposal Format, Deep Research Rules, CLAUDE.md Immediate Apply Spec, Triage Rules
+- Phase 3: `skills/skill-miner/SKILL.md` — Classification Rules, Proposal Format, Deep Research Rules, CLAUDE.md Immediate Apply Spec, Triage Rules
 - Phase 4: `skills/post-draft/SKILL.md` — Narrative Policy, Reader Policy, Output Rules, Graceful Degrade
 
 本 skill は orchestration のみを担い、個別 skill の出力フォーマットや品質基準を上書きしない。
@@ -241,7 +252,8 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 | 続行 vs 停止 | success >= 1 | 続行 | 空日報 → Phase 5 |
 | 共有用追加 | mode 未指定 & total_groups >= 5 | 両方生成 | 自分用のみ |
 | 追加調査実行 | needs_research >= 1 | detail + judge 自動実行 | スキップ |
-| CLAUDE.md diff | ready に CLAUDE.md 候補 | diff preview 表示 | スキップ |
+| 分類判定 | ready 候補 >= 1 | LLM が suggested_kind を付与 | スキップ |
+| CLAUDE.md diff | ready に suggested_kind == "CLAUDE.md" | diff preview 表示 | スキップ |
 | 投稿下書き | AI + Git 共起 or groups >= 4 | 生成 | スキップ |
 
 ## Completion Check

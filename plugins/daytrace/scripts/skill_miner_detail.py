@@ -96,7 +96,16 @@ def resolve_claude_detail(file_path: Path, epoch: int, gap_hours: int) -> dict[s
         timestamp = str(earliest_iso_timestamp([record.get("timestamp") for record in packet_records]) or "")
         for record in packet_records:
             workspace = record.get("cwd") or workspace
-            text = claude_visible_text(record.get("message"))
+            message = record.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_use":
+                            name = str(item.get("name") or "").lower()
+                            if name:
+                                tools[name] += 1
+            text = claude_visible_text(message)
             if not text:
                 continue
             role = "user" if record.get("type") == "user" else "assistant"
