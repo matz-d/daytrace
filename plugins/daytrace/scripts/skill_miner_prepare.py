@@ -629,8 +629,9 @@ def _is_store_slice_sufficient(
 
 def _store_slice_bounds(*, reference_now: datetime, days: int) -> tuple[str, str]:
     local_now = reference_now.astimezone()
-    start_date = (local_now - timedelta(days=days)).date().isoformat()
-    end_date = local_now.date().isoformat()
+    # Add 1-day buffer to start to capture data from timezones ahead of LOCAL_TZ
+    start_date = (local_now - timedelta(days=days + 1)).date().isoformat()
+    end_date = (local_now + timedelta(days=1)).date().isoformat()
     return start_date, end_date
 
 
@@ -803,15 +804,17 @@ def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
 def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[list[dict[str, Any]], str | None]:
     if days <= 0:
         raise ValueError("--days must be a positive integer")
-    threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    from common import LOCAL_TZ
+    today = datetime.now(LOCAL_TZ).date()
+    threshold_date = today - timedelta(days=days)
     filtered: list[dict[str, Any]] = []
     for packet in packets:
         timestamp = ensure_datetime(packet.get("timestamp"))
         if timestamp is None:
             continue
-        if timestamp >= threshold:
+        if timestamp.date() >= threshold_date:
             filtered.append(packet)
-    return filtered, threshold.isoformat()
+    return filtered, datetime.combine(threshold_date, datetime.min.time(), tzinfo=LOCAL_TZ).isoformat()
 
 
 def prepare_window_result(packets: list[dict[str, Any]], days: int) -> dict[str, Any]:

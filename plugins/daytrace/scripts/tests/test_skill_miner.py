@@ -1734,6 +1734,7 @@ class SkillMinerTests(unittest.TestCase):
             self.assertTrue(payload["summary"]["no_sources_available"])
             self.assertEqual(payload["candidates"], [])
 
+    @unittest.skipIf(os.getuid() == 0, "root bypasses file permissions")
     def test_prepare_handles_permission_denied(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
