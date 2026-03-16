@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,23 @@ class WorkspaceFileActivityTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["events"], [])
+
+    def test_not_git_repo_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            completed = subprocess.run(
+                ["python3", str(SCRIPT), "--workspace", str(workspace)],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "skipped")
+            self.assertEqual(payload["reason"], "not_git_repo")
+            self.assertEqual(payload["events"], [])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,19 @@
   "keywords": ["daily-report", "activity-trace", "skill-mining", "post-draft"],
   "skills": [
     {
+      "name": "daytrace-session",
+      "path": "skills/daytrace-session/SKILL.md",
+      "description": "「今日の振り返りをお願い」の一言で、ローカル証跡の収集・日報生成・反復パターン提案・投稿下書きまで 自律的に完走する統合セッション。振り返りをまとめて、全部やって、1日のまとめ、と言われた時に使う。",
+      "scripts": [
+        "scripts/daily_report_projection.py",
+        "scripts/skill_miner_prepare.py",
+        "scripts/skill_miner_detail.py",
+        "scripts/skill_miner_research_judge.py",
+        "scripts/skill_miner_proposal.py",
+        "scripts/post_draft_projection.py"
+      ]
+    },
+    {
       "name": "daily-report",
       "path": "skills/daily-report/SKILL.md",
       "description": "ローカル証跡を集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。 今日の自分用日報、共有用レポート、昨日の活動まとめを作りたい時に使う。",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 
 from common import (
@@ -14,12 +15,14 @@ from common import (
     parse_datetime,
     resolve_workspace,
     run_command,
+    skipped_response,
     success_response,
     within_range,
 )
 
 
 SOURCE_NAME = "workspace-file-activity"
+GIT_TIMEOUT_SEC = 10
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,7 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def repo_context(workspace: Path) -> tuple[Path, str] | None:
-    repo_check = run_command(["git", "-C", str(workspace), "rev-parse", "--show-toplevel"])
+    repo_check = run_command(
+        ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+        timeout=GIT_TIMEOUT_SEC,
+    )
     if repo_check.returncode != 0:
         return None
 
@@ -46,6 +52,7 @@ def repo_context(workspace: Path) -> tuple[Path, str] | None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    workspace: Path | None = None
 
     try:
         workspace = resolve_workspace(args.workspace)
@@ -67,7 +74,8 @@ def main() -> None:
                 "--exclude-standard",
                 "--",
                 pathspec,
-            ]
+            ],
+            timeout=GIT_TIMEOUT_SEC,
         )
         if result.returncode != 0:
             emit(error_response(SOURCE_NAME, result.stderr.strip() or "git ls-files failed", workspace=str(workspace)))
@@ -75,14 +83,25 @@ def main() -> None:
 
         rel_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         events = []
+        skipped_paths = []
         for rel_path in rel_paths:
             full_path = (repo_root / rel_path).resolve()
-            if not is_within_path(full_path, workspace):
-                continue
-            if not full_path.exists() or not full_path.is_file():
-                continue
+            try:
+                if not is_within_path(full_path, workspace):
+                    continue
+                if not full_path.exists() or not full_path.is_file():
+                    continue
 
-            stats = full_path.stat()
+                stats = full_path.stat()
+            except PermissionError as exc:
+                skipped_paths.append(
+                    {
+                        "path": rel_path,
+                        "reason": "permission_denied",
+                        "message": str(exc),
+                    }
+                )
+                continue
             timestamp = isoformat(stats.st_mtime)
             if not within_range(timestamp, start, end):
                 continue
@@ -112,8 +131,19 @@ def main() -> None:
                 repo_root=str(repo_root),
                 since=args.since,
                 until=args.until,
+                **({"skipped_paths": skipped_paths} if skipped_paths else {}),
             )
         )
+    except PermissionError as exc:
+        payload = {"message": str(exc)}
+        if workspace is not None:
+            payload["workspace"] = str(workspace)
+        emit(skipped_response(SOURCE_NAME, "permission_denied", **payload))
+    except subprocess.TimeoutExpired as exc:
+        payload = {"message": f"git command timed out after {exc.timeout}s"}
+        if workspace is not None:
+            payload["workspace"] = str(workspace)
+        emit(error_response(SOURCE_NAME, payload.pop("message"), **payload))
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 

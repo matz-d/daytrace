@@ -27,6 +27,7 @@ from derived_store import (
     get_activities,
     get_observations,
     get_patterns,
+    get_source_runs,
     get_slice_source_runs,
     persist_patterns_from_prepare,
 )
@@ -230,6 +231,57 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(observations[0]["confidence_categories"], ["git"])
             self.assertEqual(observations[1]["confidence_categories"], ["ai_history"])
 
+    def test_get_observations_fail_soft_on_corrupted_json_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+
+            with sqlite3.connect(store_path) as connection:
+                connection.execute(
+                    """
+                    UPDATE source_runs
+                    SET confidence_categories_json = '{'
+                    """
+                )
+                connection.execute(
+                    """
+                    UPDATE observations
+                    SET details_json = '{',
+                        event_json = '{'
+                    """
+                )
+                connection.commit()
+
+            observations = get_observations(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+            self.assertTrue(observations)
+            self.assertEqual(observations[0]["confidence_categories"], [])
+            self.assertEqual(observations[0]["details"], {})
+            self.assertEqual(observations[0]["event"], {})
+            self.assertIn("decode_warnings", observations[0])
+
+    def test_get_source_runs_fail_soft_on_corrupted_json_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+
+            with sqlite3.connect(store_path) as connection:
+                connection.execute(
+                    """
+                    UPDATE source_runs
+                    SET confidence_categories_json = '{',
+                        filters_json = '{',
+                        command_json = '{'
+                    """
+                )
+                connection.commit()
+
+            source_runs = get_source_runs(store_path, workspace=workspace, all_sessions=True)
+            self.assertTrue(source_runs)
+            self.assertEqual(source_runs[0]["confidence_categories"], [])
+            self.assertEqual(source_runs[0]["filters"], {})
+            self.assertEqual(source_runs[0]["command"], {})
+            self.assertIn("decode_warnings", source_runs[0])
+
     def test_get_activities_derives_and_persists_grouped_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
@@ -244,6 +296,36 @@ class DerivedStoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0], 2)
+
+    def test_get_activities_fail_soft_on_corrupted_json_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+            self.assertTrue(
+                get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+            )
+
+            with sqlite3.connect(store_path) as connection:
+                connection.execute(
+                    """
+                    UPDATE activities
+                    SET sources_json = '{',
+                        confidence_categories_json = '{',
+                        evidence_json = '{',
+                        observation_fingerprints_json = '{',
+                        activity_json = '{'
+                    """
+                )
+                connection.commit()
+
+            activities = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+            self.assertTrue(activities)
+            self.assertEqual(activities[0]["sources"], [])
+            self.assertEqual(activities[0]["confidence_categories"], [])
+            self.assertEqual(activities[0]["evidence"], [])
+            self.assertEqual(activities[0]["observation_fingerprints"], [])
+            self.assertEqual(activities[0]["activity"], {})
+            self.assertIn("decode_warnings", activities[0])
 
     def test_get_activities_rebuilds_when_observations_change(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -395,6 +477,50 @@ class DerivedStoreTests(unittest.TestCase):
             patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
             self.assertEqual(len(patterns), 1)
             self.assertRegex(patterns[0]["derived_at"], r"^2026-03-12T11:45:00[+-]\d{2}:\d{2}$")
+
+    def test_get_patterns_fail_soft_on_corrupted_json_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "daytrace.sqlite3"
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            payload = {
+                "status": "success",
+                "source": "skill-miner-prepare",
+                "candidates": [
+                    {
+                        "candidate_id": "candidate-001",
+                        "label": "Review workflow",
+                        "score": 0.82,
+                        "support": {"total_packets": 3},
+                        "session_refs": ["codex:abc"],
+                        "evidence_items": [],
+                    }
+                ],
+                "summary": {"total_candidates": 1},
+                "config": {
+                    "workspace": str(workspace.resolve()),
+                    "observation_mode": "workspace",
+                    "days": 7,
+                    "effective_days": 7,
+                },
+            }
+
+            persist_patterns_from_prepare(payload, store_path=store_path)
+            with sqlite3.connect(store_path) as connection:
+                connection.execute(
+                    """
+                    UPDATE patterns
+                    SET support_json = '{',
+                        pattern_json = '{'
+                    """
+                )
+                connection.commit()
+
+            patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
+            self.assertEqual(len(patterns), 1)
+            self.assertEqual(patterns[0]["support"], {})
+            self.assertEqual(patterns[0]["pattern"], {})
+            self.assertIn("decode_warnings", patterns[0])
 
     def test_evaluate_slice_completeness_empty_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

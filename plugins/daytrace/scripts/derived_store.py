@@ -15,6 +15,57 @@ ACTIVITY_DERIVATION_VERSION = "activities-v1"
 PATTERN_DERIVATION_VERSION = "skill-miner-candidate-v1"
 
 
+def _decode_warning(field: str, reason: str) -> str:
+    return f"{field}:{reason}"
+
+
+def _safe_json_loads(
+    row: sqlite3.Row,
+    field: str,
+    *,
+    default: Any,
+    warnings: list[str],
+    expected_type: Any = None,
+) -> Any:
+    raw_value = row[field]
+    if raw_value is None:
+        return default
+    try:
+        decoded = json.loads(raw_value)
+    except (TypeError, json.JSONDecodeError):
+        warnings.append(_decode_warning(field, "invalid_json"))
+        return default
+    if expected_type is not None and not isinstance(decoded, expected_type):
+        expected_name = (
+            ",".join(item.__name__ for item in expected_type)
+            if isinstance(expected_type, tuple)
+            else expected_type.__name__
+        )
+        warnings.append(
+            _decode_warning(
+                field,
+                f"unexpected_type:{type(decoded).__name__}:expected:{expected_name}",
+            )
+        )
+        return default
+    return decoded
+
+
+def _attach_decode_warnings(payload: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    if warnings:
+        payload["decode_warnings"] = warnings
+    return payload
+
+
+def _load_confidence_categories(row: sqlite3.Row, field: str, warnings: list[str]) -> list[str]:
+    raw_categories = _safe_json_loads(row, field, default=[], warnings=warnings)
+    if isinstance(raw_categories, list):
+        return [str(item) for item in raw_categories]
+    if raw_categories in (None, ""):
+        return []
+    return [str(raw_categories)]
+
+
 def _normalize_workspace_filter(workspace: str | Path | None) -> str | None:
     if workspace is None:
         return None
@@ -29,9 +80,8 @@ def _normalize_time_filter(value: str | None, *, bound: str) -> str | None:
 
 
 def _row_to_observation(row: sqlite3.Row) -> dict[str, Any]:
-    raw_categories = json.loads(row["confidence_categories_json"])
-    confidence_categories = raw_categories if isinstance(raw_categories, list) else [str(raw_categories)]
-    return {
+    warnings: list[str] = []
+    payload = {
         "observation_id": int(row["id"]),
         "source_run_id": int(row["source_run_id"]),
         "run_fingerprint": str(row["run_fingerprint"]),
@@ -47,22 +97,24 @@ def _row_to_observation(row: sqlite3.Row) -> dict[str, Any]:
         "event_type": str(row["event_type"]),
         "summary": str(row["summary"]),
         "confidence": str(row["confidence"]),
-        "details": json.loads(row["details_json"]),
-        "event": json.loads(row["event_json"]),
-        "confidence_categories": confidence_categories,
+        "details": _safe_json_loads(row, "details_json", default={}, warnings=warnings, expected_type=dict),
+        "event": _safe_json_loads(row, "event_json", default={}, warnings=warnings, expected_type=dict),
+        "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
         "collected_at": str(row["collected_at"]),
     }
+    return _attach_decode_warnings(payload, warnings)
 
 
 def _row_to_source_run(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    warnings: list[str] = []
+    payload = {
         "source_run_id": int(row["id"]),
         "run_fingerprint": str(row["run_fingerprint"]),
         "source_name": str(row["source_name"]),
         "source_id": str(row["source_id"]),
         "identity_version": str(row["identity_version"]),
         "manifest_fingerprint": str(row["manifest_fingerprint"]),
-        "confidence_categories": json.loads(row["confidence_categories_json"]),
+        "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
         "command_fingerprint": str(row["command_fingerprint"]),
         "status": str(row["status"]),
         "scope_mode": str(row["scope_mode"]),
@@ -71,14 +123,66 @@ def _row_to_source_run(row: sqlite3.Row) -> dict[str, Any]:
         "since_value": row["since_value"],
         "until_value": row["until_value"],
         "all_sessions": bool(row["all_sessions"]),
-        "filters": json.loads(row["filters_json"]),
-        "command": json.loads(row["command_json"]),
+        "filters": _safe_json_loads(row, "filters_json", default={}, warnings=warnings, expected_type=dict),
+        "command": _safe_json_loads(row, "command_json", default={}, warnings=warnings, expected_type=dict),
         "reason": row["reason"],
         "message": row["message"],
         "duration_sec": float(row["duration_sec"]),
         "events_count": int(row["events_count"]),
         "collected_at": str(row["collected_at"]),
     }
+    return _attach_decode_warnings(payload, warnings)
+
+
+def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
+    warnings: list[str] = []
+    payload = {
+        "activity_id": str(row["activity_id"]),
+        "derivation_version": str(row["derivation_version"]),
+        "input_fingerprint": str(row["input_fingerprint"]),
+        "workspace": row["workspace"],
+        "since_value": row["since_value"],
+        "until_value": row["until_value"],
+        "group_window_minutes": int(row["group_window_minutes"]),
+        "start_timestamp": str(row["start_timestamp"]),
+        "end_timestamp": str(row["end_timestamp"]),
+        "summary": str(row["summary"]),
+        "confidence": str(row["confidence"]),
+        "sources": _safe_json_loads(row, "sources_json", default=[], warnings=warnings, expected_type=list),
+        "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
+        "source_count": int(row["source_count"]),
+        "event_count": int(row["event_count"]),
+        "evidence": _safe_json_loads(row, "evidence_json", default=[], warnings=warnings, expected_type=list),
+        "observation_fingerprints": _safe_json_loads(
+            row,
+            "observation_fingerprints_json",
+            default=[],
+            warnings=warnings,
+            expected_type=list,
+        ),
+        "activity": _safe_json_loads(row, "activity_json", default={}, warnings=warnings, expected_type=dict),
+        "derived_at": str(row["derived_at"]),
+    }
+    return _attach_decode_warnings(payload, warnings)
+
+
+def _row_to_pattern(row: sqlite3.Row) -> dict[str, Any]:
+    warnings: list[str] = []
+    payload = {
+        "pattern_kind": str(row["pattern_kind"]),
+        "pattern_key": str(row["pattern_key"]),
+        "derivation_version": str(row["derivation_version"]),
+        "input_fingerprint": str(row["input_fingerprint"]),
+        "workspace": row["workspace"],
+        "observation_mode": row["observation_mode"],
+        "days": row["days"],
+        "label": str(row["label"]),
+        "score": float(row["score"]),
+        "support": _safe_json_loads(row, "support_json", default={}, warnings=warnings, expected_type=dict),
+        "pattern": _safe_json_loads(row, "pattern_json", default={}, warnings=warnings, expected_type=dict),
+        "derived_at": str(row["derived_at"]),
+    }
+    return _attach_decode_warnings(payload, warnings)
 
 
 def get_source_runs(
@@ -584,29 +688,7 @@ def _read_activities(
         ).fetchall()
     activities = []
     for row in rows:
-        activities.append(
-            {
-                "activity_id": str(row["activity_id"]),
-                "derivation_version": str(row["derivation_version"]),
-                "input_fingerprint": str(row["input_fingerprint"]),
-                "workspace": row["workspace"],
-                "since_value": row["since_value"],
-                "until_value": row["until_value"],
-                "group_window_minutes": int(row["group_window_minutes"]),
-                "start_timestamp": str(row["start_timestamp"]),
-                "end_timestamp": str(row["end_timestamp"]),
-                "summary": str(row["summary"]),
-                "confidence": str(row["confidence"]),
-                "sources": json.loads(row["sources_json"]),
-                "confidence_categories": json.loads(row["confidence_categories_json"]),
-                "source_count": int(row["source_count"]),
-                "event_count": int(row["event_count"]),
-                "evidence": json.loads(row["evidence_json"]),
-                "observation_fingerprints": json.loads(row["observation_fingerprints_json"]),
-                "activity": json.loads(row["activity_json"]),
-                "derived_at": str(row["derived_at"]),
-            }
-        )
+        activities.append(_row_to_activity(row))
     return activities
 
 
@@ -818,20 +900,4 @@ def get_patterns(
             """,
             (query_fingerprint,),
         ).fetchall()
-    return [
-        {
-            "pattern_kind": str(row["pattern_kind"]),
-            "pattern_key": str(row["pattern_key"]),
-            "derivation_version": str(row["derivation_version"]),
-            "input_fingerprint": str(row["input_fingerprint"]),
-            "workspace": row["workspace"],
-            "observation_mode": row["observation_mode"],
-            "days": row["days"],
-            "label": str(row["label"]),
-            "score": float(row["score"]),
-            "support": json.loads(row["support_json"]),
-            "pattern": json.loads(row["pattern_json"]),
-            "derived_at": str(row["derived_at"]),
-        }
-        for row in rows
-    ]
+    return [_row_to_pattern(row) for row in rows]

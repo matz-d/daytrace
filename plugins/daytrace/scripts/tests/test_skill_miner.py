@@ -678,6 +678,7 @@ class SkillMinerTests(unittest.TestCase):
             self.assertGreaterEqual(len(payload["candidates"]), 1)
             self.assertIn("comparison", payload)
             self.assertGreaterEqual(payload["comparison"]["legacy_candidate_count"], 1)
+            self.assertEqual(payload["config"]["store_hydration"]["status"], "hydrated")
 
     def test_prepare_store_hydrates_missing_workspace_slice(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -703,6 +704,48 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(payload["config"]["input_source"], "store")
             self.assertGreaterEqual(len(payload["candidates"]), 1)
             self.assertIn("comparison", payload)
+            self.assertEqual(payload["config"]["store_hydration"]["status"], "hydrated")
+
+    def test_prepare_auto_reports_store_hydration_failure_before_falling_back_to_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            missing_sources = root / "missing-sources.json"
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    "--workspace",
+                    str(workspace),
+                    "--claude-root",
+                    str(claude_root),
+                    "--codex-history-file",
+                    str(codex_history),
+                    "--codex-sessions-root",
+                    str(codex_sessions),
+                    "--input-source",
+                    "auto",
+                    "--store-path",
+                    str(store_path),
+                    "--sources-file",
+                    str(missing_sources),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success", msg=completed.stdout)
+            self.assertEqual(payload["config"]["input_source"], "raw")
+            self.assertTrue(payload["config"]["store_hydration"]["attempted"])
+            self.assertEqual(payload["config"]["store_hydration"]["status"], "failed")
+            self.assertTrue(payload["config"]["store_hydration"]["message"])
+            self.assertIn("[warn] store hydration failed", completed.stderr)
 
     def test_store_slice_bounds_are_stable_within_same_day(self) -> None:
         reference_now = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc).astimezone()

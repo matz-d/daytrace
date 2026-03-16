@@ -1239,6 +1239,7 @@ def main() -> None:
         selected_input_source = "raw"
         source_statuses: list[dict[str, Any]] = []
         store_slice_completeness: dict[str, Any] | None = None
+        store_hydration: dict[str, Any] | None = None
         if args.input_source in {"store", "auto"}:
             if resolved_store_path is None:
                 raise ValueError("--store-path is required when --input-source is store or auto")
@@ -1262,6 +1263,12 @@ def main() -> None:
                 sources_file=args.sources_file,
             )
             store_slice_sufficient = _is_store_slice_sufficient(store_packets, store_slice_completeness)
+            before_hydration_status = store_slice_completeness.get("status") if store_slice_completeness else None
+            store_hydration = {
+                "attempted": False,
+                "status": "not_needed" if store_slice_sufficient else "not_attempted",
+                "before_status": before_hydration_status,
+            }
             if not store_slice_sufficient:
                 try:
                     _hydrate_store_slice(
@@ -1272,7 +1279,14 @@ def main() -> None:
                         until=store_until,
                         sources_file=args.sources_file,
                     )
-                except Exception:
+                except Exception as hydrate_exc:
+                    store_hydration = {
+                        "attempted": True,
+                        "status": "failed",
+                        "before_status": before_hydration_status,
+                        "message": str(hydrate_exc),
+                    }
+                    print(f"[warn] store hydration failed: {hydrate_exc}", file=sys.stderr)
                     if args.input_source == "store":
                         raise
                 else:
@@ -1293,6 +1307,13 @@ def main() -> None:
                         sources_file=args.sources_file,
                     )
                     store_slice_sufficient = _is_store_slice_sufficient(store_packets, store_slice_completeness)
+                    store_hydration = {
+                        "attempted": True,
+                        "status": "hydrated",
+                        "before_status": before_hydration_status,
+                        "after_status": store_slice_completeness.get("status") if store_slice_completeness else None,
+                        "sufficient": store_slice_sufficient,
+                    }
             if args.input_source == "store":
                 all_packets = store_packets
                 source_statuses = store_statuses
@@ -1376,6 +1397,7 @@ def main() -> None:
                     "initial_packet_count": len(initial_window["packets"]),
                     "initial_candidate_count": len(initial_window["candidates"]),
                 },
+                **({"store_hydration": store_hydration} if store_hydration else {}),
                 **({"input_completeness": store_slice_completeness} if selected_input_source == "store" and store_slice_completeness else {}),
             },
         }

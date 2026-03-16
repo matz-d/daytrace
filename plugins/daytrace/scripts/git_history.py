@@ -19,6 +19,7 @@ from common import (
 
 
 SOURCE_NAME = "git-history"
+GIT_TIMEOUT_SEC = 10
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def repo_context(workspace: Path) -> tuple[Path, str] | None:
-    repo_check = run_command(["git", "-C", str(workspace), "rev-parse", "--show-toplevel"])
+    repo_check = run_command(
+        ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+        timeout=GIT_TIMEOUT_SEC,
+    )
     if repo_check.returncode != 0:
         return None
 
@@ -104,6 +108,7 @@ def parse_numstat(record: str, repo_root: Path, workspace: Path) -> dict[str, ob
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    workspace: Path | None = None
 
     try:
         workspace = resolve_workspace(args.workspace)
@@ -130,7 +135,7 @@ def main() -> None:
             command.append(f"--before={end.isoformat()}")
         command.extend(["--", pathspec])
 
-        result = run_command(command)
+        result = run_command(command, timeout=GIT_TIMEOUT_SEC)
         if result.returncode != 0:
             emit(error_response(SOURCE_NAME, result.stderr.strip() or "git log failed", workspace=str(workspace)))
             return
@@ -151,6 +156,11 @@ def main() -> None:
                 until=args.until,
             )
         )
+    except subprocess.TimeoutExpired as exc:
+        payload = {"message": f"git command timed out after {exc.timeout}s"}
+        if workspace is not None:
+            payload["workspace"] = str(workspace)
+        emit(error_response(SOURCE_NAME, payload.pop("message"), **payload))
     except Exception as exc:
         emit(error_response(SOURCE_NAME, str(exc)))
 
