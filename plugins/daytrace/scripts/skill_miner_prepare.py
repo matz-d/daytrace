@@ -51,7 +51,7 @@ from skill_miner_common import (
     load_jsonl,
     overlap_score,
     packet_sort_key,
-    packet_user_repeated_rules,
+    packet_user_rule_hints,
     recent_packet_count,
     skill_miner_packet_is_v2,
     stable_block_keys,
@@ -377,6 +377,8 @@ def _stored_skill_miner_packet(value: Any, *, source_name: str, fallback_workspa
     if not skill_miner_packet_is_v2(value):
         return None
     packet = dict(value)
+    packet["user_rule_hints"] = list(packet.get("user_rule_hints", packet.get("user_repeated_rules", [])))
+    packet["assistant_rule_hints"] = list(packet.get("assistant_rule_hints", packet.get("assistant_repeated_rules", [])))
     packet["source"] = source_name
     packet["repeated_rules"] = list(packet.get("user_repeated_rules", []))
     if fallback_workspace and not packet.get("workspace"):
@@ -782,7 +784,7 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
     primary_non_generic = next((shape for shape in task_shapes_strs if shape not in GENERIC_TASK_SHAPES), "")
     rule_names = {
         str(item.get("normalized") or "")
-        for item in packet_user_repeated_rules(packet)
+        for item in packet_user_rule_hints(packet)
         if isinstance(item, dict) and item.get("normalized")
     }
     return {
@@ -1136,7 +1138,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
         tool_signatures = _top_values([tool for packet in group_packets for tool in packet.get("tool_signature", [])], 5)
         artifact_hints = _top_values([hint for packet in group_packets for hint in packet.get("artifact_hints", [])], 3)
         rule_hints = _top_values(
-            [item.get("normalized") for packet in group_packets for item in packet_user_repeated_rules(packet) if item.get("normalized")],
+            [item.get("normalized") for packet in group_packets for item in packet_user_rule_hints(packet) if item.get("normalized")],
             3,
         )
         representative_examples = _top_values([packet.get("primary_intent") for packet in group_packets if packet.get("primary_intent")], 2)

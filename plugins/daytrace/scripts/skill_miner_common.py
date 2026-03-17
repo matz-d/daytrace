@@ -640,11 +640,12 @@ def infer_artifact_hints(texts: list[str], tools: list[str]) -> list[str]:
     return hints[:3]
 
 
-def infer_repeated_rules(
+def _infer_rule_items(
     texts: list[str],
     workspace: str | None,
     *,
     role: str,
+    min_distinct_messages: int,
 ) -> list[dict[str, str]]:
     patterns = USER_REPEATED_RULE_PATTERNS if role == "user" else ASSISTANT_REPEATED_RULE_PATTERNS
     matched_messages: dict[str, set[str]] = defaultdict(set)
@@ -662,10 +663,38 @@ def infer_repeated_rules(
 
     rules: list[dict[str, str]] = []
     for label, _patterns in patterns:
-        if len(matched_messages.get(label, set())) < 2:
+        if len(matched_messages.get(label, set())) < min_distinct_messages:
             continue
         rules.append({"normalized": label, "raw_snippet": snippets.get(label, label)})
     return rules[:8]
+
+
+def infer_rule_hints(
+    texts: list[str],
+    workspace: str | None,
+    *,
+    role: str,
+) -> list[dict[str, str]]:
+    return _infer_rule_items(
+        texts,
+        workspace,
+        role=role,
+        min_distinct_messages=1,
+    )
+
+
+def infer_repeated_rules(
+    texts: list[str],
+    workspace: str | None,
+    *,
+    role: str,
+) -> list[dict[str, str]]:
+    return _infer_rule_items(
+        texts,
+        workspace,
+        role=role,
+        min_distinct_messages=2,
+    )
 
 
 def most_common_tool(tools: list[str]) -> tuple[str, list[str], int]:
@@ -706,8 +735,26 @@ def packet_user_repeated_rules(packet: dict[str, Any]) -> list[dict[str, str]]:
     return [item for item in rules if isinstance(item, dict)]
 
 
+def packet_user_rule_hints(packet: dict[str, Any]) -> list[dict[str, str]]:
+    rules = packet.get("user_rule_hints")
+    if not isinstance(rules, list):
+        rules = packet.get("user_repeated_rules")
+    if not isinstance(rules, list):
+        rules = packet.get("repeated_rules") or []
+    return [item for item in rules if isinstance(item, dict)]
+
+
 def packet_assistant_repeated_rules(packet: dict[str, Any]) -> list[dict[str, str]]:
     rules = packet.get("assistant_repeated_rules")
+    if not isinstance(rules, list):
+        return []
+    return [item for item in rules if isinstance(item, dict)]
+
+
+def packet_assistant_rule_hints(packet: dict[str, Any]) -> list[dict[str, str]]:
+    rules = packet.get("assistant_rule_hints")
+    if not isinstance(rules, list):
+        rules = packet.get("assistant_repeated_rules")
     if not isinstance(rules, list):
         return []
     return [item for item in rules if isinstance(item, dict)]
@@ -741,6 +788,8 @@ def skill_miner_packet_is_v2(value: Any) -> bool:
         "artifact_hints",
         "tool_signature",
         "representative_snippets",
+        "user_rule_hints",
+        "assistant_rule_hints",
         "user_repeated_rules",
         "assistant_repeated_rules",
     )
@@ -904,6 +953,8 @@ def build_packet(
         workspace,
         user_message_source=user_message_source,
     )
+    user_rule_hints = infer_rule_hints(user_messages, workspace, role="user")
+    assistant_rule_hints = infer_rule_hints(assistant_messages, workspace, role="assistant")
     user_repeated_rules = infer_repeated_rules(user_messages, workspace, role="user")
     assistant_repeated_rules = infer_repeated_rules(assistant_messages, workspace, role="assistant")
     return {
@@ -922,6 +973,8 @@ def build_packet(
         "full_user_intent": full_user_intent,
         "primary_intent_source": primary_intent_source,
         "representative_snippets": snippets,
+        "user_rule_hints": user_rule_hints,
+        "assistant_rule_hints": assistant_rule_hints,
         "user_repeated_rules": user_repeated_rules,
         "assistant_repeated_rules": assistant_repeated_rules,
         "repeated_rules": list(user_repeated_rules),
@@ -974,7 +1027,7 @@ def stable_block_keys(packet: dict[str, Any]) -> list[str]:
     top_tool = str(packet.get("top_tool") or "none")
     task_shapes = packet.get("task_shape") or []
     artifact_hints = [str(value) for value in packet.get("artifact_hints", []) if value]
-    repeated_rules = [str(item.get("normalized") or "") for item in packet_user_repeated_rules(packet) if item.get("normalized")]
+    repeated_rules = [str(item.get("normalized") or "") for item in packet_user_rule_hints(packet) if item.get("normalized")]
     first_shape = next((str(shape) for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
     if not first_shape and task_shapes:
         first_shape = str(task_shapes[0])
@@ -1227,6 +1280,8 @@ def build_detail_signal(detail: dict[str, Any]) -> dict[str, Any]:
     tools = [str(tool.get("name") or "") for tool in detail.get("tool_calls", []) if isinstance(tool, dict) and tool.get("name")]
     task_shapes = infer_task_shapes(texts, tools)
     artifact_hints = infer_artifact_hints(texts, tools)
+    user_rule_hints = infer_rule_hints(user_texts, str(detail.get("workspace") or ""), role="user")
+    assistant_rule_hints = infer_rule_hints(assistant_texts, str(detail.get("workspace") or ""), role="assistant")
     user_repeated_rules = infer_repeated_rules(user_texts, str(detail.get("workspace") or ""), role="user")
     assistant_repeated_rules = infer_repeated_rules(assistant_texts, str(detail.get("workspace") or ""), role="assistant")
     primary_intent, _full_user_intent, _primary_intent_source = build_primary_intent_fields(
@@ -1239,6 +1294,8 @@ def build_detail_signal(detail: dict[str, Any]) -> dict[str, Any]:
         "session_ref": detail.get("session_ref"),
         "task_shapes": task_shapes,
         "artifact_hints": artifact_hints,
+        "user_rule_hints": [item.get("normalized") for item in user_rule_hints if item.get("normalized")],
+        "assistant_rule_hints": [item.get("normalized") for item in assistant_rule_hints if item.get("normalized")],
         "user_repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
         "assistant_repeated_rules": [item.get("normalized") for item in assistant_repeated_rules if item.get("normalized")],
         "repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
@@ -1339,7 +1396,7 @@ def judge_research_candidate(candidate: dict[str, Any], details: list[dict[str, 
     primary_shapes = [signal["task_shapes"][0] for signal in signals if signal.get("task_shapes")]
     distinct_primary_shapes = sorted(set(primary_shapes))
     non_generic_primary_shapes = sorted({shape for shape in distinct_primary_shapes if shape not in GENERIC_TASK_SHAPES})
-    repeated_rule_count = sum(1 for signal in signals if signal.get("user_repeated_rules"))
+    repeated_rule_count = sum(1 for signal in signals if signal.get("user_rule_hints"))
     primary_artifacts = [signal["artifact_hints"][0] for signal in signals if signal.get("artifact_hints")]
     dominant_artifact, dominant_artifact_count, dominant_artifact_share = _dominant_value_share(primary_artifacts)
     token_sets = [tokenize(str(signal.get("primary_intent") or "")) for signal in signals if signal.get("primary_intent")]
@@ -1363,7 +1420,7 @@ def judge_research_candidate(candidate: dict[str, Any], details: list[dict[str, 
     split_groups = _split_shape_groups(signals)
     eligible_split_groups = sorted(shape for shape, shape_signals in split_groups.items() if len(shape_signals) >= 2)
     subcluster_triage = _build_subcluster_triage(split_groups) if split_groups else []
-    split_first = len(eligible_split_groups) >= 2 and average_overlap < 0.22
+    split_first = len(non_generic_primary_shapes) >= 2 and average_overlap < 0.22
     promote_by_shape = shape_count >= 2 and average_overlap >= 0.12 and (repeated_rule_count >= 1 or most_common_shape not in GENERIC_TASK_SHAPES)
     promote_by_intent_artifact = (
         dominant_artifact_count >= 2
@@ -1375,7 +1432,7 @@ def judge_research_candidate(candidate: dict[str, Any], details: list[dict[str, 
         recommendation = "split_candidate"
         proposed_triage_status = "needs_research"
         proposed_confidence = "weak"
-        split_suggestions = eligible_split_groups
+        split_suggestions = eligible_split_groups or non_generic_primary_shapes
         reasons.append("Sampled refs contain multiple non-generic task objectives with low overlap; split-first is safer.")
     elif promote_by_shape or promote_by_intent_artifact:
         recommendation = "promote_ready"

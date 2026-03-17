@@ -17,6 +17,7 @@ from skill_miner_common import (
     build_proposal_sections,
     clean_user_message_text,
     compare_iso_timestamps,
+    infer_rule_hints,
     infer_task_shapes,
     infer_repeated_rules,
     judge_research_candidate,
@@ -69,6 +70,8 @@ def make_packet(
         "full_user_intent": primary_intent,
         "primary_intent_source": "raw_user_message",
         "representative_snippets": snippets,
+        "user_rule_hints": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
+        "assistant_rule_hints": [],
         "user_repeated_rules": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
         "assistant_repeated_rules": [],
         "repeated_rules": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
@@ -212,6 +215,12 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertNotIn("/daily-report", cleaned)
 
     def test_infer_repeated_rules_requires_two_distinct_user_messages(self) -> None:
+        hinted = infer_rule_hints(
+            ["Review this PR and keep findings first."],
+            "/tmp/workspace",
+            role="user",
+        )
+        self.assertEqual([item["normalized"] for item in hinted], ["findings-first"])
         self.assertEqual(
             infer_repeated_rules(
                 ["Review this PR and keep findings first."],
@@ -563,6 +572,47 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         )
         self.assertEqual(merged["triage_status"], "needs_research")
         self.assertFalse(merged["proposal_ready"])
+
+    def test_judge_splits_mixed_singleton_shapes_when_overlap_is_low(self) -> None:
+        candidate = {
+            "candidate_id": "cand-mixed-singletons",
+            "label": "review changes (review, markdown)",
+            "quality_flags": ["oversized_cluster", "generic_task_shape"],
+            "triage_status": "needs_research",
+            "confidence": "weak",
+            "proposal_ready": False,
+        }
+        details = [
+            {
+                "session_ref": "codex:s1:1",
+                "messages": [
+                    {"role": "user", "text": "Review this PR and return findings by severity."},
+                    {"role": "assistant", "text": "I will inspect the diff and list findings first."},
+                ],
+                "tool_calls": [{"name": "rg", "count": 1}],
+            },
+            {
+                "session_ref": "codex:s2:2",
+                "messages": [
+                    {"role": "user", "text": "Investigate failing logs and identify the root cause."},
+                    {"role": "assistant", "text": "I will inspect the logs and summarize the failure pattern."},
+                ],
+                "tool_calls": [{"name": "sed", "count": 1}],
+            },
+            {
+                "session_ref": "codex:s3:3",
+                "messages": [
+                    {"role": "user", "text": "Prepare a daily report draft from today's work."},
+                    {"role": "assistant", "text": "I will create a report with action items and summary."},
+                ],
+                "tool_calls": [{"name": "python3", "count": 1}],
+            },
+        ]
+
+        judgment = judge_research_candidate(candidate, details)
+
+        self.assertEqual(judgment["recommendation"], "split_candidate")
+        self.assertEqual(set(judgment["split_suggestions"]), {"debug_failure", "prepare_report"})
 
     def test_judge_can_recover_needs_research_candidate_to_ready(self) -> None:
         candidate = {

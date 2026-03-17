@@ -151,6 +151,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 
 - `primary_intent` は packet ごとの主目的を短く正規化した文字列
 - canonical packet は schema v2 (`packet_version=2`) と required fields が揃った時だけ再利用される
+- `user_rule_hints` は 1 回出現の user directive を clustering 用に保持し、`user_repeated_rules` は strict repeated evidence として別に残る
 - `summary` は `primary_intent` 優先、空なら snippet 由来
 - `proposal` 側は `evidence_items[]` を使って表示し、raw history を再読込しない
 - path は `[WORKSPACE]`、URL はドメインだけにマスクされる
