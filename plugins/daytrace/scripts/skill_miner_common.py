@@ -107,18 +107,22 @@ ARTIFACT_HINT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 USER_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    (
-        "findings-first",
         (
             "findings-first",
-            "return findings first",
-            "list findings by severity",
-            "findings by severity",
-            "findings in severity order",
-            "severity ordered findings",
-            "指摘を先に",
-            "指摘をseverity順",
-            "重要度順で指摘",
+            (
+                "findings-first",
+                "return findings first",
+                "report findings first",
+                "list findings by severity",
+                "findings by severity",
+                "findings in severity order",
+                "summarize by severity",
+                "with severity ordering",
+                "severity ordering",
+                "severity ordered findings",
+                "指摘を先に",
+                "指摘をseverity順",
+                "重要度順で指摘",
             "同じ findings-first format",
         ),
     ),
@@ -208,17 +212,21 @@ USER_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 ASSISTANT_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    (
-        "findings-first",
         (
             "findings-first",
-            "findings by severity",
-            "list findings by severity",
-            "return findings first",
-            "severity ordered findings",
-            "指摘を先に",
-            "重要度順で指摘",
-        ),
+            (
+                "findings-first",
+                "findings by severity",
+                "list findings by severity",
+                "return findings first",
+                "report findings first",
+                "summarize by severity",
+                "with severity ordering",
+                "severity ordering",
+                "severity ordered findings",
+                "指摘を先に",
+                "重要度順で指摘",
+            ),
     ),
     (
         "file-line-refs",
@@ -305,6 +313,41 @@ PATH_PATTERN = re.compile(r"(/[^ \n\t`\"']+)")
 WORD_PATTERN = re.compile(r"[A-Za-z0-9_./+-]+|[一-龥ぁ-んァ-ン]+")
 COMMAND_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", re.IGNORECASE | re.DOTALL)
 TAG_PATTERN = re.compile(r"</?([a-z0-9_-]+)(?:\s[^>]*)?>", re.IGNORECASE)
+DIRECTIVE_ENGLISH_PATTERNS = (
+    r"\bplease\b",
+    r"\b(can|could|would) you\b",
+    r"\bneed you to\b",
+    r"\bi want you to\b",
+    r"\bkeep\b",
+    r"\breturn\b",
+    r"\blist\b",
+    r"\binclude\b",
+    r"\bavoid\b",
+    r"\buse\b",
+    r"\bdo not\b",
+    r"\bdon't\b",
+    r"\bnever\b",
+    r"\balways\b",
+    r"\bconfirm before\b",
+    r"\bask before\b",
+    r"\bcheck with me before\b",
+)
+DIRECTIVE_JAPANESE_PATTERNS = (
+    "してください",
+    "して下さい",
+    "してほしい",
+    "して欲しい",
+    "してもらいたい",
+    "してから",
+    "しないで",
+    "やめて",
+    "必ず",
+    "絶対に",
+    "確認してから",
+    "先に確認",
+    "聞いてから",
+    "相談してから",
+)
 
 
 def normalize_match_text(text: str) -> str:
@@ -492,6 +535,29 @@ def build_primary_intent_fields(
     return "No primary intent captured", "No primary intent captured", PRIMARY_INTENT_SOURCE_SUMMARY
 
 
+def feature_messages_for_packet(
+    user_messages: list[str],
+    assistant_messages: list[str],
+) -> tuple[list[str], str]:
+    normalized_user_messages = [message for message in (clean_user_message_text(raw) for raw in user_messages) if message]
+    if normalized_user_messages:
+        return normalized_user_messages, "user"
+    normalized_assistant_messages = [_collapse_whitespace(str(message)) for message in assistant_messages if _collapse_whitespace(str(message))]
+    return normalized_assistant_messages, "assistant_fallback"
+
+
+def is_directive_like_user_message(text: str) -> bool:
+    candidate = _collapse_whitespace(clean_user_message_text(text))
+    if not candidate:
+        return False
+    lowered = candidate.lower()
+    if any(re.search(pattern, lowered) for pattern in DIRECTIVE_ENGLISH_PATTERNS):
+        return True
+    if any(pattern in candidate for pattern in DIRECTIVE_JAPANESE_PATTERNS):
+        return True
+    return False
+
+
 def tokenize(value: str) -> set[str]:
     lowered = normalize_match_text(value)
     tokens = {TOKEN_SYNONYMS.get(token, token) for token in WORD_PATTERN.findall(lowered) if len(token) > 1}
@@ -654,6 +720,8 @@ def _infer_rule_items(
     for text in texts:
         candidate_text = clean_user_message_text(text) if role == "user" else _collapse_whitespace(str(text))
         if not candidate_text:
+            continue
+        if role == "user" and not is_directive_like_user_message(candidate_text):
             continue
         lowered = normalize_match_text(candidate_text)
         for label, rule_patterns in patterns:
@@ -940,12 +1008,10 @@ def build_packet(
     tools: list[str],
     user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
 ) -> dict[str, Any]:
-    cleaned_user_messages = [clean_user_message_text(message) for message in user_messages]
-    normalized_user_messages = [message for message in cleaned_user_messages if message]
-    texts = normalized_user_messages + assistant_messages
+    feature_texts, _feature_source = feature_messages_for_packet(user_messages, assistant_messages)
     top_tool, tool_signature, tool_call_count = most_common_tool(tools)
     snippets: list[str] = []
-    for message in normalized_user_messages + assistant_messages:
+    for message in feature_texts:
         append_unique_snippet(snippets, message, workspace)
     primary_intent, full_user_intent, primary_intent_source = build_primary_intent_fields(
         user_messages,
@@ -967,8 +1033,8 @@ def build_packet(
         "timestamp": timestamp,
         "top_tool": top_tool,
         "tool_signature": tool_signature,
-        "task_shape": infer_task_shapes(texts, tool_signature),
-        "artifact_hints": infer_artifact_hints(texts, tool_signature),
+        "task_shape": infer_task_shapes(feature_texts, []),
+        "artifact_hints": infer_artifact_hints(feature_texts, []),
         "primary_intent": primary_intent,
         "full_user_intent": full_user_intent,
         "primary_intent_source": primary_intent_source,
@@ -1276,10 +1342,10 @@ def build_detail_signal(detail: dict[str, Any]) -> dict[str, Any]:
     messages = detail.get("messages", [])
     user_texts = [str(message.get("text") or "") for message in messages if isinstance(message, dict) and message.get("role") == "user"]
     assistant_texts = [str(message.get("text") or "") for message in messages if isinstance(message, dict) and message.get("role") == "assistant"]
-    texts = [text for text in [clean_user_message_text(message) for message in user_texts] if text] + assistant_texts
+    feature_texts, _feature_source = feature_messages_for_packet(user_texts, assistant_texts)
     tools = [str(tool.get("name") or "") for tool in detail.get("tool_calls", []) if isinstance(tool, dict) and tool.get("name")]
-    task_shapes = infer_task_shapes(texts, tools)
-    artifact_hints = infer_artifact_hints(texts, tools)
+    task_shapes = infer_task_shapes(feature_texts, [])
+    artifact_hints = infer_artifact_hints(feature_texts, [])
     user_rule_hints = infer_rule_hints(user_texts, str(detail.get("workspace") or ""), role="user")
     assistant_rule_hints = infer_rule_hints(assistant_texts, str(detail.get("workspace") or ""), role="assistant")
     user_repeated_rules = infer_repeated_rules(user_texts, str(detail.get("workspace") or ""), role="user")

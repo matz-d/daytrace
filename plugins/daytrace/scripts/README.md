@@ -227,6 +227,8 @@ Contract notes:
 - `--input-source store` reads persisted `claude-history` / `codex-history` observations instead of raw history
 - new store slices persist canonical skill-miner packet payloads inside source observation details; canonical reuse now requires packet schema v2 (`packet_version=2`) plus the required v2 fields
 - packet payloads distinguish `user_rule_hints` (single-message user directives usable for clustering) from `user_repeated_rules` (strict repeated directives kept as higher-confidence evidence)
+- `task_shape`, `artifact_hints`, and `representative_snippets` are derived from cleaned user messages first; assistant text is only used as a fallback when no usable user text was captured
+- `user_rule_hints` are directive-only; explanatory mentions of labels such as `findings-first` or `file-line-refs` are ignored unless the user is actually instructing the agent
 - store-backed prepare reuses only valid v2 canonical packets; stale or invalid packets fall back to highlight-based reconstruction in forced store mode and force raw fallback in auto mode
 - if a store slice was hydrated before canonical packet payloads were upgraded to v2, re-running aggregate for that window is required to recover raw/store parity
 - `--input-source auto` reuses the store only when the matching slice is complete for the current source manifest; missing, partial, degraded, stale, or unvalidated slices fall back to raw history

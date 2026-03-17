@@ -13,13 +13,16 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from skill_miner_common import (
     apply_claude_md_immediate_rules,
+    build_packet,
     build_claude_md_immediate_apply_preview,
     build_proposal_sections,
     clean_user_message_text,
     compare_iso_timestamps,
+    feature_messages_for_packet,
     infer_rule_hints,
     infer_task_shapes,
     infer_repeated_rules,
+    is_directive_like_user_message,
     judge_research_candidate,
     merge_judgment_into_candidate,
     stable_block_keys,
@@ -214,6 +217,27 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertNotIn("Files mentioned by the user", cleaned)
         self.assertNotIn("/daily-report", cleaned)
 
+    def test_feature_messages_for_packet_prefers_user_and_falls_back_to_assistant(self) -> None:
+        feature_texts, source = feature_messages_for_packet(
+            ["<command-name>/clear</command-name>", "Review this PR and return findings first."],
+            ["I will write the markdown summary and list research targets."],
+        )
+
+        self.assertEqual(source, "user")
+        self.assertEqual(feature_texts, ["Review this PR and return findings first."])
+
+        assistant_feature_texts, assistant_source = feature_messages_for_packet(
+            ["<command-name>/clear</command-name>"],
+            ["I will write the markdown summary and list research targets."],
+        )
+
+        self.assertEqual(assistant_source, "assistant_fallback")
+        self.assertEqual(assistant_feature_texts, ["I will write the markdown summary and list research targets."])
+
+    def test_is_directive_like_user_message_rejects_explanatory_mentions(self) -> None:
+        self.assertTrue(is_directive_like_user_message("Please keep findings-first output and include file-line refs."))
+        self.assertFalse(is_directive_like_user_message("This note explains the difference between findings-first and file-line-refs."))
+
     def test_infer_repeated_rules_requires_two_distinct_user_messages(self) -> None:
         hinted = infer_rule_hints(
             ["Review this PR and keep findings first."],
@@ -240,6 +264,18 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         )
 
         self.assertEqual([item["normalized"] for item in repeated], ["findings-first"])
+
+    def test_infer_rule_hints_ignores_non_directive_mentions(self) -> None:
+        hinted = infer_rule_hints(
+            [
+                "This memo compares findings-first and file-line-refs labels in the dataset.",
+                "I saw findings-first and file-line-refs counts increase in the report.",
+            ],
+            "/tmp/workspace",
+            role="user",
+        )
+
+        self.assertEqual(hinted, [])
 
     def test_infer_repeated_rules_matches_always_and_never_imperatives(self) -> None:
         repeated = infer_repeated_rules(
@@ -283,6 +319,25 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertIn("task+rule:review_changes:findings-first", keys)
         self.assertIn("artifact+rule:config:findings-first", keys)
         self.assertNotIn("tool:rg", keys)
+
+    def test_build_packet_uses_user_first_feature_corpus(self) -> None:
+        packet = build_packet(
+            packet_id="pkt-user-first",
+            source="codex-history",
+            session_ref="codex:pkt-user-first:1",
+            session_id="pkt-user-first",
+            workspace="/tmp/workspace",
+            timestamp="2026-03-09T00:00:00+09:00",
+            user_messages=["Review this PR and return findings first."],
+            assistant_messages=["I will write the markdown summary and prepare research targets."],
+            tools=["rg", "git"],
+        )
+
+        self.assertIn("review_changes", packet["task_shape"])
+        self.assertIn("review", packet["artifact_hints"])
+        self.assertNotIn("write_markdown", packet["task_shape"])
+        self.assertNotIn("markdown", packet["artifact_hints"])
+        self.assertEqual(packet["representative_snippets"], ["Review this PR and return findings first."])
 
     def test_similarity_score_weakens_generic_cluster_entry(self) -> None:
         left = make_packet(

@@ -629,13 +629,13 @@ class SkillMinerTests(unittest.TestCase):
             self.assertGreaterEqual(payload["summary"]["block_count"], 1)
             self.assertEqual(len(payload["candidates"]), 1)
             candidate = payload["candidates"][0]
-            self.assertEqual(candidate["support"]["total_packets"], 2)
-            self.assertEqual(candidate["support"]["claude_packets"], 1)
+            self.assertEqual(candidate["support"]["total_packets"], 3)
+            self.assertEqual(candidate["support"]["claude_packets"], 2)
             self.assertEqual(candidate["support"]["codex_packets"], 1)
             self.assertIn("review_changes", candidate["common_task_shapes"])
             self.assertIn("summarize_findings", candidate["common_task_shapes"])
             self.assertIn("rg", candidate["common_tool_signatures"])
-            self.assertEqual(len(candidate["session_refs"]), 2)
+            self.assertEqual(len(candidate["session_refs"]), 3)
             self.assertGreater(candidate["score"], 0)
             self.assertIn(candidate["confidence"], {"medium", "strong"})
             self.assertTrue(candidate["proposal_ready"])
@@ -1287,6 +1287,8 @@ class SkillMinerTests(unittest.TestCase):
                 codex_history,
                 codex_sessions,
                 "--all-sessions",
+                "--reference-date",
+                "2026-03-10",
             )
 
             store_payload = self.run_prepare(
@@ -1295,6 +1297,8 @@ class SkillMinerTests(unittest.TestCase):
                 codex_history,
                 codex_sessions,
                 "--all-sessions",
+                "--reference-date",
+                "2026-03-10",
                 "--input-source",
                 "auto",
                 "--store-path",

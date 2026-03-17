@@ -660,6 +660,12 @@ def _store_slice_bounds(*, reference_now: datetime, days: int) -> tuple[str, str
     return start_date, end_date
 
 
+def _store_reference_now(reference_date: str | None) -> datetime:
+    if reference_date:
+        return datetime.combine(date.fromisoformat(reference_date), datetime.min.time(), tzinfo=LOCAL_TZ)
+    return datetime.now(timezone.utc).astimezone()
+
+
 def _hydrate_store_slice(
     store_path: Path,
     *,
@@ -1271,7 +1277,7 @@ def main() -> None:
             if resolved_store_path is None:
                 raise ValueError("--store-path is required when --input-source is store or auto")
             store_window_days = max(max_window_days, args.days)
-            store_now = datetime.now(timezone.utc).astimezone()
+            store_now = _store_reference_now(args.reference_date)
             store_since, store_until = _store_slice_bounds(reference_now=store_now, days=store_window_days)
             store_packets, store_statuses = read_store_packets(
                 resolved_store_path,
