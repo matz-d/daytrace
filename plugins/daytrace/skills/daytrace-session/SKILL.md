@@ -1,7 +1,7 @@
 ---
 name: daytrace-session
 description: >
-  「今日の振り返りをお願い」の一言で、ローカル証跡の収集・日報生成・反復パターン提案・投稿下書きまで
+  「今日の振り返りをお願い」の一言で、ローカルログの収集・日報生成・反復パターン提案・投稿下書きまで
   自律的に完走する統合セッション。振り返りをまとめて、全部やって、1日のまとめ、と言われた時に使う。
 user-invocable: true
 ---
@@ -90,7 +90,7 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 3. 判断ログを出力する:
 
 ```
-[DayTrace] 証跡を収集しました
+[DayTrace] ログを収集しました
   git-history (12 events) — workspace scope
   claude-history (8 events) — all-day scope
   chrome-history → 権限不足のためスキップ
@@ -103,6 +103,18 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
    - `summary.source_status_counts.success >= 1` → 続行
    - `success == 0` → 空日報を出して Phase 5 へ飛ぶ
 
+### Phase 1.5: DayTrace ダイジェスト
+
+Phase 1 完了直後、Phase 2 に入る前に「今日の DayTrace ダイジェスト」を 3-5 行の散文で出す。
+これは全フェーズの結果を先読みするものではなく、ログから読み取れる 1 日の概観を先に見せるためのもの。
+
+```
+## 今日の DayTrace ダイジェスト
+今日は N 件のソースから X 件の活動を観測しました。
+{主な活動の 1-2 文要約}。
+パターン候補と投稿下書きの結果はこの後に続きます。
+```
+
 ### Phase 2: Daily Report
 
 1. Phase 1 の中間 JSON を使って日報を生成する
@@ -111,66 +123,51 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 4. 自動判断 — 共有用の追加生成:
    - 条件: mode 未指定かつ `summary.total_groups >= 5`
    - 満たす場合: `自分用` に加えて `共有用` も自動生成する
-   - 判断ログ:
-
-```
-[DayTrace] 活動グループが 7 件あるため、共有用の要約も自動生成します
-```
-
    - 満たさない場合: `自分用` のみ
+5. 判断ログは 1 行に圧縮する:
 
 ```
-[DayTrace] 活動グループが 3 件のため、自分用のみ生成します
+[DayTrace] 日報を生成しました（自分用 + 共有用）
+```
+
+または:
+
+```
+[DayTrace] 日報を生成しました（自分用のみ、グループ 3 件）
 ```
 
 ### Phase 3: Pattern Mining & Proposals
 
 1. `skill_miner_prepare.py` を 1 回実行する
 2. `candidates[]` を確認する
-3. 判断ログ:
-
-```
-[DayTrace] 反復パターンを検出中...
-  候補 6 件を発見 (ready: 2, needs_research: 1, rejected: 3)
-```
-
-4. 自動判断 — 追加調査:
+3. 自動判断 — 追加調査:
    - 条件: `needs_research` 候補が 1 件以上
    - 満たす場合: 各 `needs_research` 候補の `research_targets` 上位 refs で `skill_miner_detail.py` → `skill_miner_research_judge.py` を自動実行する
    - 1 候補あたり最大 5 refs、追加調査は 1 回まで
-   - 判断ログ:
-
-```
-[DayTrace] 1 件は追加調査が必要 → 関連セッションを自動確認します
-[DayTrace] 調査完了: 1 件を「ready」に昇格
-```
-
-5. 分類判定（LLM が担当）:
+4. 分類判定（LLM が担当）:
    - `ready` および昇格した候補それぞれに `suggested_kind` を付与する
    - 分類ルールは `skills/skill-miner/SKILL.md` の Classification Rules に従う
    - 値は `CLAUDE.md` / `skill` / `hook` / `agent` のいずれか
    - 分類結果を候補 dict に書き込んでから次のステップに渡す
-   - 判断ログ:
-
-```
-[DayTrace] 候補を分類しました: #1 → CLAUDE.md, #2 → skill
-```
-
-6. 提案の組み立て:
+5. 提案の組み立て:
    - 分類済みの候補を含む prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡して最終 proposal を生成する
    - `proposal.py` が返す `markdown` フィールドをそのまま出力する
-   - `ready` が 0 件の場合: その旨と次回への示唆を 1-2 文で出す
-
-7. 自動判断 — CLAUDE.md 適用候補:
+   - `ready` が 0 件の場合: 0 件時テンプレート（skill-miner SKILL.md 参照）に従い、検出候補数・見送り理由・再実行の目安を出す
+6. 自動判断 — CLAUDE.md 適用候補:
    - 条件: `ready` 候補の中に `suggested_kind == "CLAUDE.md"` が 1 件以上
    - 満たす場合: `skill-miner` skill の Immediate Apply Spec に従い diff preview を表示する
-   - 判断ログ:
-
-```
-[DayTrace] CLAUDE.md に適用可能な候補があります → diff preview を表示します
-```
-
    - CLAUDE.md diff preview への反応だけは、ユーザーの確認を待ってよい（唯一の例外）
+7. 判断ログは 1 行に圧縮する:
+
+```
+[DayTrace] パターン検出: 候補 6 件中 2 件を提案、1 件は有望候補、追加調査 1 件実施済み
+```
+
+0 件の場合:
+
+```
+[DayTrace] パターン検出: 候補 N 件を検出したが、提案条件を満たす候補なし（観測窓 7 日）
+```
 
 ### Phase 4: Post Draft (conditional)
 
@@ -181,44 +178,45 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
    - 満たす場合:
      - `post_draft_projection.py` を 1 回実行する
      - `post-draft` skill の SKILL.md に従って narrative draft を生成する
-     - 判断ログ:
+   - 満たさない場合: スキップ
+2. 判断ログは 1 行に圧縮する:
 
 ```
-[DayTrace] AI + Git の共起パターンを検出 → ブログ下書きを生成します
+[DayTrace] 投稿下書きを生成しました（AI + Git 共起パターンをもとに構成）
 ```
 
-   - 満たさない場合:
+スキップ時:
 
 ```
-[DayTrace] 投稿下書きの生成条件を満たさないため、スキップします (groups: 2, AI+Git 共起: なし)
+[DayTrace] 投稿下書き: 生成条件を満たさないためスキップ (groups: 2, AI+Git 共起: なし)
 ```
 
 ### Phase 5: Session Summary
 
-最後に全フェーズの実施結果をまとめて報告する。
+最後に全フェーズの実施結果を 3-5 行の散文でまとめる。チェックリストではなく、DayTrace がこのセッションで何をしたかの要約として書く。
 
 ```
 [DayTrace] セッション完了
-  日報: 自分用 ✓ / 共有用 ✓
-  パターン提案: 2 件成立 / 1 件追加調査済み / 3 件見送り
-  CLAUDE.md 適用候補: 1 件 (diff preview 済み)
-  投稿下書き: ✓ 生成済み
-  使用ソース: 4 / 5
+今日は N 件のソースから日報を生成し、パターン候補 X 件のうち Y 件を提案しました。
+CLAUDE.md への適用候補が 1 件あり、diff preview を表示済みです。
+投稿下書きは AI + Git の共起パターンをもとに 1 本生成しています。
 ```
 
 ## Output Order
 
 各フェーズの出力は以下の順序で連続して出力する。
 
-1. Phase 1 の判断ログ
-2. Phase 2 の日報出力（`daily-report` SKILL.md の Output Rules に準拠）
-3. Phase 2 の共有用日報（条件付き）
-4. Phase 3 の判断ログ + 分類結果 + 提案出力（`skill-miner` SKILL.md の Proposal Format に準拠）
-5. Phase 3 の CLAUDE.md diff preview（条件付き）
-6. Phase 4 の判断ログ + 下書き出力（`post-draft` SKILL.md の Output Rules に準拠）
-7. Phase 5 のセッションサマリ
+1. Phase 1 の判断ログ（ソース判定の詳細。自律性を見せる最重要ポイントなので圧縮しない）
+2. Phase 1.5 の DayTrace ダイジェスト（3-5 行の散文で 1 日の概観を先に見せる）
+3. Phase 2 の判断ログ（1 行）+ 日報出力（`daily-report` SKILL.md の Output Rules に準拠）
+4. Phase 2 の共有用日報（条件付き）
+5. Phase 3 の判断ログ（1 行）+ 提案出力（`skill-miner` SKILL.md の Proposal Format に準拠）
+6. Phase 3 の CLAUDE.md diff preview（条件付き）
+7. Phase 4 の判断ログ（1 行）+ 下書き出力（`post-draft` SKILL.md の Output Rules に準拠）
+8. Phase 5 のセッションサマリ（散文）
 
 判断ログは `[DayTrace]` プレフィックスで統一する。
+Phase 1 のログだけ詳細に出し、Phase 2-4 のログは 1 行に圧縮する。
 日報・提案・下書きの本文はそのまま読めるように、判断ログと明確に区切る。
 
 ## Sub-Skill Reference

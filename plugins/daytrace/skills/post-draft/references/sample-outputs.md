@@ -23,23 +23,18 @@ narrative draft 前提の出力例と fixture review 手順をまとめる。
 ```markdown
 # aggregate に scope を追加して、date-first な出力契約を崩さずに広げた日
 
+この下書きは、1日のログと workspace ローカルの変更ログをもとに再構成しています。
+
 ## 背景
-その日の DayTrace 作業は、`daily-report` と `post-draft` を date-first 前提へ寄せるための下地作りが中心だった。中でも大きかったのは、aggregator が返す `sources[]` に source ごとの `scope` を持たせて、全日証跡と workspace 限定証跡の混在を後段で説明できるようにしたことだ。
+その日の DayTrace 作業は、`daily-report` と `post-draft` を date-first 前提へ寄せるための下地作りが中心だった。中でも大きかったのは、aggregator が返す `sources[]` に source ごとの `scope` を持たせて、全日ログと workspace 限定ログの混在を後段で説明できるようにしたことだ。
 
-> 注記: Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。
-
-## 何を進めたか
+## 今日の中心
 中心になったのは `aggregate.py` と `sources.json` の更新だった。source registry に `scope_mode` を追加し、`summarize_source_result()` が `scope` を返すようにしたことで、downstream skill が mixed-scope を機械可読な形で扱えるようになった。並行して `test_aggregate.py` に `--date today --all-sessions` と `--workspace /path` のケースを足し、`all-day` と `workspace` の両方が回帰なく出ることを確認している。
 
-## 詰まった点 / 判断したこと
-難しかったのは、全 source を全日化する方向へ踏み込まずに、現行の hybrid 挙動だけを正しく説明できる contract に落とすことだった。`supports_all_sessions` から都度推論する形だと後段 skill が挙動を説明しづらくなるため、source registry に `scope_mode` を明示し、その値をそのまま出力へ流す方針に寄せた。これで `daily-report` や `post-draft` 側は「何を返せるか」を文面で安定して説明しやすくなった。
+難しかったのは、全 source を全日化する方向へ踏み込まずに、現行の hybrid 挙動だけを正しく説明できる contract に落とすことだった。`supports_all_sessions` から都度推論する形だと後段 skill が挙動を説明しづらくなるため、source registry に `scope_mode` を明示し、その値をそのまま出力へ流す方針に寄せた。
 
-## 学び
-この変更で効いたのは、aggregate の top-level shape をほぼ変えずに、後段 skill が必要としていた説明責務だけを足せたことだった。特に `groups` の narrative 的な解釈は LLM 側に残しつつ、scope のような決定論的メタデータだけを先に固定すると、出力 skill の設計がかなり進めやすい。
-
-## 次にやること
-- `post-draft` 側で `sources[].scope` を読み、冒頭の mixed-scope 注記ルールを narrative に組み込む
-- fixture ベースで reader override の出力差分をレビューする
+## 気づき
+この変更で効いたのは、aggregate の top-level shape をほぼ変えずに、後段 skill が必要としていた説明責務だけを足せたことだった。特に `groups` の narrative 的な解釈は LLM 側に残しつつ、scope のような決定論的メタデータだけを先に固定すると、出力 skill の設計がかなり進めやすい。次は `post-draft` 側で `sources[].scope` を読み、冒頭の mixed-scope 注記ルールを narrative に組み込む予定。
 ```
 
 ## Sample 2: `--reader "社内の非エンジニア"`
@@ -54,19 +49,15 @@ narrative draft 前提の出力例と fixture review 手順をまとめる。
 # 1日の作業記録を、外に説明しやすい形へ整理し直した
 
 ## 何に取り組んだか
-この日は、開発作業の記録をあとから説明しやすくするための土台を整えた。1 日全体の動きと、今開いている作業場所だけで確認できる変更とが混ざるため、その違いを出力時に明示できるようにしたのが主な進展だった。
+この日は、開発作業の記録をあとから説明しやすくするための土台を整えた。
 
-> 注記: AI の会話履歴や閲覧履歴はその日全体の情報を含みますが、Git とファイル変更は current workspace の範囲に限られます。
+この下書きは、1日のログと workspace ローカルの変更ログをもとに再構成しています。
 
-## どう進めたか
-まず、集約結果に「その情報が 1 日全体のものか、現在の作業場所に限られるものか」を示す項目を追加した。これにより、あとから日報や記事の下書きを作る際に、どこまでがその日の全体像で、どこからが repo ローカルな根拠かを説明しやすくなった。あわせて、この違いが正しく出るかを確認するテストも足している。
+## 今日の中心
+1 日全体の動きと、今開いている作業場所だけで確認できる変更とが混ざるため、その違いを出力時に明示できるようにしたのが主な進展だった。まず、集約結果に「その情報が 1 日全体のものか、現在の作業場所に限られるものか」を示す項目を追加した。これにより、あとから日報や記事の下書きを作る際に、どこまでがその日の全体像で、どこからが repo ローカルな根拠かを説明しやすくなった。あわせて、この違いが正しく出るかを確認するテストも足している。
 
-## 何が分かったか
+## 気づき
 今回の整理で、出力側の文章が「1 日全体の話」と「今の作業場所に基づく話」を混同しにくくなった。単に情報を増やすのではなく、説明の前提をそろえることで、あとから読む人にも意図が伝わりやすくなることが分かった。
-
-## 次のアクション
-- 記事下書き側でも、このスコープ差を冒頭で短く説明できるようにする
-- 同じ作業ログから、技術者向けと非技術者向けでどこまで自然に書き分けられるか確認する
 ```
 
 ## Fixture Review Procedure

@@ -1419,7 +1419,9 @@ class SkillMinerTests(unittest.TestCase):
     def test_prepare_reports_effective_observation_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, claude_root, codex_history, codex_sessions = self.create_fixture(Path(temp_dir))
-            payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            # Use a fixed reference date one day after the fixture data (2026-03-09) so the
+            # 7-day window includes those packets without relying on the real clock.
+            payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions, "--reference-date", "2026-03-10")
 
             self.assertEqual(payload["config"]["days"], 7)
             self.assertEqual(payload["config"]["effective_days"], 7)
@@ -1658,9 +1660,9 @@ class SkillMinerTests(unittest.TestCase):
         self.assertEqual(len(sections["ready"]), 1)
         self.assertEqual(len(sections["needs_research"]), 1)
         self.assertEqual(len(sections["rejected"]), 1)
-        self.assertIn("## 提案成立", sections["markdown"])
-        self.assertIn("## 追加調査待ち", sections["markdown"])
-        self.assertIn("## 今回は見送り", sections["markdown"])
+        self.assertIn("## 提案（固定化を推奨）", sections["markdown"])
+        self.assertIn("## 有望候補（もう少し観測が必要）", sections["markdown"])
+        self.assertIn("## 観測ノート", sections["markdown"])
         self.assertIsNotNone(sections["selection_prompt"])
 
     def test_proposal_cli_formats_sections_from_prepare_and_judgment(self) -> None:
@@ -1745,6 +1747,7 @@ class SkillMinerTests(unittest.TestCase):
         self.assertEqual(sections["summary"]["needs_research_count"], 1)
         self.assertEqual(sections["summary"]["rejected_count"], 1)
         self.assertIsNone(sections["selection_prompt"])
+        self.assertIn("### 観測範囲", sections["markdown"])
         self.assertIn("今回は有力候補なし", sections["markdown"])
 
     def test_candidate_label_prefers_cluster_signals(self) -> None:

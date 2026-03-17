@@ -101,6 +101,11 @@ def _prepare_payload(
         "candidates": candidates or [],
         "unclustered": unclustered or [],
         "summary": {"total_packets": 5, "total_candidates": len(candidates or [])},
+        "config": {"effective_days": 7, "workspace": "/tmp/daytrace", "all_sessions": False},
+        "sources": [
+            {"name": "claude-history", "status": "success"},
+            {"name": "codex-history", "status": "success"},
+        ],
     }
 
 
@@ -165,15 +170,17 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertEqual(result["summary"]["needs_research_count"], 0)
         self.assertEqual(result["summary"]["rejected_count"], 0)
         self.assertIsNone(result["selection_prompt"])
+        self.assertIn("### 観測範囲", result["markdown"])
         self.assertIn("今回は有力候補なし", result["markdown"])
+        self.assertIn("検出候補数", result["markdown"])
 
     def test_markdown_contains_section_headers(self) -> None:
         payload = _prepare_payload(candidates=[_ready_candidate()])
         result = build_proposal_sections(payload)
 
-        self.assertIn("## 提案成立", result["markdown"])
-        self.assertIn("## 追加調査待ち", result["markdown"])
-        self.assertIn("## 今回は見送り", result["markdown"])
+        self.assertIn("## 提案（固定化を推奨）", result["markdown"])
+        self.assertIn("## 有望候補（もう少し観測が必要）", result["markdown"])
+        self.assertIn("## 観測ノート", result["markdown"])
 
 
 class JudgmentMergeTests(unittest.TestCase):
@@ -278,7 +285,7 @@ class MarkdownFormatTests(unittest.TestCase):
         text = "\n".join(lines)
 
         self.assertIn("Review workflow", text)
-        self.assertIn("分類: CLAUDE.md", text)
+        self.assertIn("固定先: CLAUDE.md", text)
         self.assertIn("期待効果", text)
 
     def test_proposal_item_lines_without_classification(self) -> None:
@@ -286,8 +293,9 @@ class MarkdownFormatTests(unittest.TestCase):
         text = "\n".join(lines)
 
         self.assertIn("Build automation", text)
-        self.assertIn("保留理由", text)
-        self.assertNotIn("分類", text)
+        self.assertIn("現状", text)
+        self.assertIn("次のステップ", text)
+        self.assertNotIn("固定先", text)
 
     def test_rejected_item_lines_format(self) -> None:
         candidate = {"label": "One-off task", "confidence_reason": "single occurrence"}
@@ -304,6 +312,7 @@ class MarkdownFormatTests(unittest.TestCase):
     def test_build_markdown_without_ready_shows_no_candidates(self) -> None:
         markdown = build_markdown([], [_needs_research_candidate()], [])
         self.assertIn("今回は有力候補なし", markdown)
+        self.assertIn("見送り理由の傾向", markdown)
         self.assertNotIn("どの候補をドラフト化しますか", markdown)
 
     def test_build_markdown_limits_rejected_to_five(self) -> None:
@@ -374,7 +383,7 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(payload["status"], "success")
             self.assertEqual(payload["source"], "skill-miner-proposal")
             self.assertEqual(payload["summary"]["ready_count"], 1)
-            self.assertIn("## 提案成立", payload["markdown"])
+            self.assertIn("## 提案（固定化を推奨）", payload["markdown"])
 
     def test_cli_with_judgment_file_promotes_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

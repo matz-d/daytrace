@@ -1239,7 +1239,7 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
         if isinstance(packet, dict):
             rejected.append(annotate_unclustered_packet(packet))
 
-    markdown = build_proposal_markdown(ready, needs_research, rejected)
+    markdown = build_proposal_markdown(ready, needs_research, rejected, metadata=prepare_payload)
     selection_prompt = "どの候補をドラフト化しますか？番号か候補名で指定してください。" if ready else None
     return {
         "ready": ready,
@@ -1255,17 +1255,87 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
     }
 
 
-def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[dict[str, Any]], rejected: list[dict[str, Any]]) -> str:
+def _observation_scope_line(metadata: dict[str, Any] | None) -> str:
+    metadata = metadata or {}
+    config = metadata.get("config") if isinstance(metadata.get("config"), dict) else {}
+    sources = metadata.get("sources") if isinstance(metadata.get("sources"), list) else []
+
+    workspace = config.get("workspace")
+    workspace_label = "current workspace"
+    if isinstance(workspace, str) and workspace.strip():
+        workspace_label = Path(workspace).name or workspace
+    elif config.get("all_sessions"):
+        workspace_label = "all sessions"
+
+    days = config.get("effective_days") or config.get("days") or "?"
+
+    source_names: list[str] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        status = str(source.get("status") or "")
+        if status and status != "success":
+            continue
+        name = str(source.get("name") or source.get("source") or "").strip()
+        if name:
+            source_names.append(name)
+    source_label = ", ".join(source_names) if source_names else "source 不明"
+    return f"観測範囲: {workspace_label} / 直近 {days}日間 / {source_label}"
+
+
+def _detected_candidate_count(metadata: dict[str, Any] | None, ready: list[dict[str, Any]], needs_research: list[dict[str, Any]], rejected: list[dict[str, Any]]) -> int:
+    metadata = metadata or {}
+    summary = metadata.get("summary") if isinstance(metadata.get("summary"), dict) else {}
+    total_candidates = summary.get("total_candidates")
+    if isinstance(total_candidates, int):
+        return total_candidates
+    return len(ready) + len(needs_research) + len(rejected)
+
+
+def _no_ready_reason_summary(needs_research: list[dict[str, Any]], rejected: list[dict[str, Any]]) -> str:
+    if any("oversized_cluster" in (candidate.get("quality_flags") or []) for candidate in needs_research if isinstance(candidate, dict)):
+        return "巨大クラスタが多く、用途が粗すぎて固定化候補にしにくい"
+    if needs_research:
+        return "有望な候補はあるが、まだ意味のまとまりが弱い"
+    if rejected:
+        return "観測窓内の候補が単発または一般化不足だった"
+    return "観測できる反復パターンがまだ少ない"
+
+
+def _no_ready_next_step(metadata: dict[str, Any] | None) -> str:
+    metadata = metadata or {}
+    config = metadata.get("config") if isinstance(metadata.get("config"), dict) else {}
+    days = config.get("effective_days") or config.get("days")
+    if isinstance(days, int) and days <= 7:
+        return "同じ workspace で 2-3 週間使い続けると、反復パターンが明確化しやすい"
+    return "同じ作業パターンが数回たまったタイミングで再観測すると、候補が浮上しやすい"
+
+
+def build_proposal_markdown(
+    ready: list[dict[str, Any]],
+    needs_research: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> str:
     lines: list[str] = []
-    lines.append("## 提案成立")
+    lines.append("### 観測範囲")
+    lines.append(_observation_scope_line(metadata))
+    lines.append("")
+    lines.append("## 提案（固定化を推奨）")
     if ready:
         for index, candidate in enumerate(ready, start=1):
             lines.extend(proposal_item_lines(index, candidate, include_classification=True))
     else:
         lines.append("今回は有力候補なし")
+        detected_count = _detected_candidate_count(metadata, ready, needs_research, rejected)
+        lines.append("")
+        lines.append(f"検出候補数: {detected_count}件中 0 件が提案条件を満たした")
+        lines.append(f"見送り理由の傾向: {_no_ready_reason_summary(needs_research, rejected)}")
+        lines.append(f"候補が増える条件: {_no_ready_next_step(metadata)}")
 
     lines.append("")
-    lines.append("## 追加調査待ち")
+    lines.append("## 有望候補（もう少し観測が必要）")
     if needs_research:
         for index, candidate in enumerate(needs_research, start=1):
             lines.extend(proposal_item_lines(index, candidate, include_classification=False))
@@ -1273,7 +1343,7 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
         lines.append("なし")
 
     lines.append("")
-    lines.append("## 今回は見送り")
+    lines.append("## 観測ノート")
     if rejected:
         for index, candidate in enumerate(rejected[:5], start=1):
             lines.extend(rejected_item_lines(index, candidate))
@@ -1289,16 +1359,27 @@ def build_proposal_markdown(ready: list[dict[str, Any]], needs_research: list[di
 def proposal_item_lines(index: int, candidate: dict[str, Any], *, include_classification: bool) -> list[str]:
     lines = [f"{index}. {candidate.get('label', 'Unnamed candidate')}"]
     if include_classification:
-        lines.append(f"   分類: {candidate.get('suggested_kind', 'TBD')}")
+        lines.append(f"   固定先: {candidate.get('suggested_kind', 'TBD')}")
     lines.append(f"   confidence: {candidate.get('confidence', 'unknown')}")
+    support = candidate.get("support") if isinstance(candidate.get("support"), dict) else {}
+    total_packets = support.get("total_packets")
+    claude_packets = int(support.get("claude_packets", 0)) if support else 0
+    codex_packets = int(support.get("codex_packets", 0)) if support else 0
+    source_count = int(claude_packets > 0) + int(codex_packets > 0)
+    if not include_classification and isinstance(total_packets, int) and total_packets > 0:
+        source_label = f"{source_count}ソース" if source_count > 0 else "source 不明"
+        lines.append(f"   出現: {total_packets}回 / {source_label}")
     lines.extend(build_evidence_chain_lines(candidate))
     judgment = candidate.get("research_judgment")
     if include_classification:
         lines.append(f"   期待効果: {candidate.get('label', 'この候補')} の再利用フローを安定化できる")
+        lines.append("   → この作法を固定すれば、毎回の指示が不要になります")
     elif isinstance(judgment, dict):
-        lines.append(f"   保留理由: {judgment.get('summary', candidate.get('confidence_reason', '追加調査が必要'))}")
+        lines.append(f"   現状: {judgment.get('summary', candidate.get('confidence_reason', '追加調査が必要'))}")
+        lines.append("   次のステップ: 追加でログをためて再観測し、分割が必要か判断する")
     else:
-        lines.append(f"   保留理由: {candidate.get('confidence_reason', '追加調査が必要')}")
+        lines.append(f"   現状: {candidate.get('confidence_reason', '追加調査が必要')}")
+        lines.append("   次のステップ: 1-2 週間ほど運用してから再観測し、意味のまとまりを確認する")
     return lines
 
 

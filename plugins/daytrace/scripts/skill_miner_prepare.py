@@ -6,7 +6,7 @@ import argparse
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--compare-legacy",
         action="store_true",
         help="When using store-backed prepare, also compute a raw-history comparison summary.",
+    )
+    parser.add_argument(
+        "--reference-date",
+        default=None,
+        help="Override today's date for the observation window cutoff (YYYY-MM-DD). Intended for testing.",
     )
     return parser
 
@@ -807,10 +812,10 @@ def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
     )
 
 
-def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[list[dict[str, Any]], str | None]:
+def filter_packets_by_days(packets: list[dict[str, Any]], days: int, reference_date: date | None = None) -> tuple[list[dict[str, Any]], str | None]:
     if days <= 0:
         raise ValueError("--days must be a positive integer")
-    today = datetime.now(LOCAL_TZ).date()
+    today = reference_date if reference_date is not None else datetime.now(LOCAL_TZ).date()
     threshold_date = today - timedelta(days=days)
     filtered: list[dict[str, Any]] = []
     for packet in packets:
@@ -822,8 +827,8 @@ def filter_packets_by_days(packets: list[dict[str, Any]], days: int) -> tuple[li
     return filtered, datetime.combine(threshold_date, datetime.min.time(), tzinfo=LOCAL_TZ).isoformat()
 
 
-def prepare_window_result(packets: list[dict[str, Any]], days: int) -> dict[str, Any]:
-    filtered_packets, date_window_start = filter_packets_by_days(packets, days)
+def prepare_window_result(packets: list[dict[str, Any]], days: int, reference_date: date | None = None) -> dict[str, Any]:
+    filtered_packets, date_window_start = filter_packets_by_days(packets, days, reference_date)
     candidates, unclustered, stats = cluster_packets(filtered_packets)
     return {
         "packets": filtered_packets,
@@ -1340,14 +1345,15 @@ def main() -> None:
                 gap_hours=args.gap_hours,
             )
 
-        initial_window = prepare_window_result(all_packets, args.days)
+        reference_date: date | None = date.fromisoformat(args.reference_date) if args.reference_date else None
+        initial_window = prepare_window_result(all_packets, args.days, reference_date)
         effective_window = initial_window
         adaptive_expanded = False
         adaptive_reason = None
         if not args.all_sessions:
             should_expand, adaptive_reason = adaptive_window_decision(initial_window, args.days)
             if should_expand:
-                effective_window = prepare_window_result(all_packets, WORKSPACE_ADAPTIVE_EXPANDED_DAYS)
+                effective_window = prepare_window_result(all_packets, WORKSPACE_ADAPTIVE_EXPANDED_DAYS, reference_date)
                 adaptive_expanded = True
 
         all_packets = effective_window["packets"]
@@ -1409,7 +1415,7 @@ def main() -> None:
                 codex_sessions_root=codex_sessions_root,
                 gap_hours=args.gap_hours,
             )
-            legacy_window = prepare_window_result(legacy_packets, effective_window["days"])
+            legacy_window = prepare_window_result(legacy_packets, effective_window["days"], reference_date)
             payload["comparison"] = {
                 "legacy_input_source": "raw",
                 **build_candidate_comparison(top_candidates, legacy_window["candidates"][: max(0, args.top_n)]),

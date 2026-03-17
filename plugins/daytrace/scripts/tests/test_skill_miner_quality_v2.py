@@ -681,6 +681,7 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertEqual(sections["summary"]["ready_count"], 0)
         self.assertEqual(sections["summary"]["needs_research_count"], 1)
         self.assertIn("今回は有力候補なし", sections["markdown"])
+        self.assertIn("見送り理由の傾向", sections["markdown"])
         self.assertIn("2026-03-10T09:00:00+09:00 codex-history: Keep findings-first review format.", sections["markdown"])
         self.assertEqual(sections["needs_research"][0]["evidence_items"][0]["session_ref"], "codex:abc:1")
 

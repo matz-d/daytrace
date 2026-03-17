@@ -10,17 +10,17 @@
 - `research_brief.questions` と `research_brief.decision_rules` をそのまま調査メモの骨子に使う
 - ランダム抽出ではなく、代表例に近い ref / near-match に近い ref / 異質そうな ref を混ぜる
 - detail を大量取得しない
-- 追加調査しても粒度が粗い場合は `今回は見送り` に落とす
+- 追加調査しても粒度が粗い場合は `観測ノート` に落とす
 
 ## 追加調査後
 
 - `skill_miner_research_judge.py` を 1 回だけ実行して structured conclusion を得る
 - `promote_ready`
-  - `提案成立` へ移す
+  - `提案（固定化を推奨）` へ移す
 - `split_candidate`
-  - `追加調査待ち` に残し、必要なら「分割軸」を書く
+  - `有望候補（もう少し観測が必要）` に残し、必要なら「分割軸」を書く
 - `reject_candidate`
-  - `今回は見送り` に移す
+  - `観測ノート` に移す
 
 ## 追加調査で確認すべきこと
 

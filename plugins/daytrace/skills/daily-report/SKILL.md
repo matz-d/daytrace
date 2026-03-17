@@ -1,14 +1,14 @@
 ---
 name: daily-report
 description: >
-  ローカル証跡を集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。
+  ローカルログを集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。
   今日の自分用日報、共有用レポート、昨日の活動まとめを作りたい時に使う。
 user-invocable: true
 ---
 
 # Daily Report
 
-その日のローカル証跡から、date-first で日報ドラフトを組み立てる。
+その日のローカルログから、date-first で日報ドラフトを組み立てる。
 主目的は「その repo で何をしたか」ではなく、「その日全体で何をしていたか」を再構成すること。
 
 ## Goal
@@ -31,7 +31,7 @@ user-invocable: true
   - 任意
   - 主軸ではなく補助フィルタ
   - 特定 workspace の git / file 根拠を強めたい時だけ使う
-  - 現状の source 実装では、workspace を指定しても `claude-history` / `codex-history` / `chrome-history` はその日全体の証跡を返しうる
+  - 現状の source 実装では、workspace を指定しても `claude-history` / `codex-history` / `chrome-history` はその日全体のログを返しうる
   - したがって strict な repo 限定指定ではなく、mixed-scope の内訳を制御する補助情報として扱う
 
 ## Entry Contract
@@ -104,14 +104,14 @@ python3 <plugin-root>/scripts/daily_report_projection.py --date today --all-sess
 この skill は date-first だが、source には `all-day` と `workspace` の 2 種類がある。
 
 - `all-day`
-  - その日全体を代表する証跡
+  - その日全体を代表するログ
   - 例: `claude-history`, `codex-history`, `chrome-history`
 - `workspace`
-  - 指定 workspace または current working directory に依存する証跡
+  - 指定 workspace または current working directory に依存するログ
   - 例: `git-history`, `workspace-file-activity`
 
-このため、workspace 未指定でも出力は完全な単一スコープにはならず、全日 source と cwd 起点の workspace source が混在しうる。
-workspace 指定時も mixed-scope は解消されず、repo ローカルの根拠密度が上がるだけで `all-day` source まで strict な repo filter にはならない。
+このため、workspace 未指定でも出力は完全な単一スコープにはならず、全日ログと cwd 起点の workspace ログが混在しうる。
+workspace 指定時も mixed-scope は解消されず、repo ローカルの根拠密度が上がるだけで `all-day` ログまで strict な repo filter にはならない。
 workspace は date-first の主軸ではなく補助フィルタだが、mixed-scope を隠さないこと。
 
 ## Execution Rules
@@ -137,11 +137,13 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 
 - 先頭は必ず `## 日報 YYYY-MM-DD`
 - 活動項目は 3-6 個
-- 各項目に `根拠` と `Confidence` を付ける
-- `根拠` は source 名だけでなく、何のイベントを見たか短く添える
+- 各項目に `根拠` を付ける。根拠はログ内容を先に出し、source 名は補助として添える
+  - 例: `根拠: git の commit ログ "Add source registry drop-in support" と、Claude の会話ログ "drop-in の設計を議論"`
 - 同じ内容を重複して書かない
-- 明日のアクションを 2-4 項目付ける
+- `未完了の手がかり` をログから読み取れた分だけ付ける（0 件可）
+- 手がかりがなければ「ログからは未完了の手がかりを特定できませんでした」で閉じる
 - `確認したい点` セクションは作らない
+- evidence が直接示唆しない推論は控える（事実膨張ガード）
 
 ### 自分用
 
@@ -161,11 +163,10 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 ### 今日の流れ
 1. 見出し
    内容: 1-3文
-   根拠: git-history の commit, codex-history の修正ログ
-   Confidence: high
+   根拠: git の commit ログ "xxx" と Claude の会話ログ "yyy"
 
-### 明日のとっかかり
-- 2-4項目
+### 未完了の手がかり
+- ログから読み取れた分だけ（0 件可）
 ```
 
 ### 共有用
@@ -183,7 +184,7 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 - `実装`
 - `調査`
 - `設計 / 判断`
-- `明日のアクション`
+- `未完了の手がかり`
 
 推奨構成:
 
@@ -198,8 +199,7 @@ mode によって構成と文体を変えるが、どちらも date-first の日
   - 内容: 2-4文
   - 成果:
   - 残課題:
-  - 根拠:
-  - Confidence:
+  - 根拠: git の commit ログ "xxx" と Claude の会話ログ "yyy"
 
 ### 調査
 - 必要なら追加
@@ -207,8 +207,8 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 ### 設計 / 判断
 - 必要なら追加
 
-### 明日のアクション
-- 2-4項目
+### 未完了の手がかり
+- ログから読み取れた分だけ（0 件可）
 ```
 
 ## Mixed-Scope Note Rules
@@ -216,11 +216,10 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 成功した `sources[]` の `scope` を見て、注記の要否を決める。
 
 - `all-day` と `workspace` の両方が含まれる場合
-  - 冒頭に 1 回だけ mixed-scope 注記を入れる
-  - 注記は `sources[].scope` を根拠に組み立てる
-  - 例:
-    - `Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。`
-    - `全日の活動を基準に再構成していますが、repo ローカルの根拠は daytrace workspace に限定されています。`
+  - 冒頭に短い 1 行で scope を伝える（日報の第一印象を弱めない）
+  - 例: `この日報は、1日のログと workspace ローカルの変更ログをもとに再構成しています。`
+  - 詳細な source 別 scope 説明は日報末尾のフッターに置く
+  - フッター例: `> 再構成元: git-history, claude-history, codex-history / workspace ローカルの変更ログは {workspace名} に限定されています`
 - `all-day` のみ、または `workspace` のみの場合
   - mixed-scope 注記は必須ではない
 - 注記は事実説明に留める
@@ -229,10 +228,12 @@ mode によって構成と文体を変えるが、どちらも date-first の日
 
 ## Confidence Handling
 
-`確認したい点` セクションは使わず、confidence は本文内で処理する。
+`確認したい点` セクションは使わず、根拠の具体性で信頼度を表現する。
+`Confidence: high` / `Confidence: medium` のようなラベル明示は行わない。
+弱い箇所だけ注記を残す。
 
 - `high`
-  - そのまま本文に採用する
+  - そのまま本文に採用する。根拠が具体的なら信頼度は自然に伝わる
 - `medium`
   - 本文に採用してよい
   - 断定しすぎず、必要なら `と見られる` `中心だった` などの表現にする
@@ -240,7 +241,7 @@ mode によって構成と文体を変えるが、どちらも date-first の日
   - 本文に入れる場合は inline 注記にする
   - 例:
     - `注記: ファイル変更からは確認できるが、最終的な意図は断定できない`
-    - `注記: Chrome 履歴由来の補助情報で、実装着手までは確認できていない`
+    - `注記: ブラウザログのみからの補助推定です`
   - low confidence だけの独立セクションは作らない
   - low confidence を理由に追加 ask しない
 
@@ -263,16 +264,16 @@ source 欠損の判定は `summary` と `sources` から行う。
 ## 日報 YYYY-MM-DD
 
 ### 今日の概要
-- 利用可能なローカル証跡が見つからなかったため、自動生成できる情報はありませんでした。
+- 利用可能なローカルログが見つからなかったため、自動生成できる情報はありませんでした。
 
-### 明日のアクション
-- Git、Claude/Codex、Chrome など少なくとも 1 系統の証跡が取れる状態で再実行する
+### 未完了の手がかり
+- Git、Claude/Codex、Chrome など少なくとも 1 系統のログが取れる状態で再実行する
 ```
 
 ### source が 1-2 本だけ
 
 - 簡易日報として返す
-- `取得できた証跡は限定的` と冒頭に明記してよい
+- `取得できたログは限定的` と冒頭に明記してよい
 - 断定的な振り返りを避ける
 - それでも mode に応じた構成は維持する
 - low confidence は本文内注記で処理する
@@ -284,23 +285,24 @@ source 欠損の判定は `summary` と `sources` から行う。
 ```markdown
 ## 日報 2026-03-11
 
+この日報は、1日のログと workspace ローカルの変更ログをもとに再構成しています。
+
 ### 今日の流れ
 1. aggregate の `scope` 追加まわりを確認して、daily-report 側の書き換え方針を固めた。
-   根拠: codex-history の仕様確認ログ, git-history の差分確認
-   Confidence: high
+   根拠: Codex の会話ログ "scope の仕様確認"、git の commit ログ "Add scope field to sources"
 
 2. `daily-report` を workspace 前提から date-first 前提へ直し、入口 ask と mode 差分を整理した。
-   根拠: workspace-file-activity の SKILL.md 編集, codex-history の文言調整ログ
-   Confidence: high
+   根拠: workspace-file-activity の SKILL.md 編集、Codex の会話ログ "文言調整"
 
 3. mixed-scope 注記の文面は入れたが、実データでどの source が強く出るかはまだ観察中。
-   根拠: chrome-history の調査履歴, workspace-file-activity の編集痕跡
-   Confidence: medium
-   注記: 補助証跡由来のため、最終的な注記文は fixture 確認で微調整の余地あり
+   根拠: Chrome の閲覧ログ、workspace-file-activity の編集痕跡
+   注記: ブラウザログのみからの補助推定です
 
-### 明日のとっかかり
-- sample output と fixture 表現を見比べて wording を詰める
-- mixed-scope 注記が長すぎる場合は短縮版を作る
+### 未完了の手がかり
+- sample output と fixture 表現を見比べて wording を詰める（Codex の会話ログに "fixture はまだ" の発言あり）
+- mixed-scope 注記が長すぎる場合は短縮版を作る（commit の TODO コメントに記載あり）
+
+> 再構成元: git-history, codex-history, chrome-history, workspace-file-activity / workspace ローカルの変更ログは daytrace に限定
 ```
 
 ### 共有用
@@ -308,36 +310,35 @@ source 欠損の判定は `summary` と `sources` から行う。
 ```markdown
 ## 日報 2026-03-11
 
+この日報は、1日のログと workspace ローカルの変更ログをもとに再構成しています。
+
 ### 今日の概要
 - 日報 skill を date-first 前提へ再整理し、共有向けに読める mode 契約と mixed-scope 注記ルールを明文化した。
-
-> 注記: Claude/Codex/Chrome はその日全体の証跡、Git とファイル変更は current workspace に限定された証跡です。
 
 ### 実装
 - daily-report の仕様を `workspace default` から `date-first default + optional workspace filter` へ更新した。
   - 成果: 対象スコープ、入口 ask、confidence の扱いを 1 つの契約として読み取れる形に整理した。
   - 残課題: 実データを使った wording の最終確認は別途必要。
-  - 根拠: git-history の文書差分, codex-history の編集ログ
-  - Confidence: high
+  - 根拠: git の commit ログ "Refactor daily-report to date-first"、Codex の会話ログ "仕様整理"
 
 ### 設計 / 判断
 - `自分用` と `共有用` の差を、構成・語彙・未完了の扱いまで分けて定義した。
   - 成果: 共有用では背景説明と成果 / 残課題の分離を必須にした。
   - 残課題: 実際の生成文がこの差分を安定して守れるかは運用確認が必要。
-  - 根拠: SKILL.md の mode 定義, workspace-file-activity の更新痕跡
-  - Confidence: high
+  - 根拠: SKILL.md の mode 定義、workspace-file-activity の更新痕跡
 
 ### 調査
 - mixed-scope の説明は `sources[].scope` を見て自動で注記する前提に整理した。
   - 成果: coverage の誤認を避けつつ、date-first の価値を落とさないルールにした。
-  - 残課題: 一部の補助証跡は意図を断定できないため、本文内注記で扱う。
-  - 根拠: aggregate.py の `sources[].scope`, sources.json の scope_mode
-  - Confidence: medium
-  - 注記: Chrome 履歴など補助証跡だけでの解釈は断定していない。
+  - 残課題: 一部の補助ログは意図を断定できないため、本文内注記で扱う。
+  - 根拠: aggregate.py の `sources[].scope`、sources.json の scope_mode
+  - 注記: ブラウザログのみからの補助推定です
 
-### 明日のアクション
-- mixed-scope 注記を fixture ベースでレビューする
+### 未完了の手がかり
+- mixed-scope 注記を fixture ベースでレビューする（commit の TODO コメントに記載あり）
 - README / demo 側の文言と整合させる
+
+> 再構成元: git-history, codex-history, chrome-history, workspace-file-activity / workspace ローカルの変更ログは daytrace に限定
 ```
 
 ## Completion Check

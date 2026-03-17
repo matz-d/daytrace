@@ -15,7 +15,7 @@ AI 会話履歴を横断して、固定化すべき作法を `extract / classify
 
 - Claude / Codex 履歴から反復パターンを抽出する
 - 候補を `CLAUDE.md` / `skill` / `hook` / `agent` の 4 分類で判定する
-- `提案成立 / 追加調査待ち / 今回は見送り` の main UX で返す
+- `提案（固定化を推奨） / 有望候補（もう少し観測が必要） / 観測ノート` の main UX で返す
 - proposal phase では raw history を再読込せず、prepare の contract だけで根拠表示を完結させる
 
 やらないこと:
@@ -81,8 +81,8 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepar
 7. `candidates` と `unclustered` を `ready` / `needs_research` / `rejected` に分ける
 8. 正式提案は `proposal_ready=true` の候補だけを採用し、返却件数は `prepare` 側の `top_n` に従う（デフォルト `10`）。`0 件` でも正常系として扱う
 9. `needs_research` 候補だけ、必要な場合に限って `research_targets` を使って 1 回だけ追加調査する
-10. `skill_miner_research_judge.py` の結論を proposal に反映し、`提案成立 / 追加調査待ち / 今回は見送り` を返す
-11. `提案成立` がある時だけ、次セッションでどれを apply するかを確認する
+10. `skill_miner_research_judge.py` の結論を proposal に反映し、`提案（固定化を推奨） / 有望候補 / 観測ノート` を返す
+11. `提案（固定化を推奨）` がある時だけ、次セッションでどれを apply するかを確認する
 
 ## Division of Labor
 
@@ -200,28 +200,35 @@ B0 観測の方法と優先順位ルールは `references/b0-observation.md` を
 
 ## Proposal Format
 
-proposal は次の 3 区分で返す。
+proposal の冒頭には観測範囲を明示し、3 区分で返す。
+内部 triage key（`ready` / `needs_research` / `rejected`）はそのままで、ユーザー向け見出しだけを変更する。
 
 ```markdown
-## 提案成立
+### 観測範囲
+観測範囲: {workspace名} / 直近 {N}日間 / {使用した source リスト}
+
+## 提案（固定化を推奨）
 
 1. 候補名
-   分類: skill
+   固定先: skill
    confidence: medium
    根拠:
    - 2026-03-08T10:00:00+09:00 claude-history: findings-first review を要求
    - 2026-03-10T09:00:00+09:00 codex-history: 同系の review 指示を再確認
    期待効果: 同種作業の再利用フローを安定化できる
+   → この作法を固定すれば、毎回の指示が不要になります
 
-## 追加調査待ち
+## 有望候補（もう少し観測が必要）
 
 1. 候補名
    confidence: weak
+   出現: 3回 / 2ソース
    根拠:
    - 2026-03-08T10:00:00+09:00 claude-history: 汎用 review 指示
-   保留理由: 巨大クラスタで意味の異なる作業が混ざる可能性がある
+   現状: 巨大クラスタで意味の異なる作業が混ざる可能性がある
+   次のステップ: 1-2 週間の運用後に再観測で分割判断
 
-## 今回は見送り
+## 観測ノート
 
 1. 候補名または項目種別
    理由: 単発または一般化の根拠不足
@@ -229,11 +236,27 @@ proposal は次の 3 区分で返す。
 
 ルール:
 
-- `提案成立 / 追加調査待ち / 今回は見送り` を main UX にする
-- `提案成立` だけを重要度順に並べる
-- `追加調査待ち` には `保留理由` を必ず書く
-- `今回は見送り` には 1 文で理由を書く
-- `提案成立` が 1 件以上ある時だけ、末尾に候補選択プロンプトを付けて次セッションの apply / draft 選択へ進める
+- `提案（固定化を推奨） / 有望候補 / 観測ノート` を main UX にする
+- `提案（固定化を推奨）` だけを重要度順に並べる
+- `有望候補` には `現状` と `次のステップ` を書く
+- `観測ノート` には 1 文で理由を書く
+- `提案（固定化を推奨）` が 1 件以上ある時だけ、末尾に候補選択プロンプトを付けて次セッションの apply / draft 選択へ進める
+
+### 0 件時の出力
+
+`proposal_ready=true` の候補が 0 件の場合も正常系として、以下を返す:
+
+```markdown
+### 観測範囲
+観測範囲: {workspace名} / 直近 {N}日間 / {source}
+
+## 提案（固定化を推奨）
+今回は有力候補なし
+
+検出候補数: {N}件中 0 件が提案条件を満たした
+見送り理由の傾向: {主な理由（例: 観測窓が短い / oversized cluster / セッション数が少ない）}
+候補が増える条件: {いつ再実行すると候補が出やすいか（例: 同じ workspace で 2-3 週間使い続けると反復パターンが明確化しやすい）}
+```
 
 ## Deep Research Rules
 
@@ -242,16 +265,16 @@ proposal は次の 3 区分で返す。
 - 1 candidate あたり最大 5 refs
 - 追加調査は 1 回まで
 - `research_targets` と `research_brief` を優先して使う
-- 追加調査しても粒度が粗い場合は `今回は見送り` に落とす
+- 追加調査しても粒度が粗い場合は `観測ノート` に落とす
 
 追加調査後:
 
 - `promote_ready`
-  - `提案成立` へ移す
+  - `提案（固定化を推奨）` へ移す
 - `split_candidate`
-  - `追加調査待ち` に残し、必要なら分割軸を書く
+  - `有望候補` に残し、必要なら分割軸を書く
 - `reject_candidate`
-  - `今回は見送り` に移す
+  - `観測ノート` に移す
 
 ## CLAUDE.md Immediate Apply Spec
 
@@ -280,7 +303,7 @@ diff preview 例:
 
 ## Detail / Draft Rules
 
-- `提案成立` に候補がある場合だけ、次セッションで 1 件選んでもらう
+- `提案（固定化を推奨）` に候補がある場合だけ、次セッションで 1 件選んでもらう
 - 選択候補の `session_refs` だけを `skill_miner_detail.py --refs ...` で取得する
 - `CLAUDE.md` 以外は次セッションへ送る
 - detail phase でも raw history 全量には戻らない

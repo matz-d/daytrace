@@ -1,6 +1,6 @@
 {
   "name": "daytrace",
-  "description": "ローカル証跡（Git, Claude/Codex会話, Chrome履歴, ファイル変更）を集約し、日報・スキル提案・投稿下書きを自動生成する plugin。",
+  "description": "ローカルログ（Git, Claude/Codex会話, Chrome履歴, ファイル変更）を集約し、日報・スキル提案・投稿下書きを自動生成する plugin。",
   "version": "0.1.0",
   "author": {
     "name": "DayTrace"
@@ -12,7 +12,7 @@
     {
       "name": "daytrace-session",
       "path": "skills/daytrace-session/SKILL.md",
-      "description": "「今日の振り返りをお願い」の一言で、ローカル証跡の収集・日報生成・反復パターン提案・投稿下書きまで 自律的に完走する統合セッション。振り返りをまとめて、全部やって、1日のまとめ、と言われた時に使う。",
+      "description": "「今日の振り返りをお願い」の一言で、ローカルログの収集・日報生成・反復パターン提案・投稿下書きまで 自律的に完走する統合セッション。振り返りをまとめて、全部やって、1日のまとめ、と言われた時に使う。",
       "scripts": [
         "scripts/daily_report_projection.py",
         "scripts/skill_miner_prepare.py",
@@ -25,7 +25,7 @@
     {
       "name": "daily-report",
       "path": "skills/daily-report/SKILL.md",
-      "description": "ローカル証跡を集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。 今日の自分用日報、共有用レポート、昨日の活動まとめを作りたい時に使う。",
+      "description": "ローカルログを集約し、その日全体の活動を自分用または共有用の日報ドラフトに再構成する。 今日の自分用日報、共有用レポート、昨日の活動まとめを作りたい時に使う。",
       "scripts": [
         "scripts/daily_report_projection.py"
       ]
