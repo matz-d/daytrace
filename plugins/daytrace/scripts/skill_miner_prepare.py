@@ -19,6 +19,8 @@ from derived_store import (
     persist_patterns_from_prepare,
 )
 from skill_miner_common import (
+    PRIMARY_INTENT_SOURCE_HIGHLIGHT,
+    PRIMARY_INTENT_SOURCE_SUMMARY,
     CLAUDE_SOURCE,
     CODEX_SOURCE,
     DEFAULT_GAP_HOURS,
@@ -49,7 +51,9 @@ from skill_miner_common import (
     load_jsonl,
     overlap_score,
     packet_sort_key,
+    packet_user_repeated_rules,
     recent_packet_count,
+    skill_miner_packet_is_v2,
     stable_block_keys,
     tokenize,
     annotate_unclustered_packet,
@@ -67,7 +71,7 @@ DEFAULT_OBSERVATION_DAYS = 7
 WORKSPACE_ADAPTIVE_EXPANDED_DAYS = 30
 WORKSPACE_ADAPTIVE_MIN_PACKETS = 4
 WORKSPACE_ADAPTIVE_MIN_CANDIDATES = 1
-CLUSTER_MERGE_THRESHOLD = 0.60
+CLUSTER_MERGE_THRESHOLD = 0.55
 CLUSTER_NEAR_MATCH_THRESHOLD = 0.45
 STORE_HYDRATE_TIMEOUT_SEC = 90
 COMPARE_LEGACY_OVERLAP_WARNING_THRESHOLD = 0.5
@@ -370,19 +374,21 @@ def _append_unique_texts(bucket: list[str], values: list[Any]) -> None:
 
 
 def _stored_skill_miner_packet(value: Any, *, source_name: str, fallback_workspace: str | None = None) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    packet_id = str(value.get("packet_id") or "").strip()
-    session_ref = str(value.get("session_ref") or "").strip()
-    timestamp = str(value.get("timestamp") or "").strip()
-    if not packet_id or not session_ref or not timestamp:
+    if not skill_miner_packet_is_v2(value):
         return None
     packet = dict(value)
     packet["source"] = source_name
+    packet["repeated_rules"] = list(packet.get("user_repeated_rules", []))
     if fallback_workspace and not packet.get("workspace"):
         packet["workspace"] = fallback_workspace
     packet["_fidelity"] = str(packet.get("_fidelity") or FIDELITY_CANONICAL)
     return packet
+
+
+def _store_packets_fidelity(packets: list[dict[str, Any]]) -> str:
+    if not packets:
+        return FIDELITY_APPROXIMATE
+    return FIDELITY_APPROXIMATE if any(str(packet.get("_fidelity") or "") != FIDELITY_CANONICAL for packet in packets) else FIDELITY_CANONICAL
 
 
 def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -412,6 +418,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
             user_messages: list[str] = []
             assistant_messages: list[str] = []
             tools: list[str] = []
+            user_message_source = PRIMARY_INTENT_SOURCE_HIGHLIGHT
             user_highlights = logical_packet.get("user_highlights")
             if isinstance(user_highlights, list):
                 _append_unique_texts(user_messages, user_highlights)
@@ -426,6 +433,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
                 tools.extend(str(item).strip() for item in tool_signals if str(item or "").strip())
             if not user_messages and first_prompt:
                 user_messages.append(first_prompt)
+                user_message_source = PRIMARY_INTENT_SOURCE_SUMMARY
             packet_start = str(logical_packet.get("started_at") or observation["occurred_at"])
             rebuilt_packets.append(
                 _tag_fidelity(
@@ -442,6 +450,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
                         user_messages=user_messages,
                         assistant_messages=assistant_messages,
                         tools=tools,
+                        user_message_source=user_message_source,
                     ),
                     FIDELITY_APPROXIMATE,
                 )
@@ -450,6 +459,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
             return rebuilt_packets
 
     user_messages: list[str] = []
+    user_message_source = PRIMARY_INTENT_SOURCE_HIGHLIGHT
     user_highlights = details.get("user_highlights")
     if isinstance(user_highlights, list):
         _append_unique_texts(user_messages, user_highlights)
@@ -459,6 +469,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
             _append_unique_texts(user_messages, highlights)
     if not user_messages and first_prompt:
         user_messages.append(first_prompt)
+        user_message_source = PRIMARY_INTENT_SOURCE_SUMMARY
 
     assistant_messages: list[str] = []
     assistant_highlights = details.get("assistant_highlights")
@@ -484,6 +495,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
                 user_messages=user_messages,
                 assistant_messages=assistant_messages,
                 tools=[],
+                user_message_source=user_message_source,
             ),
             FIDELITY_APPROXIMATE,
         )
@@ -511,6 +523,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
     user_messages: list[str] = []
     assistant_messages: list[str] = []
     tools: list[str] = []
+    user_message_source = PRIMARY_INTENT_SOURCE_HIGHLIGHT
 
     for observation in ordered:
         details = observation.get("details", {})
@@ -536,6 +549,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
                 summary = str(observation.get("summary") or "").strip()
                 if summary:
                     user_messages.append(summary)
+                    user_message_source = PRIMARY_INTENT_SOURCE_SUMMARY
         elif event_type == "tool_call":
             tool_items = details.get("tools")
             if isinstance(tool_items, list):
@@ -563,6 +577,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
             user_messages=user_messages,
             assistant_messages=assistant_messages,
             tools=tools,
+            user_message_source=user_message_source,
         ),
         FIDELITY_APPROXIMATE,
     )
@@ -630,7 +645,7 @@ def _is_store_slice_sufficient(
     packets: list[dict[str, Any]],
     completeness: dict[str, Any] | None,
 ) -> bool:
-    return bool(packets) and completeness is not None and completeness["status"] == SLICE_COMPLETE
+    return bool(packets) and completeness is not None and completeness["status"] == SLICE_COMPLETE and _store_packets_fidelity(packets) == FIDELITY_CANONICAL
 
 
 def _store_slice_bounds(*, reference_now: datetime, days: int) -> tuple[str, str]:
@@ -733,6 +748,7 @@ def _evaluate_store_slice_completeness(
 def _should_persist_patterns(
     *,
     selected_input_source: str,
+    input_fidelity: str,
     source_statuses: list[dict[str, Any]],
     top_candidates: list[dict[str, Any]],
     no_sources_available: bool,
@@ -745,6 +761,8 @@ def _should_persist_patterns(
     unsafe_sources = [str(status.get("name") or "unknown") for status in source_statuses if status.get("status") != "success"]
     if unsafe_sources:
         return False, f"source_status_not_success:{','.join(sorted(unsafe_sources))}"
+    if input_fidelity == FIDELITY_APPROXIMATE:
+        return False, "input_fidelity_approximate"
     if selected_input_source == "store":
         if store_slice_completeness is None:
             return False, "store_slice_unvalidated"
@@ -764,7 +782,7 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
     primary_non_generic = next((shape for shape in task_shapes_strs if shape not in GENERIC_TASK_SHAPES), "")
     rule_names = {
         str(item.get("normalized") or "")
-        for item in packet.get("repeated_rules", [])
+        for item in packet_user_repeated_rules(packet)
         if isinstance(item, dict) and item.get("normalized")
     }
     return {
@@ -773,6 +791,7 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
         "task_shape_set": task_shape_set,
         "tool_set": tool_set,
         "artifact_set": set(packet.get("artifact_hints", [])),
+        "primary_artifact": next((str(value) for value in packet.get("artifact_hints", []) if value), ""),
         "rule_names": rule_names,
         "primary_non_generic_shape": primary_non_generic,
         "generic_task_only": bool(task_shape_set) and task_shape_set <= GENERIC_TASK_SHAPES,
@@ -785,7 +804,8 @@ def _similarity_score_from_features(left: dict[str, Any], right: dict[str, Any])
     intent = jaccard_score(left["intent_tokens"], right["intent_tokens"])
     task_shapes = overlap_score(left["task_shape_set"], right["task_shape_set"])
     tools = jaccard_score(left["tool_set"], right["tool_set"])
-    artifacts = overlap_score(left["artifact_set"], right["artifact_set"])
+    primary_artifact_match = 1.0 if left["primary_artifact"] and left["primary_artifact"] == right["primary_artifact"] else 0.0
+    artifacts = max(overlap_score(left["artifact_set"], right["artifact_set"]), primary_artifact_match)
     rules = overlap_score(left["rule_names"], right["rule_names"])
     left_specific = left["primary_non_generic_shape"]
     same_specific_shape = 1.0 if left_specific and left_specific == right["primary_non_generic_shape"] else 0.0
@@ -1116,7 +1136,7 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
         tool_signatures = _top_values([tool for packet in group_packets for tool in packet.get("tool_signature", [])], 5)
         artifact_hints = _top_values([hint for packet in group_packets for hint in packet.get("artifact_hints", [])], 3)
         rule_hints = _top_values(
-            [item.get("normalized") for packet in group_packets for item in packet.get("repeated_rules", []) if item.get("normalized")],
+            [item.get("normalized") for packet in group_packets for item in packet_user_repeated_rules(packet) if item.get("normalized")],
             3,
         )
         representative_examples = _top_values([packet.get("primary_intent") for packet in group_packets if packet.get("primary_intent")], 2)
@@ -1267,14 +1287,20 @@ def main() -> None:
                 until=store_until,
                 sources_file=args.sources_file,
             )
+            store_packets_are_approximate = bool(store_packets) and _store_packets_fidelity(store_packets) == FIDELITY_APPROXIMATE
             store_slice_sufficient = _is_store_slice_sufficient(store_packets, store_slice_completeness)
+            skip_hydration_for_stale_store = (
+                store_packets_are_approximate
+                and store_slice_completeness is not None
+                and store_slice_completeness.get("status") == SLICE_COMPLETE
+            )
             before_hydration_status = store_slice_completeness.get("status") if store_slice_completeness else None
             store_hydration = {
                 "attempted": False,
-                "status": "not_needed" if store_slice_sufficient else "not_attempted",
+                "status": "stale_canonical" if skip_hydration_for_stale_store else ("not_needed" if store_slice_sufficient else "not_attempted"),
                 "before_status": before_hydration_status,
             }
-            if not store_slice_sufficient:
+            if not store_slice_sufficient and not skip_hydration_for_stale_store:
                 try:
                     _hydrate_store_slice(
                         resolved_store_path,
@@ -1345,6 +1371,10 @@ def main() -> None:
                 gap_hours=args.gap_hours,
             )
 
+        selected_input_fidelity = FIDELITY_ORIGINAL
+        if selected_input_source == "store":
+            selected_input_fidelity = _store_packets_fidelity(all_packets)
+
         reference_date: date | None = date.fromisoformat(args.reference_date) if args.reference_date else None
         initial_window = prepare_window_result(all_packets, args.days, reference_date)
         effective_window = initial_window
@@ -1390,7 +1420,7 @@ def main() -> None:
                 "all_sessions": args.all_sessions,
                 "observation_mode": "all-sessions" if args.all_sessions else "workspace",
                 "input_source": selected_input_source,
-                "input_fidelity": FIDELITY_APPROXIMATE if selected_input_source == "store" else FIDELITY_ORIGINAL,
+                "input_fidelity": selected_input_fidelity,
                 "date_window_start": date_window_start,
                 "adaptive_window": {
                     "enabled": not args.all_sessions,
@@ -1426,6 +1456,7 @@ def main() -> None:
             no_sources = payload.get("summary", {}).get("no_sources_available", False)
             should_persist, persist_skip_reason = _should_persist_patterns(
                 selected_input_source=selected_input_source,
+                input_fidelity=selected_input_fidelity,
                 source_statuses=source_statuses,
                 top_candidates=top_candidates,
                 no_sources_available=no_sources,

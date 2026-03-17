@@ -19,7 +19,16 @@ from common import (
     summarize_text,
     within_range,
 )
-from skill_miner_common import DEFAULT_GAP_HOURS, build_claude_logical_packets, build_claude_session_ref, build_packet
+from skill_miner_common import (
+    ASSISTANT_HIGHLIGHT_LIMIT,
+    DEFAULT_GAP_HOURS,
+    MAX_ASSISTANT_HIGHLIGHTS,
+    MAX_USER_HIGHLIGHTS,
+    USER_HIGHLIGHT_LIMIT,
+    build_claude_logical_packets,
+    build_claude_session_ref,
+    build_packet,
+)
 
 
 SOURCE_NAME = "claude-history"
@@ -52,9 +61,9 @@ def empty_group(path: Path) -> dict[str, object]:
     }
 
 
-def append_excerpt(bucket: list[str], value: str) -> None:
-    excerpt = summarize_text(value, 180)
-    if excerpt and excerpt not in bucket and len(bucket) < 3:
+def append_excerpt(bucket: list[str], value: str, *, limit: int, max_items: int) -> None:
+    excerpt = summarize_text(value, limit)
+    if excerpt and excerpt not in bucket and len(bucket) < max_items:
         bucket.append(excerpt)
 
 
@@ -146,12 +155,12 @@ def main() -> None:
 
                 user_excerpts: list[str] = []
                 for message in logical_packet.get("user_messages", []):
-                    append_excerpt(user_excerpts, str(message))
-                    append_excerpt(group["user_excerpts"], str(message))
+                    append_excerpt(user_excerpts, str(message), limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
+                    append_excerpt(group["user_excerpts"], str(message), limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
                 assistant_excerpts: list[str] = []
                 for message in logical_packet.get("assistant_messages", []):
-                    append_excerpt(assistant_excerpts, str(message))
-                    append_excerpt(group["assistant_excerpts"], str(message))
+                    append_excerpt(assistant_excerpts, str(message), limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
+                    append_excerpt(group["assistant_excerpts"], str(message), limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
 
                 assistant_summary = assistant_excerpts[-1] if assistant_excerpts else None
                 packet_start = logical_packet.get("started_at")

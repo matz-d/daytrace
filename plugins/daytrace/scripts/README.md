@@ -204,6 +204,7 @@ Important fields:
 - `config.effective_days`: actual observation window after adaptive expansion
 - `config.all_sessions`: disables workspace filtering but keeps the configured day window
 - `config.input_source`: `raw` or `store`
+- `config.input_fidelity`: `original`, `canonical`, or `approximate`
 - `config.observation_mode`: `workspace` or `all-sessions`
 - `config.date_window_start`: ISO 8601 threshold used for the effective window
 - `config.adaptive_window`: workspace-only expansion metadata, including thresholds, initial counts, and whether 30-day fallback was used
@@ -224,8 +225,9 @@ Contract notes:
 - `summary` in `evidence_items[]` prefers the session's `primary_intent` (the same normalized intent sampled in `intent_analysis.items`); when empty it falls back to an anonymized representative snippet from the conversation
 - `prepare` is the only phase that reads raw history for evidence chain construction
 - `--input-source store` reads persisted `claude-history` / `codex-history` observations instead of raw history
-- new store slices persist canonical skill-miner packet payloads inside source observation details; store-backed prepare reuses those payloads first and falls back to highlight-based reconstruction only for older slices
-- if a store slice was hydrated before canonical packet payloads were added, re-running aggregate for that window is recommended to recover raw/store parity
+- new store slices persist canonical skill-miner packet payloads inside source observation details; canonical reuse now requires packet schema v2 (`packet_version=2`) plus the required v2 fields
+- store-backed prepare reuses only valid v2 canonical packets; stale or invalid packets fall back to highlight-based reconstruction in forced store mode and force raw fallback in auto mode
+- if a store slice was hydrated before canonical packet payloads were upgraded to v2, re-running aggregate for that window is required to recover raw/store parity
 - `--input-source auto` reuses the store only when the matching slice is complete for the current source manifest; missing, partial, degraded, stale, or unvalidated slices fall back to raw history
 - `--sources-file` lets auto mode validate the current manifest against a specific source registry instead of the built-in default
 - `--compare-legacy` adds a lightweight comparison summary between the selected path and the raw-history path

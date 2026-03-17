@@ -21,12 +21,28 @@ PROPOSAL_SOURCE = "skill-miner-proposal"
 
 MAX_SNIPPETS = 2
 RAW_SNIPPET_LIMIT = 100
+PRIMARY_INTENT_LIMIT = 300
+FULL_USER_INTENT_LIMIT = 1200
+MAX_USER_HIGHLIGHTS = 8
+USER_HIGHLIGHT_LIMIT = 400
+MAX_ASSISTANT_HIGHLIGHTS = 3
+ASSISTANT_HIGHLIGHT_LIMIT = 180
 DEFAULT_TOP_N = 10
 DEFAULT_MAX_UNCLUSTERED = 10
 DEFAULT_GAP_HOURS = 8
 DEFAULT_RESEARCH_REF_LIMIT = 5
 OVERSIZED_CLUSTER_MIN_PACKETS = 8
 OVERSIZED_CLUSTER_MIN_SHARE = 0.5
+SKILL_MINER_PACKET_VERSION = 2
+
+PRIMARY_INTENT_SOURCE_RAW = "raw_user_message"
+PRIMARY_INTENT_SOURCE_HIGHLIGHT = "user_highlight"
+PRIMARY_INTENT_SOURCE_SUMMARY = "summary_fallback"
+PRIMARY_INTENT_SOURCES = {
+    PRIMARY_INTENT_SOURCE_RAW,
+    PRIMARY_INTENT_SOURCE_HIGHLIGHT,
+    PRIMARY_INTENT_SOURCE_SUMMARY,
+}
 
 GENERIC_TASK_SHAPES = {
     "review_changes",
@@ -44,6 +60,8 @@ GENERIC_TOOL_SIGNATURES = {
     "rg",
     "sed",
 }
+
+BROAD_LABEL_TASK_SHAPES = {"prepare_report", "write_markdown", "search_code", "inspect_files", "summarize_findings"}
 
 COMMON_COMMANDS = {
     "rg",
@@ -88,11 +106,152 @@ ARTIFACT_HINT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("code", ("python", "ts", "tsx", "js", "実装", "コード")),
 ]
 
-REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    ("findings-first", ("findings-first", "findings first", "severity", "指摘", "severity順")),
-    ("file-line-refs", ("file-line", "line refs", "line references", "line", "file", "行番号", "ファイル名")),
-    ("concise-updates", ("concise", "short", "簡潔", "1-2 sentence", "same concise format")),
-    ("tests-before-close", ("test", "pytest", "verification", "検証")),
+USER_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "findings-first",
+        (
+            "findings-first",
+            "return findings first",
+            "list findings by severity",
+            "findings by severity",
+            "findings in severity order",
+            "severity ordered findings",
+            "指摘を先に",
+            "指摘をseverity順",
+            "重要度順で指摘",
+            "同じ findings-first format",
+        ),
+    ),
+    (
+        "file-line-refs",
+        (
+            "file-line-refs",
+            "file/line refs",
+            "file/line references",
+            "ファイル名と行番号",
+            "行番号付き",
+            "行番号とファイル名",
+        ),
+    ),
+    (
+        "concise-updates",
+        (
+            "1-2 sentence",
+            "1-2 sentences",
+            "one or two sentence",
+            "keep updates concise",
+            "brief updates",
+            "short updates",
+            "same concise format",
+            "簡潔に更新",
+            "簡潔な形式",
+            "短い更新",
+        ),
+    ),
+    (
+        "tests-before-close",
+        (
+            "run tests before",
+            "test before close",
+            "verify before finish",
+            "pytest before",
+            "テストしてから",
+            "検証してから",
+            "先にテスト",
+        ),
+    ),
+    (
+        "always-do",
+        (
+            "always",
+            "always do",
+            "every time",
+            "必ず",
+            "毎回",
+        ),
+    ),
+    (
+        "never-do",
+        (
+            "never",
+            "never do",
+            "絶対に",
+            "禁止",
+            "やめて",
+            "しないで",
+        ),
+    ),
+    (
+        "format-rule",
+        (
+            "same-format",
+            "same template",
+            "template通り",
+            "テンプレート通り",
+            "同じ形式",
+            "同じフォーマット",
+            "format rule",
+        ),
+    ),
+    (
+        "confirm-before",
+        (
+            "confirm before",
+            "ask before",
+            "check with me before",
+            "確認してから",
+            "先に確認",
+            "聞いてから",
+            "相談してから",
+        ),
+    ),
+]
+
+ASSISTANT_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "findings-first",
+        (
+            "findings-first",
+            "findings by severity",
+            "list findings by severity",
+            "return findings first",
+            "severity ordered findings",
+            "指摘を先に",
+            "重要度順で指摘",
+        ),
+    ),
+    (
+        "file-line-refs",
+        (
+            "file-line-refs",
+            "file/line refs",
+            "file/line references",
+            "ファイル名と行番号",
+            "行番号付き",
+        ),
+    ),
+    (
+        "concise-updates",
+        (
+            "1-2 sentence",
+            "1-2 sentences",
+            "same concise format",
+            "keep updates concise",
+            "brief updates",
+            "簡潔な形式",
+        ),
+    ),
+    (
+        "tests-before-close",
+        (
+            "run tests before",
+            "test before close",
+            "verify before finish",
+            "pytest before",
+            "テストしてから",
+            "検証してから",
+        ),
+    ),
 ]
 
 MATCH_TEXT_NORMALIZATIONS: tuple[tuple[str, str], ...] = (
@@ -101,6 +260,8 @@ MATCH_TEXT_NORMALIZATIONS: tuple[tuple[str, str], ...] = (
     ("findings-first", "findings-first"),
     ("same format", "same-format"),
     ("same findings format", "findings-first"),
+    ("file/line refs", "file-line-refs"),
+    ("file/line references", "file-line-refs"),
     ("line refs", "file-line-refs"),
     ("line references", "file-line-refs"),
     ("file and line", "file-line-refs"),
@@ -142,6 +303,8 @@ CLAUDE_MD_FILENAME = "CLAUDE.md"
 URL_PATTERN = re.compile(r"https?://[^\s<>\"]+")
 PATH_PATTERN = re.compile(r"(/[^ \n\t`\"']+)")
 WORD_PATTERN = re.compile(r"[A-Za-z0-9_./+-]+|[一-龥ぁ-んァ-ン]+")
+COMMAND_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", re.IGNORECASE | re.DOTALL)
+TAG_PATTERN = re.compile(r"</?([a-z0-9_-]+)(?:\s[^>]*)?>", re.IGNORECASE)
 
 
 def normalize_match_text(text: str) -> str:
@@ -149,6 +312,17 @@ def normalize_match_text(text: str) -> str:
     for source, target in MATCH_TEXT_NORMALIZATIONS:
         normalized = normalized.replace(source, target)
     return normalized
+
+
+def pattern_in_text(text: str, pattern: str) -> bool:
+    lowered = text.lower()
+    needle = pattern.lower()
+    if not needle:
+        return False
+    if re.search(r"[一-龥ぁ-んァ-ン./-]", needle):
+        return needle in lowered
+    escaped = re.escape(needle).replace(r"\ ", r"\s+")
+    return re.search(rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_])", lowered) is not None
 
 
 def sanitize_url_domain(raw_url: str) -> str:
@@ -196,6 +370,126 @@ def compact_snippet(text: str, workspace: str | None, limit: int = RAW_SNIPPET_L
     sanitized = URL_PATTERN.sub(lambda match: sanitize_url_domain(match.group(0)), text or "")
     sanitized = mask_paths(sanitized, workspace)
     return summarize_text(sanitized, limit)
+
+
+def _collapse_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _line_is_user_wrapper(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if stripped == "Tool loaded.":
+        return True
+    if stripped.isdigit():
+        return True
+    if lowered.startswith("## my request for codex"):
+        return True
+    if lowered == "# files mentioned by the user:":
+        return True
+    if re.match(r"^##\s+[^:]+:\s+/.+", stripped):
+        return True
+    if lowered.startswith("<task-notification>"):
+        return True
+    if lowered.startswith("<command-name>") or lowered.startswith("<command-message>"):
+        return True
+    return False
+
+
+def clean_user_message_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+
+    command_args = COMMAND_ARGS_PATTERN.findall(raw)
+    command_args_text = " ".join(match.strip() for match in command_args if str(match).strip())
+    if command_args:
+        raw = COMMAND_ARGS_PATTERN.sub(" ", raw)
+
+    if "## My request for Codex:" in raw:
+        raw = raw.split("## My request for Codex:", 1)[1]
+    if command_args_text and command_args_text not in raw:
+        raw = f"{command_args_text}\n{raw}"
+
+    if "# Files mentioned by the user:" in raw and "## My request for Codex:" not in raw:
+        lines: list[str] = []
+        for line in raw.splitlines():
+            if _line_is_user_wrapper(line):
+                continue
+            lines.append(line)
+        raw = "\n".join(lines)
+
+    raw = re.sub(r"<command-message>.*?</command-message>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+    raw = re.sub(r"<command-name>.*?</command-name>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+    raw = re.sub(r"<task-notification>.*?</task-notification>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+    raw = TAG_PATTERN.sub(" ", raw)
+
+    cleaned_lines = [line for line in raw.splitlines() if not _line_is_user_wrapper(line)]
+    cleaned = _collapse_whitespace(" ".join(cleaned_lines))
+    return cleaned
+
+
+def _message_priority(text: str) -> tuple[int, int, int]:
+    tokens = tokenize(text)
+    token_count = len(tokens)
+    task_shapes = infer_task_shapes([text], [])
+    artifact_hints = infer_artifact_hints([text], [])
+    has_specific_shape = any(shape not in GENERIC_TASK_SHAPES for shape in task_shapes)
+    return (
+        1 if has_specific_shape else 0,
+        len(task_shapes),
+        len(artifact_hints) + token_count,
+    )
+
+
+def build_primary_intent_fields(
+    user_messages: list[str],
+    assistant_messages: list[str],
+    workspace: str | None,
+    *,
+    user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
+) -> tuple[str, str, str]:
+    cleaned_candidates: list[tuple[tuple[int, int, int], int, int, str]] = []
+    cleaned_fallbacks: list[tuple[int, int, str]] = []
+
+    for index, message in enumerate(user_messages):
+        cleaned = clean_user_message_text(message)
+        if not cleaned:
+            continue
+        token_count = len(tokenize(cleaned))
+        if token_count >= 4:
+            cleaned_candidates.append((_message_priority(cleaned), index, len(cleaned), cleaned))
+        else:
+            cleaned_fallbacks.append((index, len(cleaned), cleaned))
+
+    if cleaned_candidates:
+        _priority, _index, _length, selected = max(
+            cleaned_candidates,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+        return (
+            compact_snippet(selected, workspace, limit=PRIMARY_INTENT_LIMIT),
+            compact_snippet(selected, workspace, limit=FULL_USER_INTENT_LIMIT),
+            user_message_source,
+        )
+
+    if cleaned_fallbacks:
+        _index, _length, selected = max(cleaned_fallbacks, key=lambda item: (item[0], item[1]))
+        return (
+            compact_snippet(selected, workspace, limit=PRIMARY_INTENT_LIMIT),
+            compact_snippet(selected, workspace, limit=FULL_USER_INTENT_LIMIT),
+            user_message_source,
+        )
+
+    fallback_texts = user_messages + assistant_messages
+    for message in fallback_texts:
+        snippet = compact_snippet(str(message), workspace, limit=PRIMARY_INTENT_LIMIT)
+        if snippet:
+            return snippet, compact_snippet(str(message), workspace, limit=FULL_USER_INTENT_LIMIT), PRIMARY_INTENT_SOURCE_SUMMARY
+
+    return "No primary intent captured", "No primary intent captured", PRIMARY_INTENT_SOURCE_SUMMARY
 
 
 def tokenize(value: str) -> set[str]:
@@ -327,7 +621,7 @@ def infer_task_shapes(texts: list[str], tools: list[str]) -> list[str]:
     specific: list[str] = []
     generic: list[str] = []
     for label, patterns in TASK_SHAPE_PATTERNS:
-        if any(pattern.lower() in corpus for pattern in patterns):
+        if any(pattern_in_text(corpus, pattern) for pattern in patterns):
             if label in GENERIC_TASK_SHAPES:
                 generic.append(label)
             else:
@@ -341,23 +635,37 @@ def infer_artifact_hints(texts: list[str], tools: list[str]) -> list[str]:
     corpus = normalize_match_text(" ".join(texts + tools))
     hints: list[str] = []
     for label, patterns in ARTIFACT_HINT_PATTERNS:
-        if any(pattern.lower() in corpus for pattern in patterns):
+        if any(pattern_in_text(corpus, pattern) for pattern in patterns):
             hints.append(label)
     return hints[:3]
 
 
-def infer_repeated_rules(texts: list[str], workspace: str | None) -> list[dict[str, str]]:
-    rules: list[dict[str, str]] = []
-    seen: set[str] = set()
+def infer_repeated_rules(
+    texts: list[str],
+    workspace: str | None,
+    *,
+    role: str,
+) -> list[dict[str, str]]:
+    patterns = USER_REPEATED_RULE_PATTERNS if role == "user" else ASSISTANT_REPEATED_RULE_PATTERNS
+    matched_messages: dict[str, set[str]] = defaultdict(set)
+    snippets: dict[str, str] = {}
+
     for text in texts:
-        lowered = normalize_match_text(text)
-        for label, patterns in REPEATED_RULE_PATTERNS:
-            if label in seen:
-                continue
-            if any(pattern.lower() in lowered for pattern in patterns):
-                seen.add(label)
-                rules.append({"normalized": label, "raw_snippet": compact_snippet(text, workspace)})
-    return rules[:2]
+        candidate_text = clean_user_message_text(text) if role == "user" else _collapse_whitespace(str(text))
+        if not candidate_text:
+            continue
+        lowered = normalize_match_text(candidate_text)
+        for label, rule_patterns in patterns:
+            if any(pattern_in_text(lowered, pattern) for pattern in rule_patterns):
+                matched_messages[label].add(candidate_text)
+                snippets.setdefault(label, compact_snippet(candidate_text, workspace, limit=PRIMARY_INTENT_LIMIT))
+
+    rules: list[dict[str, str]] = []
+    for label, _patterns in patterns:
+        if len(matched_messages.get(label, set())) < 2:
+            continue
+        rules.append({"normalized": label, "raw_snippet": snippets.get(label, label)})
+    return rules[:8]
 
 
 def most_common_tool(tools: list[str]) -> tuple[str, list[str], int]:
@@ -369,18 +677,87 @@ def most_common_tool(tools: list[str]) -> tuple[str, list[str], int]:
     return top_tool, ordered[:5], sum(counts.values())
 
 
-def normalize_primary_intent(messages: list[str], workspace: str | None) -> str:
-    for message in messages:
-        snippet = compact_snippet(message, workspace)
-        if snippet:
-            return snippet
-    return "No primary intent captured"
+def normalize_primary_intent(
+    messages: list[str],
+    workspace: str | None,
+    *,
+    assistant_messages: list[str] | None = None,
+    user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
+) -> str:
+    primary_intent, _full_user_intent, _intent_source = build_primary_intent_fields(
+        messages,
+        assistant_messages or [],
+        workspace,
+        user_message_source=user_message_source,
+    )
+    return primary_intent
 
 
 def append_unique_snippet(bucket: list[str], text: str, workspace: str | None) -> None:
     snippet = compact_snippet(text, workspace)
     if snippet and snippet not in bucket and len(bucket) < MAX_SNIPPETS:
         bucket.append(snippet)
+
+
+def packet_user_repeated_rules(packet: dict[str, Any]) -> list[dict[str, str]]:
+    rules = packet.get("user_repeated_rules")
+    if not isinstance(rules, list):
+        rules = packet.get("repeated_rules") or []
+    return [item for item in rules if isinstance(item, dict)]
+
+
+def packet_assistant_repeated_rules(packet: dict[str, Any]) -> list[dict[str, str]]:
+    rules = packet.get("assistant_repeated_rules")
+    if not isinstance(rules, list):
+        return []
+    return [item for item in rules if isinstance(item, dict)]
+
+
+def skill_miner_packet_is_v2(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        packet_version = int(value.get("packet_version"))
+    except (TypeError, ValueError):
+        return False
+    if packet_version != SKILL_MINER_PACKET_VERSION:
+        return False
+    required_strings = (
+        "packet_id",
+        "session_ref",
+        "source",
+        "timestamp",
+        "primary_intent",
+        "full_user_intent",
+        "primary_intent_source",
+    )
+    for key in required_strings:
+        if not str(value.get(key) or "").strip():
+            return False
+    if str(value.get("primary_intent_source") or "") not in PRIMARY_INTENT_SOURCES:
+        return False
+    required_lists = (
+        "task_shape",
+        "artifact_hints",
+        "tool_signature",
+        "representative_snippets",
+        "user_repeated_rules",
+        "assistant_repeated_rules",
+    )
+    for key in required_lists:
+        if not isinstance(value.get(key), list):
+            return False
+    support = value.get("support")
+    if not isinstance(support, dict):
+        return False
+    for key in ("message_count", "tool_call_count"):
+        try:
+            count = int(support.get(key))
+        except (TypeError, ValueError):
+            return False
+        if count < 0:
+            return False
+    return True
 
 
 def timestamp_to_epoch(value: Any) -> int:
@@ -512,15 +889,25 @@ def build_packet(
     user_messages: list[str],
     assistant_messages: list[str],
     tools: list[str],
+    user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
 ) -> dict[str, Any]:
-    texts = user_messages + assistant_messages
+    cleaned_user_messages = [clean_user_message_text(message) for message in user_messages]
+    normalized_user_messages = [message for message in cleaned_user_messages if message]
+    texts = normalized_user_messages + assistant_messages
     top_tool, tool_signature, tool_call_count = most_common_tool(tools)
     snippets: list[str] = []
-    for message in user_messages + assistant_messages:
+    for message in normalized_user_messages + assistant_messages:
         append_unique_snippet(snippets, message, workspace)
-    primary_intent = normalize_primary_intent(user_messages or texts, workspace)
-    repeated_rules = infer_repeated_rules(assistant_messages or texts, workspace)
+    primary_intent, full_user_intent, primary_intent_source = build_primary_intent_fields(
+        user_messages,
+        assistant_messages,
+        workspace,
+        user_message_source=user_message_source,
+    )
+    user_repeated_rules = infer_repeated_rules(user_messages, workspace, role="user")
+    assistant_repeated_rules = infer_repeated_rules(assistant_messages, workspace, role="assistant")
     return {
+        "packet_version": SKILL_MINER_PACKET_VERSION,
         "packet_id": packet_id,
         "source": source,
         "session_ref": session_ref,
@@ -532,8 +919,12 @@ def build_packet(
         "task_shape": infer_task_shapes(texts, tool_signature),
         "artifact_hints": infer_artifact_hints(texts, tool_signature),
         "primary_intent": primary_intent,
+        "full_user_intent": full_user_intent,
+        "primary_intent_source": primary_intent_source,
         "representative_snippets": snippets,
-        "repeated_rules": repeated_rules,
+        "user_repeated_rules": user_repeated_rules,
+        "assistant_repeated_rules": assistant_repeated_rules,
+        "repeated_rules": list(user_repeated_rules),
         "support": {
             "message_count": len(user_messages) + len(assistant_messages),
             "tool_call_count": tool_call_count,
@@ -545,15 +936,18 @@ def candidate_label(packet: dict[str, Any]) -> str:
     task_shapes = packet.get("common_task_shapes") or packet.get("task_shape") or []
     artifact_hints = packet.get("artifact_hints") or []
     rule_hints = packet.get("rule_hints") or []
+    intent = str(packet.get("primary_intent") or "").strip()
     if task_shapes:
-        base = str(task_shapes[0]).replace("_", " ")
+        base_shape = str(task_shapes[0])
+        base = base_shape.replace("_", " ")
         descriptors = [str(value) for value in artifact_hints[:2] if value]
         if not descriptors:
             descriptors = [str(value) for value in rule_hints[:1] if value]
+        if intent and (base_shape in BROAD_LABEL_TASK_SHAPES or (len(descriptors) >= 2 and base_shape in {"prepare_report", "write_markdown"})):
+            return summarize_text(intent, 64)
         if descriptors:
             return f"{base} ({', '.join(descriptors)})"
         return base
-    intent = str(packet.get("primary_intent") or "").strip()
     if intent:
         return summarize_text(intent, 64)
     return "Unnamed candidate"
@@ -580,7 +974,7 @@ def stable_block_keys(packet: dict[str, Any]) -> list[str]:
     top_tool = str(packet.get("top_tool") or "none")
     task_shapes = packet.get("task_shape") or []
     artifact_hints = [str(value) for value in packet.get("artifact_hints", []) if value]
-    repeated_rules = [str(item.get("normalized") or "") for item in packet.get("repeated_rules", []) if isinstance(item, dict)]
+    repeated_rules = [str(item.get("normalized") or "") for item in packet_user_repeated_rules(packet) if item.get("normalized")]
     first_shape = next((str(shape) for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
     if not first_shape and task_shapes:
         first_shape = str(task_shapes[0])
@@ -676,7 +1070,7 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
     if is_oversized_cluster:
         score -= 3
     if generic_task_shape:
-        score -= 2
+        score -= 1
     if generic_tools:
         score -= 1
     if weak_semantic_cohesion:
@@ -827,19 +1221,27 @@ def build_research_brief(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def build_detail_signal(detail: dict[str, Any]) -> dict[str, Any]:
     messages = detail.get("messages", [])
-    texts = [str(message.get("text") or "") for message in messages if isinstance(message, dict) and message.get("text")]
     user_texts = [str(message.get("text") or "") for message in messages if isinstance(message, dict) and message.get("role") == "user"]
     assistant_texts = [str(message.get("text") or "") for message in messages if isinstance(message, dict) and message.get("role") == "assistant"]
+    texts = [text for text in [clean_user_message_text(message) for message in user_texts] if text] + assistant_texts
     tools = [str(tool.get("name") or "") for tool in detail.get("tool_calls", []) if isinstance(tool, dict) and tool.get("name")]
     task_shapes = infer_task_shapes(texts, tools)
     artifact_hints = infer_artifact_hints(texts, tools)
-    repeated_rules = infer_repeated_rules(assistant_texts or texts, str(detail.get("workspace") or ""))
-    primary_intent = normalize_primary_intent(user_texts or texts, str(detail.get("workspace") or ""))
+    user_repeated_rules = infer_repeated_rules(user_texts, str(detail.get("workspace") or ""), role="user")
+    assistant_repeated_rules = infer_repeated_rules(assistant_texts, str(detail.get("workspace") or ""), role="assistant")
+    primary_intent, _full_user_intent, _primary_intent_source = build_primary_intent_fields(
+        user_texts,
+        assistant_texts,
+        str(detail.get("workspace") or ""),
+        user_message_source=PRIMARY_INTENT_SOURCE_RAW,
+    )
     return {
         "session_ref": detail.get("session_ref"),
         "task_shapes": task_shapes,
         "artifact_hints": artifact_hints,
-        "repeated_rules": [item.get("normalized") for item in repeated_rules if item.get("normalized")],
+        "user_repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
+        "assistant_repeated_rules": [item.get("normalized") for item in assistant_repeated_rules if item.get("normalized")],
+        "repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
         "tool_names": tools,
         "primary_intent": primary_intent,
     }
@@ -937,7 +1339,7 @@ def judge_research_candidate(candidate: dict[str, Any], details: list[dict[str, 
     primary_shapes = [signal["task_shapes"][0] for signal in signals if signal.get("task_shapes")]
     distinct_primary_shapes = sorted(set(primary_shapes))
     non_generic_primary_shapes = sorted({shape for shape in distinct_primary_shapes if shape not in GENERIC_TASK_SHAPES})
-    repeated_rule_count = sum(1 for signal in signals if signal.get("repeated_rules"))
+    repeated_rule_count = sum(1 for signal in signals if signal.get("user_repeated_rules"))
     primary_artifacts = [signal["artifact_hints"][0] for signal in signals if signal.get("artifact_hints")]
     dominant_artifact, dominant_artifact_count, dominant_artifact_share = _dominant_value_share(primary_artifacts)
     token_sets = [tokenize(str(signal.get("primary_intent") or "")) for signal in signals if signal.get("primary_intent")]

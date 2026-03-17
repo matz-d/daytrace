@@ -20,7 +20,17 @@ from common import (
     summarize_text,
     within_range,
 )
-from skill_miner_common import build_codex_session_ref, build_packet, codex_command_names, codex_message_text, earliest_iso_timestamp
+from skill_miner_common import (
+    ASSISTANT_HIGHLIGHT_LIMIT,
+    MAX_ASSISTANT_HIGHLIGHTS,
+    MAX_USER_HIGHLIGHTS,
+    USER_HIGHLIGHT_LIMIT,
+    build_codex_session_ref,
+    build_packet,
+    codex_command_names,
+    codex_message_text,
+    earliest_iso_timestamp,
+)
 
 
 SOURCE_NAME = "codex-history"
@@ -46,14 +56,14 @@ def append_history_record(index: dict[str, dict[str, object]], session_id: str, 
     text_value = str(text or "")
     if text_value:
         session["user_messages"].append(text_value)
-    excerpt = summarize_text(text_value, 180)
-    if excerpt and excerpt not in session["user_excerpts"] and len(session["user_excerpts"]) < 3:
+    excerpt = summarize_text(text_value, USER_HIGHLIGHT_LIMIT)
+    if excerpt and excerpt not in session["user_excerpts"] and len(session["user_excerpts"]) < MAX_USER_HIGHLIGHTS:
         session["user_excerpts"].append(excerpt)
 
 
-def append_excerpt(bucket: list[str], text: object) -> None:
-    excerpt = summarize_text(str(text or ""), 180)
-    if excerpt and excerpt not in bucket and len(bucket) < 3:
+def append_excerpt(bucket: list[str], text: object, *, limit: int, max_items: int) -> None:
+    excerpt = summarize_text(str(text or ""), limit)
+    if excerpt and excerpt not in bucket and len(bucket) < max_items:
         bucket.append(excerpt)
 
 
@@ -174,7 +184,7 @@ def main() -> None:
                             message = str(record.get("payload", {}).get("message") or "")
                             if message:
                                 event_user_messages.append(message)
-                            append_excerpt(event_user_excerpts, message)
+                            append_excerpt(event_user_excerpts, message, limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
                         continue
 
                     if record_type != "response_item":
@@ -188,7 +198,7 @@ def main() -> None:
                             assistant_text = codex_message_text(payload)
                             if assistant_text:
                                 assistant_messages.append(assistant_text)
-                            append_excerpt(assistant_excerpts, assistant_text)
+                            append_excerpt(assistant_excerpts, assistant_text, limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
                     elif payload_type == "function_call":
                         if within_range(timestamp, start, end):
                             tool_names = codex_command_names(payload)
@@ -216,7 +226,7 @@ def main() -> None:
             commentary_anchor = commentary_timestamps[-1] if commentary_timestamps else session_timestamp
             merged_user_excerpts = list(history_entry["user_excerpts"])
             for excerpt in event_user_excerpts:
-                if excerpt not in merged_user_excerpts and len(merged_user_excerpts) < 3:
+                if excerpt not in merged_user_excerpts and len(merged_user_excerpts) < MAX_USER_HIGHLIGHTS:
                     merged_user_excerpts.append(excerpt)
             merged_user_messages = [str(message) for message in history_entry.get("user_messages", []) if str(message or "").strip()]
             for message in event_user_messages:

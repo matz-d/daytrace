@@ -15,8 +15,10 @@ from skill_miner_common import (
     apply_claude_md_immediate_rules,
     build_claude_md_immediate_apply_preview,
     build_proposal_sections,
+    clean_user_message_text,
     compare_iso_timestamps,
     infer_task_shapes,
+    infer_repeated_rules,
     judge_research_candidate,
     merge_judgment_into_candidate,
     stable_block_keys,
@@ -52,6 +54,7 @@ def make_packet(
     timestamp: str = "2026-03-09T00:00:00+09:00",
 ) -> dict[str, object]:
     return {
+        "packet_version": 2,
         "packet_id": packet_id,
         "source": "codex-history",
         "session_ref": f"codex:{packet_id}:1",
@@ -63,7 +66,11 @@ def make_packet(
         "task_shape": task_shape,
         "artifact_hints": artifact_hints,
         "primary_intent": primary_intent,
+        "full_user_intent": primary_intent,
+        "primary_intent_source": "raw_user_message",
         "representative_snippets": snippets,
+        "user_repeated_rules": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
+        "assistant_repeated_rules": [],
         "repeated_rules": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
         "support": {"message_count": 4, "tool_call_count": len(tool_signature or [top_tool, "sed"])},
     }
@@ -192,6 +199,65 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
 
         self.assertEqual(shapes[:3], ["implement_feature", "edit_config", "run_tests"])
 
+    def test_clean_user_message_text_keeps_command_args_and_request_body(self) -> None:
+        cleaned = clean_user_message_text(
+            "<command-name>/daily-report</command-name> <command-message>daily-report</command-message> "
+            "<command-args>今日の日報を作成して</command-args>\n"
+            "# Files mentioned by the user:\n## README.md: /tmp/workspace/README.md\n## My request for Codex:\n方向性を整理して"
+        )
+
+        self.assertIn("今日の日報を作成して", cleaned)
+        self.assertIn("方向性を整理して", cleaned)
+        self.assertNotIn("Files mentioned by the user", cleaned)
+        self.assertNotIn("/daily-report", cleaned)
+
+    def test_infer_repeated_rules_requires_two_distinct_user_messages(self) -> None:
+        self.assertEqual(
+            infer_repeated_rules(
+                ["Review this PR and keep findings first."],
+                "/tmp/workspace",
+                role="user",
+            ),
+            [],
+        )
+
+        repeated = infer_repeated_rules(
+            [
+                "Review this PR and keep findings first.",
+                "Review another PR and keep findings-first format.",
+            ],
+            "/tmp/workspace",
+            role="user",
+        )
+
+        self.assertEqual([item["normalized"] for item in repeated], ["findings-first"])
+
+    def test_infer_repeated_rules_matches_always_and_never_imperatives(self) -> None:
+        repeated = infer_repeated_rules(
+            [
+                "Always include file and line references in the final review.",
+                "Always include a short rationale after each finding.",
+                "Never rewrite unrelated files during review.",
+                "Never change formatting outside the touched hunk.",
+            ],
+            "/tmp/workspace",
+            role="user",
+        )
+
+        self.assertEqual([item["normalized"] for item in repeated], ["always-do", "never-do"])
+
+    def test_same_findings_format_is_classified_as_findings_first(self) -> None:
+        repeated = infer_repeated_rules(
+            [
+                "Review this PR and keep the same findings format.",
+                "Review another PR and keep the same findings format.",
+            ],
+            "/tmp/workspace",
+            role="user",
+        )
+
+        self.assertEqual([item["normalized"] for item in repeated], ["findings-first"])
+
     def test_stable_block_keys_adds_composites_before_generic_tool_block(self) -> None:
         packet = make_packet(
             "pkt-composite",
@@ -290,6 +356,37 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertEqual(
             _similarity_score_from_features(left_features, right_features),
             similarity_score(left, right),
+        )
+
+    def test_similarity_primary_artifact_match_stays_within_artifact_weight(self) -> None:
+        left_features = {
+            "snippet_tokens": set(),
+            "intent_tokens": set(),
+            "task_shape_set": set(),
+            "tool_set": set(),
+            "artifact_set": {"config"},
+            "primary_artifact": "config",
+            "rule_names": set(),
+            "primary_non_generic_shape": "",
+            "generic_task_only": False,
+            "generic_tool_only": False,
+        }
+        right_features = {
+            "snippet_tokens": set(),
+            "intent_tokens": set(),
+            "task_shape_set": set(),
+            "tool_set": set(),
+            "artifact_set": {"config"},
+            "primary_artifact": "config",
+            "rule_names": set(),
+            "primary_non_generic_shape": "",
+            "generic_task_only": False,
+            "generic_tool_only": False,
+        }
+
+        self.assertEqual(
+            _similarity_score_from_features(left_features, right_features),
+            round(SIMILARITY_ARTIFACT_WEIGHT, 3),
         )
 
     def test_similarity_score_title_match_only_stays_within_intent_budget(self) -> None:
@@ -552,6 +649,40 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertEqual(judgment["recommendation"], "promote_ready")
         self.assertEqual(judgment["proposed_triage_status"], "ready")
         self.assertEqual(len(judgment["detail_signals"]), 2)
+
+    def test_judge_rejects_low_overlap_before_split_when_rules_absent(self) -> None:
+        candidate = {
+            "candidate_id": "cand-low-overlap",
+            "label": "mixed objectives",
+            "quality_flags": [],
+            "triage_status": "needs_research",
+            "confidence": "weak",
+            "proposal_ready": False,
+        }
+        details = [
+            {
+                "session_ref": "codex:a:1",
+                "messages": [
+                    {"role": "user", "text": "Review PR quasar-lambda and list findings."},
+                    {"role": "assistant", "text": "I will inspect the diff and summarize findings."},
+                ],
+                "tool_calls": [{"name": "rg", "count": 1}],
+            },
+            {
+                "session_ref": "codex:b:2",
+                "messages": [
+                    {"role": "user", "text": "Prepare weekly report for nebula metrics."},
+                    {"role": "assistant", "text": "I will draft the report in markdown."},
+                ],
+                "tool_calls": [{"name": "python3", "count": 1}],
+            },
+        ]
+
+        judgment = judge_research_candidate(candidate, details)
+
+        self.assertEqual(judgment["recommendation"], "reject_candidate")
+        self.assertEqual(judgment["proposed_triage_status"], "rejected")
+        self.assertEqual(judgment["proposed_confidence"], "insufficient")
 
     def test_promote_ready_refreshes_evidence_summary_for_final_proposal(self) -> None:
         candidate = {

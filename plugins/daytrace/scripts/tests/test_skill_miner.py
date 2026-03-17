@@ -589,6 +589,37 @@ class SkillMinerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
 
+    def invalidate_store_skill_miner_packets(self, store_path: Path, *, drop_key: str) -> None:
+        connection = sqlite3.connect(store_path)
+        rows = connection.execute(
+            """
+            SELECT id, source_name, details_json
+            FROM observations
+            WHERE source_name IN ('claude-history', 'codex-history')
+            """
+        ).fetchall()
+        for observation_id, source_name, details_json in rows:
+            details = json.loads(str(details_json))
+            if source_name == "claude-history":
+                logical_packets = details.get("logical_packets", [])
+                if isinstance(logical_packets, list):
+                    for logical_packet in logical_packets:
+                        if not isinstance(logical_packet, dict):
+                            continue
+                        packet = logical_packet.get("skill_miner_packet")
+                        if isinstance(packet, dict):
+                            packet.pop(drop_key, None)
+            else:
+                packet = details.get("skill_miner_packet")
+                if isinstance(packet, dict):
+                    packet.pop(drop_key, None)
+            connection.execute(
+                "UPDATE observations SET details_json = ? WHERE id = ?",
+                (json.dumps(details, ensure_ascii=False), int(observation_id)),
+            )
+        connection.commit()
+        connection.close()
+
     def test_prepare_builds_candidates_and_masks_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, claude_root, codex_history, codex_sessions = self.create_fixture(Path(temp_dir))
@@ -598,13 +629,13 @@ class SkillMinerTests(unittest.TestCase):
             self.assertGreaterEqual(payload["summary"]["block_count"], 1)
             self.assertEqual(len(payload["candidates"]), 1)
             candidate = payload["candidates"][0]
-            self.assertEqual(candidate["support"]["total_packets"], 2)
-            self.assertEqual(candidate["support"]["claude_packets"], 1)
+            self.assertEqual(candidate["support"]["total_packets"], 3)
+            self.assertEqual(candidate["support"]["claude_packets"], 2)
             self.assertEqual(candidate["support"]["codex_packets"], 1)
             self.assertIn("review_changes", candidate["common_task_shapes"])
             self.assertIn("summarize_findings", candidate["common_task_shapes"])
             self.assertIn("rg", candidate["common_tool_signatures"])
-            self.assertEqual(len(candidate["session_refs"]), 2)
+            self.assertEqual(len(candidate["session_refs"]), 3)
             self.assertGreater(candidate["score"], 0)
             self.assertIn(candidate["confidence"], {"medium", "strong"})
             self.assertTrue(candidate["proposal_ready"])
@@ -644,7 +675,7 @@ class SkillMinerTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["config"]["input_source"], "store")
-            self.assertEqual(payload["config"]["input_fidelity"], "approximate")
+            self.assertEqual(payload["config"]["input_fidelity"], "canonical")
             self.assertGreaterEqual(payload["summary"]["total_packets"], 2)
             self.assertGreaterEqual(len(payload["candidates"]), 1)
             self.assertIn("comparison", payload)
@@ -943,13 +974,105 @@ class SkillMinerTests(unittest.TestCase):
             for packet_id, raw_packet in raw_by_packet.items():
                 store_packet = store_by_packet[packet_id]
                 for key in [
+                    "packet_version",
                     "primary_intent",
+                    "full_user_intent",
+                    "primary_intent_source",
                     "task_shape",
                     "artifact_hints",
                     "tool_signature",
                     "representative_snippets",
+                    "user_repeated_rules",
+                    "assistant_repeated_rules",
                 ]:
                     self.assertEqual(store_packet[key], raw_packet[key], msg=f"{packet_id} {key}")
+
+    def test_store_packet_restoration_rejects_stale_canonical_packets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+            self.invalidate_store_skill_miner_packets(store_path, drop_key="packet_version")
+
+            store_packets, _store_statuses = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            self.assertTrue(store_packets)
+            self.assertTrue(any(packet["_fidelity"] == "approximate" for packet in store_packets))
+
+    def test_prepare_auto_falls_back_to_raw_when_store_canonical_packets_are_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+            self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+            self.invalidate_store_skill_miner_packets(store_path, drop_key="full_user_intent")
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "raw")
+            self.assertEqual(payload["config"]["input_fidelity"], "original")
+
+    def test_prepare_store_skips_pattern_persist_for_approximate_store_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_wrapper_heavy_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            sources_file = self.write_sources_file(root, claude_root, codex_history, codex_sessions)
+            self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "auto",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+            self.invalidate_store_skill_miner_packets(store_path, drop_key="user_repeated_rules")
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+                "--sources-file",
+                str(sources_file),
+            )
+
+            self.assertEqual(payload["config"]["input_source"], "store")
+            self.assertEqual(payload["config"]["input_fidelity"], "approximate")
+            self.assertEqual(payload["config"]["pattern_persist"]["status"], "skipped")
+            self.assertEqual(payload["config"]["pattern_persist"]["reason"], "input_fidelity_approximate")
 
     def test_prepare_store_matches_raw_candidate_semantics_for_wrapper_heavy_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
