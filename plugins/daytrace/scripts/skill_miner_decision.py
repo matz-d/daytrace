@@ -40,6 +40,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def _find_candidate_by_id(proposal: dict[str, Any], candidate_id: str) -> tuple[dict[str, Any], str, int | None]:
+    candidate_id = candidate_id.strip()
     for section_name in ("ready", "needs_research", "rejected"):
         section = proposal.get(section_name, [])
         if not isinstance(section, list):
@@ -99,7 +100,7 @@ def build_decision_payload(
     )
     timestamp = datetime.now().astimezone().isoformat()
     decision_entry = {
-        "candidate_id": str(candidate.get("candidate_id") or candidate.get("packet_id") or ""),
+        "candidate_id": str(candidate.get("candidate_id") or candidate.get("packet_id") or "").strip(),
         "decision_key": str(candidate.get("decision_key") or ""),
         "label": str(candidate.get("label") or ""),
         "suggested_kind": str(candidate.get("suggested_kind") or ""),

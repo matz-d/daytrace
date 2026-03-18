@@ -118,6 +118,25 @@ class SkillMinerDecisionCliTests(unittest.TestCase):
             self.assertEqual(payload["decision"]["user_decision"], "reject")
             self.assertTrue(payload["decision"]["carry_forward"])
 
+    def test_candidate_id_lookup_strips_input_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            proposal_path = root / "proposal.json"
+            proposal_path.write_text(json.dumps(sample_proposal()), encoding="utf-8")
+
+            completed = self.run_cli(
+                proposal_path,
+                "--candidate-id",
+                "c1 ",
+                "--decision",
+                "defer",
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["decision"]["candidate_id"], "c1")
+            self.assertEqual(payload["decision"]["user_decision"], "defer")
+
     def test_invalid_ready_index_returns_error_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

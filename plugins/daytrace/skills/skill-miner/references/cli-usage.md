@@ -46,7 +46,8 @@ python3 <plugin-root>/scripts/skill_miner_detail.py --refs "<session_ref_1>" "<s
 追加調査後の結論判定。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "<candidate_id>" --detail-file /tmp/detail.json
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file "$SESSION_TMP/prepare.json" --candidate-id "<candidate_id>" --detail-file "$SESSION_TMP/detail.json"
 ```
 
 ### skill_miner_proposal.py
@@ -54,23 +55,25 @@ python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tm
 最終 proposal 組み立て。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs > "$SESSION_TMP/proposal.json"
 ```
 
 ### skill_miner_decision.py
 
-proposal 選択結果を `--user-decision-file` 互換 JSON に正規化する helper。
+proposal 選択結果を `--user-decision-file` 互換 JSON に正規化する helper。`proposal.json` は `skill_miner_proposal.py` の stdout を redirect して作る。`candidate-index` は 1-based（最初の候補は `1`）。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
+python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file "$SESSION_TMP/proposal.json" --candidate-index 1 --decision adopt --completion-state completed --output-file "$SESSION_TMP/user-decision.json"
 ```
 
 補足:
 
 - `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- 一時 JSON は固定 `/tmp/*.json` を避け、`mktemp -d` で作った session-specific temp dir に置く
 - `skill_miner_decision.py` が出す JSON は `skill_miner_proposal.py --user-decision-file` にそのまま渡せる
 - handoff bundle は `--skill-creator-handoff-dir` に保存される
-- デモ時に副作用を隔離したい場合は `/tmp/daytrace-demo/...` を使ってよい
+- デモ時に副作用を隔離したい場合も、`mktemp -d` で作った session-specific temp dir を使う
 
 ### 実コマンド例
 
@@ -80,11 +83,12 @@ repo root をカレントディレクトリとした場合:
 python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl
 python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions
 python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions --days 3650 --dump-intents
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
 python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710000000"
-python3 plugins/daytrace/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "codex-abc123" --detail-file /tmp/detail.json
-python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
-python3 plugins/daytrace/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
-python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file /tmp/user-decision.json
+python3 plugins/daytrace/scripts/skill_miner_research_judge.py --candidate-file "$SESSION_TMP/prepare.json" --candidate-id "codex-abc123" --detail-file "$SESSION_TMP/detail.json"
+python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs > "$SESSION_TMP/proposal.json"
+python3 plugins/daytrace/scripts/skill_miner_decision.py --proposal-file "$SESSION_TMP/proposal.json" --candidate-index 1 --decision adopt --completion-state completed --output-file "$SESSION_TMP/user-decision.json"
+python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file "$SESSION_TMP/user-decision.json" > "$SESSION_TMP/proposal-final.json"
 ```
 
 ## Prepare Output Reading Guide

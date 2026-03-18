@@ -63,19 +63,22 @@ python3 <plugin-root>/scripts/skill_miner_detail.py --refs "<ref1>" "<ref2>"
 Phase 3 Judge (conditional):
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "<id>" --detail-file /tmp/detail.json
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file "$SESSION_TMP/prepare.json" --candidate-id "<id>" --detail-file "$SESSION_TMP/detail.json"
 ```
 
 Phase 3 Proposal:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs > "$SESSION_TMP/proposal.json"
 ```
 
 Phase 3 Decision Writeback (conditional):
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file "$SESSION_TMP/proposal.json" --candidate-index 1 --decision adopt --completion-state completed --output-file "$SESSION_TMP/user-decision.json"
 ```
 
 Phase 4 Post Draft (conditional):
@@ -89,10 +92,11 @@ workspace 指定がある場合は全コマンドに `--workspace /absolute/path
 Pattern Mining の persistence ルール:
 
 - `skill_miner_prepare.py` と `skill_miner_proposal.py` には同じ `--decision-log-path` を明示的に渡す
-- proposal に対するユーザー選択を保存する時は `skill_miner_decision.py` が出す `/tmp/user-decision.json` を `skill_miner_proposal.py --user-decision-file` に渡す
+- Phase 3 の一時ファイルは固定 `/tmp/*.json` を使わず、`mktemp -d` 等で作った session-specific temp dir（例: `$SESSION_TMP/...`）に置く
+- proposal に対するユーザー選択を保存する時は `skill_miner_decision.py` が出す `$SESSION_TMP/user-decision.json` を `skill_miner_proposal.py --user-decision-file` に渡す
 - `skill_miner_proposal.py` には `--skill-creator-handoff-dir` も明示的に渡す
 - 既定値は `~/.daytrace/...` だが、daytrace-session は副作用を見える化するため必ず CLI 引数で path を明示する
-- デモや dry-run で副作用を隔離したい場合は `/tmp/daytrace-demo/...` など session 専用 path に差し替えてよい
+- デモや dry-run で副作用を隔離したい場合も、`mktemp -d` で作った session 専用 path に差し替える
 
 ## Execution Flow
 
@@ -164,11 +168,12 @@ Phase 1 完了直後、Phase 2 に入る前に「今日の DayTrace ダイジェ
    - LLM は明確な理由がある場合のみ override する（Pre-Classification Contract 参照）
    - `agent` だけは Python が自動推定しないため、LLM 判断で付与する唯一の分類
 5. 提案の組み立て:
-    - prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡して proposal JSON を生成し、`/tmp/proposal.json` に保存する
+    - prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡し、stdout を shell redirect で `$SESSION_TMP/proposal.json` に保存する
     - proposal の `markdown` フィールドを出力する
     - `ready` が 0 件の場合: 観測サマリ・成長兆候を含む enriched output が自動生成され、そのまま Phase 4 へ進む
  6. ready proposal が 1 件以上ある場合だけ、proposal の `selection_prompt` を使って 1 回だけ候補選択を受け付けてよい
     - ユーザーが番号を答えた場合は、その番号を `skill_miner_decision.py --candidate-index <N>` に渡す
+    - `candidate-index` は 1-based。数値であり、`1 <= N <= ready_count` を検証する
     - `defer` / `reject` を選んだ場合も `skill_miner_decision.py` で `user-decision-file` を生成する
  7. 自動判断 — 固定化アクション:
     - `suggested_kind == "CLAUDE.md"`: Immediate Apply Spec に従い diff preview を表示し、apply 成功後にだけ `--decision adopt --completion-state completed` を記録する
@@ -176,10 +181,10 @@ Phase 1 完了直後、Phase 2 に入る前に「今日の DayTrace ダイジェ
     - `suggested_kind == "hook"` / `"agent"`: 次セッションへ送る旨を伝える。成功未確認のまま session を閉じる場合は `adopt` を確定させず、`pending` 経由で `defer` 扱いにする
     - ユーザーが「あとで」「今回は見送る」と答えた場合は `skill_miner_decision.py` で `defer` / `reject` を記録する
  8. user decision を受け取った場合:
-    - `skill_miner_decision.py --output-file /tmp/user-decision.json` を実行する
-    - 同じ prepare / judge / decision-log-path / handoff-dir を使って `skill_miner_proposal.py --user-decision-file /tmp/user-decision.json` を再実行する
+    - `skill_miner_decision.py --output-file "$SESSION_TMP/user-decision.json"` を実行する
+    - 同じ prepare / judge / decision-log-path / handoff-dir を使って `skill_miner_proposal.py --user-decision-file "$SESSION_TMP/user-decision.json"` を再実行する
     - 再実行結果を Phase 3 の最終 persistence 状態として扱う
-7. 判断ログは 1 行に圧縮する:
+ 9. 判断ログは 1 行に圧縮する:
 
 ```
 [DayTrace] パターン検出: 候補 6 件中 2 件を提案（CLAUDE.md ×1, skill ×1）、1 件は有望候補、追加調査 1 件実施済み

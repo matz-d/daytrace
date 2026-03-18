@@ -61,20 +61,23 @@ python3 <plugin-root>/scripts/skill_miner_detail.py --refs "<session_ref_1>" "<s
 追加調査後の結論判定:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "<candidate_id>" --detail-file /tmp/detail.json
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file "$SESSION_TMP/prepare.json" --candidate-id "<candidate_id>" --detail-file "$SESSION_TMP/detail.json"
 ```
 
 最終 proposal 組み立て:
 ```bash
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
+SESSION_TMP="${SESSION_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/daytrace-session-XXXXXX")}"
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs > "$SESSION_TMP/proposal.json"
 ```
 ユーザー判断の writeback:
 ```bash
-python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file /tmp/user-decision.json
+python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file "$SESSION_TMP/proposal.json" --candidate-index 1 --decision adopt --completion-state completed --output-file "$SESSION_TMP/user-decision.json"
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_TMP/prepare.json" --judge-file "$SESSION_TMP/judge.json" --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file "$SESSION_TMP/user-decision.json" > "$SESSION_TMP/proposal-final.json"
 ```
 永続化 path の扱い:
 - `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- 一時 JSON は固定 `/tmp/*.json` ではなく、`mktemp -d` で作った session-specific temp dir に置く
 - `skill_miner_decision.py` は proposal 選択結果を `--user-decision-file` 互換 JSON に正規化する
 - `skill_miner_proposal.py` の skill handoff は `--skill-creator-handoff-dir` に保存される
 - CLI 自体は既定値を持つが、orchestration 側では副作用を意図的に扱うため path を明示する
@@ -283,6 +286,7 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 ## Decision Log Contract
 `decision_log_stub[]` は proposal ごとに全候補分を出力し、次回判定への橋渡しに使う。
 ユーザーが具体的な adopt / defer / reject を返した場合は、`skill_miner_decision.py` で `--user-decision-file` を作り、`skill_miner_proposal.py` を同じ `--decision-log-path` で再実行して persist する。
+`proposal.json` は `skill_miner_proposal.py` の stdout を redirect して作る。`candidate-index` は 1-based（最初の候補は `1`）。
 ```json
 {
   "decision_key": "stable-match-key",
