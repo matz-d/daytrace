@@ -335,12 +335,6 @@ def main() -> None:
             handoff_dir=handoff_dir,
             recorded_at=recorded_at,
         )
-        proposal["markdown"] = build_markdown(
-            proposal.get("ready", []),
-            proposal.get("needs_research", []),
-            proposal.get("rejected", []),
-            metadata=prepare_payload,
-        )
         emit(
             {
                 "status": "success",
