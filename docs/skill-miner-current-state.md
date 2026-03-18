@@ -43,6 +43,17 @@
 
 proposal phase は raw history を再読み込みしない。`evidence_items[]` だけで根拠表示を完結させる。
 
+### 2-2b. 判断の writeback と次回反映
+
+現在の `skill-miner` は proposal を出すだけで終わらず、JSONL decision log を介して次回判定に反映する closed loop を持つ。
+
+- `skill_miner_prepare.py` は `--decision-log-path` から最新 decision state を読み、`decision_key` 単位で `prior_decision_state` を付与する
+- `carry_forward=false` の候補は次回 prepare で suppress される
+- `user_decision="reject"` は即 suppress ではなく、pattern changed / support grew / time elapsed の resurface 条件で再浮上する
+- `skill_miner_proposal.py` は `decision_log_stub[]` を persist し、`--user-decision-file` が渡された場合は overlay を適用した上で保存する
+- `skill_miner_decision.py` は proposal 選択結果を正規化する helper で、`adopt + completed` のみ suppress 側に倒し、`adopt + pending` は `defer` 扱いに正規化する
+- `daytrace-session` の Phase 3 は proposal を `$SESSION_TMP/proposal.json` に保存し、ユーザー選択後に `skill_miner_proposal.py --user-decision-file ...` を再実行する
+
 ### 2-2a. current triage / scoring semantics（`skill_miner_common.py`）
 
 `confidence` と `triage_status` は LLM の自由判断ではなく、prepare phase の shared heuristic で先に決まる。
@@ -95,8 +106,10 @@ score の current ルール:
 3. 既存文言の書き換え・並び替えはしない
 4. 重複候補は skip して理由を返す
 5. 衝突候補は diff preview のみ出して終了
+6. 実際に apply が成功した時だけ `adopt + completed` として writeback し、次回 suppress する
 
 `skill` / `hook` / `agent` 分類の候補は次セッションの apply フローへ送る。
+成功未確認・中断時は `adopt` を確定させず、`defer` 相当の carry-forward として残す。
 
 ### 2-5. store との連携
 
@@ -110,7 +123,8 @@ score の current ルール:
 
 - `skill` / `hook` / `agent` の自動生成（提案止まり）
 - `SKILL.md` の自動修正
-- self-improving loop の本実装（skill run 観測 → amend → 採用率評価）
+- skill run 観測まで含めた self-improving loop（採用後の amend / evaluate）
+- store-backed adopted-state migration（現在は JSONL decision log を正とする）
 - 実運用での採用率評価
 - `plugin` 分類（v2 では一次分類に使わない）
 
@@ -148,6 +162,7 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 - Claude / Codex 会話履歴から反復パターンを自動抽出し、`提案成立 / 追加調査待ち / 今回は見送り` の 3 区分で返すことができる
 - `提案成立` がある時は、根拠チェーン（どのセッションで何を繰り返したか）付きで提案内容を説明できる
 - `CLAUDE.md` 候補だけ、diff preview による immediate apply path を持つ
+- user decision が返れば、同じ decision log に writeback され、次回 prepare で suppress / resurface に反映される
 - 0 件でも正常系として動作し、理由を返す
 
 ### 何は「提案止まり」か
@@ -234,9 +249,13 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 {
   "status": "success",
   "source": "skill-miner-proposal",
+  "recorded_at": "2026-03-18T10:00:00+09:00",
+  "persistence": {...},
+  "user_decision_overlay": {...},
   "ready": [...],
   "needs_research": [...],
   "rejected": [...],
+  "decision_log_stub": [...],
   "selection_prompt": null,
   "markdown": "## 提案成立\n..."
 }
@@ -245,6 +264,10 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 - `ready`: 正式提案候補
 - `needs_research`: 追加調査後もまだ保留の候補
 - `rejected`: 不成立候補と unclustered の参照
+- `decision_log_stub`: 次回判定に渡す機械用の persistence row
+- `user_decision_overlay`: `--user-decision-file` から何件 overlay できたかの結果
+- `persistence.decision_log`: decision log append の成否
+- `persistence.skill_creator_handoff`: skill handoff 永続化の成否
 - `markdown`: LLM/ユーザー向けの整形済み提案セクション（そのまま出力できる）
 
 **Triage 区分の対応**:

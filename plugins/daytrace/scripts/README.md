@@ -360,13 +360,56 @@ Important fields:
 - `needs_research`: candidates still held back after prepare and optional research judgment
 - `rejected`: candidates and unclustered references that should not be proposed
 - `markdown`: preformatted proposal sections for the LLM/user-facing output
+- `decision_log_stub`: per-candidate persistence rows that bridge this run to the next `prepare`
+- `user_decision_overlay`: how many normalized user decisions from `--user-decision-file` were matched and applied before persistence
+- `persistence.decision_log`: append result for the shared JSONL decision log
+- `persistence.skill_creator_handoff`: persisted handoff bundle metadata for `skill` proposals
 - `--decision-log-path`: optional JSONL output path for `decision_log_stub`; pass the same path used by prepare if you want next-run carry-forward behavior to close the loop
 - `--skill-creator-handoff-dir`: optional output directory for persisted skill scaffold / handoff bundles
+- `--user-decision-file`: optional normalized decision payload; when provided, proposal overlays `adopt` / `defer` / `reject` before persisting the next decision-log row set
 
 Contract notes:
 
 - the CLI has defaults under `~/.daytrace`, but orchestrators should pass persistence paths explicitly so side effects stay intentional
 - `prepare` readback and `proposal` persistence only form one learning loop when they share the same decision-log path
+- the proposal JSON is written to stdout; orchestration should redirect it to a session-specific temp file when a later step needs to read it again
+
+### `skill_miner_decision.py`
+
+Purpose:
+
+- accepts one selected proposal candidate and the user's action
+- emits a normalized `--user-decision-file` payload for `skill_miner_proposal.py`
+- keeps incomplete adoption attempts in carry-forward instead of suppressing them too early
+
+Top-level shape:
+
+```json
+{
+  "status": "success",
+  "source": "skill-miner-decision",
+  "selected_candidate": {},
+  "normalization": {},
+  "decision": {},
+  "decisions": []
+}
+```
+
+Important fields:
+
+- `selected_candidate.section`: where the chosen candidate came from (`ready`, `needs_research`, `rejected`)
+- `selected_candidate.index`: 1-based index when selected via `--candidate-index`
+- `normalization.persisted_user_decision`: stored decision after normalization
+- `normalization.carry_forward`: whether the candidate should reappear next run
+- `decision`: single normalized entry
+- `decisions[]`: list form accepted by `skill_miner_proposal.py --user-decision-file`
+
+Contract notes:
+
+- `--candidate-index` is 1-based and only targets the `ready` list
+- `--decision adopt --completion-state completed` persists `user_decision="adopt"` with `carry_forward=false`
+- `--decision adopt --completion-state pending` is normalized to `user_decision="defer"` with `carry_forward=true`
+- `defer` and `reject` always persist with `carry_forward=true`
 
 ### `session_ref` contract
 
