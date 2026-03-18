@@ -83,6 +83,12 @@ Error shape:
 
 `details` is required but source-specific.
 
+AI history sources (`claude_history.py`, `codex_history.py`) additionally use these conventions in `details` when canonical skill-miner packets are available:
+
+- `ai_observation`: canonical packet payload for the event or summarized logical session
+- `ai_observation_packets`: list form of the same canonical packets when one event summarizes multiple logical packets
+- canonical packets may include richer telemetry such as `tool_trace`, `tool_argument_patterns`, `tool_call_examples`, `intent_tool_alignment`, and `workflow_signals`
+
 ## Source registry fields
 
 `sources.json` supports these additional declarative fields:
@@ -164,6 +170,8 @@ Each entry in `groups[]` includes:
 - `summary`: human-readable summary
 - `confidence`: aggregated `high` / `medium` / `low` (from source category rules)
 - `confidence_breakdown`: `{category: event_count}` — per-category event distribution (e.g. `{"git": 2, "browser": 1}`)
+- `event_confidence_breakdown`: `{confidence: event_count}` — per-event confidence distribution before group aggregation
+- `confidence_basis`: records both the category-derived confidence and the strongest observed event confidence used to derive the final group confidence
 - `sources`: sorted list of contributing source names
 - `confidence_categories`: sorted set of categories
 - `scope_breakdown`: sorted list of scope_modes present (e.g. `["all-day", "workspace"]`)

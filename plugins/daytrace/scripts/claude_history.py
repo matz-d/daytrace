@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 
@@ -145,6 +146,11 @@ def main() -> None:
 
             group = empty_group(path)
             serialized_packets: list[dict[str, object]] = []
+            aggregated_user_messages: list[str] = []
+            aggregated_assistant_messages: list[str] = []
+            aggregated_tools: list[str] = []
+            aggregated_tool_calls: list[dict[str, object]] = []
+            aggregated_referenced_files: list[str] = []
             for packet_index, logical_packet in enumerate(matched_packets):
                 group["session_id"] = logical_packet.get("session_id") or group["session_id"]
                 group["cwd"] = logical_packet.get("cwd") or group["cwd"]
@@ -153,6 +159,13 @@ def main() -> None:
                 group["message_count"] = int(group["message_count"]) + int(logical_packet.get("message_count") or 0)
                 group["user_count"] = int(group["user_count"]) + int(logical_packet.get("user_message_count") or 0)
                 group["assistant_count"] = int(group["assistant_count"]) + int(logical_packet.get("assistant_message_count") or 0)
+                aggregated_user_messages.extend([str(message) for message in logical_packet.get("user_messages", [])])
+                aggregated_assistant_messages.extend([str(message) for message in logical_packet.get("assistant_messages", [])])
+                aggregated_tools.extend([str(tool) for tool in logical_packet.get("tools", [])])
+                aggregated_tool_calls.extend([detail for detail in logical_packet.get("tool_calls", []) if isinstance(detail, dict)])
+                aggregated_referenced_files.extend(
+                    [str(value) for value in logical_packet.get("referenced_files", []) if str(value or "").strip()]
+                )
 
                 user_excerpts = head_tail_excerpts(
                     [str(m) for m in logical_packet.get("user_messages", [])],
@@ -181,6 +194,7 @@ def main() -> None:
                     user_messages=[str(message) for message in logical_packet.get("user_messages", [])],
                     assistant_messages=[str(message) for message in logical_packet.get("assistant_messages", [])],
                     tools=[str(tool) for tool in logical_packet.get("tools", [])],
+                    tool_call_details=[detail for detail in logical_packet.get("tool_calls", []) if isinstance(detail, dict)],
                     referenced_files=logical_packet.get("referenced_files", []),
                 )
                 serialized_packets.append(
@@ -198,6 +212,8 @@ def main() -> None:
                         "assistant_highlights": assistant_excerpts,
                         "assistant_summary": assistant_summary,
                         "tool_signals": list(logical_packet.get("tools", [])),
+                        "tool_call_details": [detail for detail in logical_packet.get("tool_calls", []) if isinstance(detail, dict)],
+                        "ai_observation": skill_miner_packet,
                         "skill_miner_packet": skill_miner_packet,
                     }
                 )
@@ -206,6 +222,24 @@ def main() -> None:
             if not timestamps:
                 continue
 
+            ai_observation_packets = [
+                packet["skill_miner_packet"]
+                for packet in serialized_packets
+                if isinstance(packet.get("skill_miner_packet"), dict)
+            ]
+            merged_ai_observation = build_packet(
+                packet_id=f"claude:{path.parent.name}:{path.stem}:summary",
+                source=SOURCE_NAME,
+                session_ref=build_claude_session_ref(str(path), timestamps[0]),
+                session_id=str(group["session_id"] or "") or None,
+                workspace=str(group["cwd"] or "") or None,
+                timestamp=timestamps[0],
+                user_messages=aggregated_user_messages or [str(excerpt) for excerpt in group["user_excerpts"]],
+                assistant_messages=aggregated_assistant_messages or [str(excerpt) for excerpt in group["assistant_excerpts"]],
+                tools=aggregated_tools,
+                tool_call_details=[dict(detail) for detail in aggregated_tool_calls],
+                referenced_files=list(dict.fromkeys(aggregated_referenced_files))[:20],
+            )
             first_user = group["user_excerpts"][0] if group["user_excerpts"] else "No user prompt captured"
             summary = f"Claude session: {summarize_text(first_user, 96)}"
             details = {
@@ -221,6 +255,8 @@ def main() -> None:
                 "highlights": group["user_excerpts"] + group["assistant_excerpts"],
                 "logical_packets": serialized_packets,
                 "logical_packet_count": len(serialized_packets),
+                "ai_observation": merged_ai_observation,
+                "ai_observation_packets": ai_observation_packets,
             }
             if group["assistant_excerpts"]:
                 details["assistant_summary"] = group["assistant_excerpts"][-1]
@@ -235,6 +271,60 @@ def main() -> None:
                     "confidence": "medium",
                 }
             )
+            if group["user_excerpts"] or group["assistant_excerpts"]:
+                events.append(
+                    {
+                        "source": SOURCE_NAME,
+                        "timestamp": timestamps[-1],
+                        "type": "commentary",
+                        "summary": f"Claude commentary: {summarize_text(first_user, 96)}",
+                        "details": {
+                            "cwd": group["cwd"],
+                            "session_id": group["session_id"],
+                            "file_path": group["file_path"],
+                            "user_highlights": group["user_excerpts"],
+                            "assistant_highlights": group["assistant_excerpts"],
+                            "assistant_summary": group["assistant_excerpts"][-1] if group["assistant_excerpts"] else None,
+                            "ai_observation": merged_ai_observation,
+                            "ai_observation_packets": ai_observation_packets,
+                        },
+                        "confidence": "medium",
+                    }
+                )
+            tool_counter = Counter(
+                str(detail.get("name") or "").strip().lower()
+                for detail in aggregated_tool_calls
+                if str(detail.get("name") or "").strip()
+            )
+            if tool_counter:
+                latest_tool_timestamp = next(
+                    (
+                        str(detail.get("timestamp"))
+                        for detail in reversed(aggregated_tool_calls)
+                        if str(detail.get("timestamp") or "").strip()
+                    ),
+                    timestamps[-1],
+                )
+                tool_summary = ", ".join(f"{name} x{count}" for name, count in tool_counter.most_common(5))
+                events.append(
+                    {
+                        "source": SOURCE_NAME,
+                        "timestamp": latest_tool_timestamp,
+                        "type": "tool_call",
+                        "summary": f"Claude tool usage: {tool_summary}",
+                        "details": {
+                            "cwd": group["cwd"],
+                            "session_id": group["session_id"],
+                            "file_path": group["file_path"],
+                            "tools": [{"name": name, "count": count} for name, count in tool_counter.most_common()],
+                            "total_calls": sum(tool_counter.values()),
+                            "tool_call_details": aggregated_tool_calls[:8],
+                            "ai_observation": merged_ai_observation,
+                            "ai_observation_packets": ai_observation_packets,
+                        },
+                        "confidence": "high",
+                    }
+                )
 
         events.sort(key=lambda event: event["timestamp"], reverse=True)
         emit(

@@ -42,6 +42,10 @@ DEFAULT_MAX_UNCLUSTERED = 10
 DEFAULT_GAP_HOURS = 8
 DEFAULT_RESEARCH_REF_LIMIT = 5
 HEAD_TAIL_RATIO = 0.7  # fraction of max_items reserved for head; remainder for tail
+MAX_TOOL_TRACE_ITEMS = 20
+MAX_TOOL_CALL_EXAMPLES = 8
+MAX_TOOL_ARGUMENT_PATTERNS = 8
+MAX_WORKFLOW_SIGNAL_ITEMS = 4
 
 OVERSIZED_CLUSTER_MIN_PACKETS = 8
 OVERSIZED_CLUSTER_MIN_SHARE = 0.5
@@ -56,6 +60,68 @@ PRIMARY_INTENT_SOURCES = {
     PRIMARY_INTENT_SOURCE_HIGHLIGHT,
     PRIMARY_INTENT_SOURCE_SUMMARY,
 }
+
+TASK_SHAPE_TOOL_HINTS: dict[str, set[str]] = {
+    "prepare_report": {"python", "python3", "bash", "read", "rg"},
+    "write_markdown": {"bash", "cat", "read", "sed"},
+    "debug_failure": {"bash", "pytest", "python", "python3", "rg"},
+    "implement_feature": {"bash", "git", "python", "python3", "npm", "pnpm", "cargo", "go"},
+    "edit_config": {"bash", "cat", "sed"},
+    "run_tests": {"pytest", "python", "python3", "npm", "pnpm", "yarn", "cargo", "go", "make"},
+    "review_changes": {"git", "read", "rg", "sed"},
+    "summarize_findings": {"read", "sed", "cat"},
+    "search_code": {"rg", "grep"},
+    "inspect_files": {"cat", "read", "sed", "nl"},
+}
+
+FAILURE_SIGNAL_PATTERNS = (
+    "error",
+    "failed",
+    "failure",
+    "failing",
+    "timeout",
+    "timed out",
+    "exception",
+    "permission denied",
+    "not found",
+    "invalid json",
+    "stack trace",
+    "bug",
+    "broken",
+    "修正",
+    "失敗",
+    "壊れ",
+    "不具合",
+    "エラー",
+)
+
+RETRY_SIGNAL_PATTERNS = (
+    "retry",
+    "re-run",
+    "rerun",
+    "run again",
+    "try again",
+    "again",
+    "もう一度",
+    "再試行",
+    "やり直し",
+    "再実行",
+)
+
+PIVOT_SIGNAL_PATTERNS = (
+    "instead",
+    "switch to",
+    "rather than",
+    "alternative",
+    "different approach",
+    "change approach",
+    "cut over",
+    "方針転換",
+    "切り替え",
+    "別案",
+    "代わりに",
+    "やっぱり",
+)
 
 def head_tail_excerpts(
     messages: list[str],
@@ -897,6 +963,229 @@ def extract_known_commands(text: str) -> list[str]:
     return commands
 
 
+def _classify_argument_token(token: str, workspace: str | None) -> str:
+    normalized = mask_paths(str(token or "").strip(), workspace)
+    lowered = normalized.lower()
+    if not lowered:
+        return "value"
+    if lowered.startswith("-"):
+        return f"flag:{lowered}"
+    if lowered.startswith(("http://", "https://")):
+        return "url"
+    if re.fullmatch(r"\d+", lowered):
+        return "number"
+    if "/" in normalized or Path(normalized).suffix:
+        return "path"
+    return "value"
+
+
+def _command_argument_pattern(command: str, workspace: str | None) -> str:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    if not tokens:
+        return ""
+    command_name = str(tokens[0]).lower()
+    kinds = [_classify_argument_token(token, workspace) for token in tokens[1:5] if str(token or "").strip()]
+    if not kinds:
+        return command_name
+    return f"{command_name}({','.join(kinds)})"
+
+
+def _tool_argument_pattern(name: str, raw_input: Any, workspace: str | None) -> str:
+    if isinstance(raw_input, dict):
+        command = raw_input.get("cmd")
+        if isinstance(command, str) and command.strip():
+            return _command_argument_pattern(command, workspace)
+        keys = [str(key) for key in raw_input.keys() if str(key).strip()]
+        if keys:
+            return f"{name}<{','.join(sorted(keys)[:4])}>"
+        return name
+    if isinstance(raw_input, str) and raw_input.strip():
+        return _command_argument_pattern(raw_input, workspace)
+    return name
+
+
+def build_tool_call_detail(
+    name: str,
+    raw_input: Any,
+    *,
+    timestamp: str | None = None,
+    workspace: str | None = None,
+    invocation_kind: str | None = None,
+) -> dict[str, Any]:
+    normalized_name = str(name or "").strip().lower() or "unknown"
+    detail: dict[str, Any] = {"name": normalized_name}
+    if timestamp:
+        detail["timestamp"] = timestamp
+    if invocation_kind:
+        detail["invocation_kind"] = str(invocation_kind)
+    if isinstance(raw_input, dict):
+        argument_keys = [str(key) for key in raw_input.keys() if str(key).strip()]
+        if argument_keys:
+            detail["argument_keys"] = sorted(argument_keys)[:6]
+        referenced_files = extract_referenced_files([raw_input], workspace)
+        if referenced_files:
+            detail["referenced_files"] = referenced_files[:5]
+    argument_pattern = _tool_argument_pattern(normalized_name, raw_input, workspace)
+    if argument_pattern:
+        detail["argument_pattern"] = argument_pattern
+    return detail
+
+
+def _tool_trace_from_details(tool_call_details: list[dict[str, Any]], fallback_tools: list[str]) -> list[str]:
+    trace = [str(detail.get("name") or "").strip().lower() for detail in tool_call_details if str(detail.get("name") or "").strip()]
+    if not trace:
+        trace = [str(tool).strip().lower() for tool in fallback_tools if str(tool or "").strip()]
+    return trace[:MAX_TOOL_TRACE_ITEMS]
+
+
+def _tool_argument_patterns(tool_call_details: list[dict[str, Any]]) -> list[str]:
+    patterns = [
+        str(detail.get("argument_pattern") or "").strip()
+        for detail in tool_call_details
+        if str(detail.get("argument_pattern") or "").strip()
+    ]
+    return _dedupe_texts(patterns, limit=MAX_TOOL_ARGUMENT_PATTERNS)
+
+
+def _tool_call_examples(tool_call_details: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for detail in tool_call_details:
+        if not isinstance(detail, dict):
+            continue
+        example = {
+            key: value
+            for key, value in detail.items()
+            if key in {"name", "invocation_kind", "argument_keys", "argument_pattern", "referenced_files"}
+            and value not in (None, [], "")
+        }
+        if not example:
+            continue
+        key = json.dumps(example, ensure_ascii=True, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        examples.append(example)
+        if len(examples) >= MAX_TOOL_CALL_EXAMPLES:
+            break
+    return examples
+
+
+def infer_intent_tool_alignment(task_shapes: list[str], tool_signature: list[str]) -> dict[str, Any]:
+    normalized_shapes = [str(shape) for shape in task_shapes if str(shape or "").strip()]
+    normalized_tools = [str(tool).strip().lower() for tool in tool_signature if str(tool or "").strip()]
+    expected_tools: set[str] = set()
+    for shape in normalized_shapes:
+        expected_tools.update(TASK_SHAPE_TOOL_HINTS.get(shape, set()))
+    if not normalized_shapes or not normalized_tools or not expected_tools:
+        return {
+            "status": "unknown",
+            "matched_tools": [],
+            "expected_tools": sorted(expected_tools)[:5],
+            "reason": "insufficient_signal",
+        }
+    matched_tools = sorted(set(normalized_tools) & expected_tools)
+    if matched_tools:
+        status = "aligned" if any(shape not in GENERIC_TASK_SHAPES for shape in normalized_shapes) else "indirect"
+        return {
+            "status": status,
+            "matched_tools": matched_tools,
+            "expected_tools": sorted(expected_tools)[:5],
+            "reason": "shape_tool_overlap",
+        }
+    if set(normalized_tools) <= GENERIC_TOOL_SIGNATURES:
+        return {
+            "status": "indirect",
+            "matched_tools": [],
+            "expected_tools": sorted(expected_tools)[:5],
+            "reason": "generic_tools_only",
+        }
+    return {
+        "status": "mismatch",
+        "matched_tools": [],
+        "expected_tools": sorted(expected_tools)[:5],
+        "reason": "no_shape_tool_overlap",
+    }
+
+
+def _message_signal_evidence(
+    messages: list[str],
+    workspace: str | None,
+    *,
+    patterns: tuple[str, ...],
+) -> list[dict[str, str]]:
+    evidence: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in messages:
+        cleaned = clean_user_message_text(raw) or _collapse_whitespace(str(raw))
+        if not cleaned:
+            continue
+        lowered = normalize_match_text(cleaned)
+        if not any(pattern_in_text(lowered, pattern) for pattern in patterns):
+            continue
+        snippet = compact_snippet(cleaned, workspace, limit=PRIMARY_INTENT_LIMIT)
+        if not snippet or snippet.lower() in seen:
+            continue
+        seen.add(snippet.lower())
+        evidence.append({"snippet": snippet})
+        if len(evidence) >= MAX_WORKFLOW_SIGNAL_ITEMS:
+            break
+    return evidence
+
+
+def infer_workflow_signals(
+    user_messages: list[str],
+    assistant_messages: list[str],
+    tool_call_details: list[dict[str, Any]],
+    workspace: str | None,
+) -> dict[str, Any]:
+    combined_messages = list(user_messages) + list(assistant_messages)
+    failure_hints = _message_signal_evidence(combined_messages, workspace, patterns=FAILURE_SIGNAL_PATTERNS)
+    retry_hints = _message_signal_evidence(combined_messages, workspace, patterns=RETRY_SIGNAL_PATTERNS)
+    pivot_hints = _message_signal_evidence(user_messages, workspace, patterns=PIVOT_SIGNAL_PATTERNS)
+
+    trace = [str(detail.get("name") or "").strip().lower() for detail in tool_call_details if str(detail.get("name") or "").strip()]
+    if trace:
+        repeated_tools: list[str] = []
+        last_name = ""
+        streak = 0
+        for name in trace:
+            if name == last_name:
+                streak += 1
+            else:
+                if last_name and streak >= 2:
+                    repeated_tools.append(last_name)
+                last_name = name
+                streak = 1
+        if last_name and streak >= 2:
+            repeated_tools.append(last_name)
+        for tool_name in _dedupe_texts(repeated_tools, limit=MAX_WORKFLOW_SIGNAL_ITEMS):
+            retry_hints.append({"snippet": f"Repeated tool sequence: {tool_name}"})
+
+    retry_hints = retry_hints[:MAX_WORKFLOW_SIGNAL_ITEMS]
+    flags: list[str] = []
+    if failure_hints:
+        flags.append("failure")
+    if retry_hints:
+        flags.append("retry")
+    if pivot_hints:
+        flags.append("pivot")
+    return {
+        "flags": flags,
+        "counts": {
+            "failure": len(failure_hints),
+            "retry": len(retry_hints),
+            "pivot": len(pivot_hints),
+        },
+        "failure_hints": failure_hints,
+        "retry_hints": retry_hints,
+        "pivot_hints": pivot_hints,
+    }
+
+
 def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) -> list[dict[str, Any]]:
     logical_packets: list[dict[str, Any]] = []
     packet_records: list[dict[str, Any]] = []
@@ -912,6 +1201,7 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
         assistant_messages: list[str] = []
         tools: list[str] = []
         tool_inputs: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         timestamps: list[str] = []
         cwd = None
         session_id = None
@@ -936,6 +1226,15 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
                         tool_input = item.get("input")
                         if isinstance(tool_input, dict):
                             tool_inputs.append(tool_input)
+                            tool_calls.append(
+                                build_tool_call_detail(
+                                    name or "tool",
+                                    tool_input,
+                                    timestamp=str(record.get("timestamp") or ""),
+                                    workspace=str(cwd) if cwd else None,
+                                    invocation_kind="tool_use",
+                                )
+                            )
             tools.extend(extract_known_commands(text))
 
         packet_cwd = str(cwd) if cwd else None
@@ -951,6 +1250,7 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
                 "user_messages": user_messages,
                 "assistant_messages": assistant_messages,
                 "tools": tools,
+                "tool_calls": tool_calls,
                 "referenced_files": referenced_files,
                 "message_count": len(user_messages) + len(assistant_messages),
                 "user_message_count": len(user_messages),
@@ -1319,17 +1619,24 @@ def build_packet(
     user_messages: list[str],
     assistant_messages: list[str],
     tools: list[str],
+    tool_call_details: list[dict[str, Any]] | None = None,
     referenced_files: list[str] | None = None,
     user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
 ) -> dict[str, Any]:
     feature_texts, _feature_source = feature_messages_for_packet(user_messages, assistant_messages)
-    top_tool, tool_signature, tool_call_count = most_common_tool(tools)
+    normalized_tool_calls = [detail for detail in (tool_call_details or []) if isinstance(detail, dict)]
+    tool_trace = _tool_trace_from_details(normalized_tool_calls, tools)
+    top_tool, tool_signature, tool_call_count = most_common_tool(tool_trace)
+    tool_argument_patterns = _tool_argument_patterns(normalized_tool_calls)
+    tool_call_examples = _tool_call_examples(normalized_tool_calls)
     snippets: list[str] = []
     for message in feature_texts:
         append_unique_snippet(snippets, message, workspace)
     intent_trace = build_intent_trace(user_messages, assistant_messages, workspace)
     constraints = build_constraints(user_messages, workspace)
     acceptance_criteria = build_acceptance_criteria(user_messages, workspace)
+    task_shape = infer_task_shapes(feature_texts, tool_trace)
+    artifact_hints = infer_artifact_hints(feature_texts, tool_trace)
     primary_intent, full_user_intent, primary_intent_source = build_primary_intent_fields(
         user_messages,
         assistant_messages,
@@ -1340,6 +1647,8 @@ def build_packet(
     assistant_rule_hints = infer_rule_hints(assistant_messages, workspace, role="assistant")
     user_repeated_rules = infer_repeated_rules(user_messages, workspace, role="user")
     assistant_repeated_rules = infer_repeated_rules(assistant_messages, workspace, role="assistant")
+    intent_tool_alignment = infer_intent_tool_alignment(task_shape, tool_signature)
+    workflow_signals = infer_workflow_signals(user_messages, assistant_messages, normalized_tool_calls, workspace)
     return {
         "packet_version": SKILL_MINER_PACKET_VERSION,
         "packet_id": packet_id,
@@ -1350,15 +1659,20 @@ def build_packet(
         "timestamp": timestamp,
         "top_tool": top_tool,
         "tool_signature": tool_signature,
+        "tool_trace": tool_trace,
+        "tool_argument_patterns": tool_argument_patterns,
+        "tool_call_examples": tool_call_examples,
         "referenced_files": referenced_files or [],
-        "task_shape": infer_task_shapes(feature_texts, []),
-        "artifact_hints": infer_artifact_hints(feature_texts, []),
+        "task_shape": task_shape,
+        "artifact_hints": artifact_hints,
         "primary_intent": primary_intent,
         "full_user_intent": full_user_intent,
         "primary_intent_source": primary_intent_source,
         "intent_trace": intent_trace,
         "constraints": constraints,
         "acceptance_criteria": acceptance_criteria,
+        "intent_tool_alignment": intent_tool_alignment,
+        "workflow_signals": workflow_signals,
         "representative_snippets": snippets,
         "user_rule_hints": user_rule_hints,
         "assistant_rule_hints": assistant_rule_hints,

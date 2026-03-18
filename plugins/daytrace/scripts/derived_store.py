@@ -171,10 +171,31 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
         normalized_confidence_breakdown[str(key)] = coerced
     if invalid_confidence_breakdown_value:
         warnings.append(_decode_warning("activity_json.confidence_breakdown", "invalid_int_value"))
+    event_confidence_breakdown = activity_payload.get("event_confidence_breakdown", {}) if isinstance(activity_payload, dict) else {}
+    if not isinstance(event_confidence_breakdown, dict):
+        warnings.append(_decode_warning("activity_json.event_confidence_breakdown", "unexpected_type"))
+        event_confidence_breakdown = {}
+    normalized_event_confidence_breakdown: dict[str, int] = {}
+    invalid_event_confidence_value = False
+    for key, value in event_confidence_breakdown.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            invalid_event_confidence_value = True
+            continue
+        normalized_event_confidence_breakdown[str(key)] = coerced
+    if invalid_event_confidence_value:
+        warnings.append(_decode_warning("activity_json.event_confidence_breakdown", "invalid_int_value"))
     scope_breakdown = activity_payload.get("scope_breakdown", []) if isinstance(activity_payload, dict) else []
     if not isinstance(scope_breakdown, list):
         warnings.append(_decode_warning("activity_json.scope_breakdown", "unexpected_type"))
         scope_breakdown = []
+    confidence_basis = activity_payload.get("confidence_basis", {}) if isinstance(activity_payload, dict) else {}
+    if not isinstance(confidence_basis, dict):
+        warnings.append(_decode_warning("activity_json.confidence_basis", "unexpected_type"))
+        confidence_basis = {}
     payload = {
         "activity_id": str(row["activity_id"]),
         "derivation_version": str(row["derivation_version"]),
@@ -188,6 +209,8 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
         "summary": str(row["summary"]),
         "confidence": str(row["confidence"]),
         "confidence_breakdown": normalized_confidence_breakdown,
+        "event_confidence_breakdown": normalized_event_confidence_breakdown,
+        "confidence_basis": {str(key): str(value) for key, value in confidence_basis.items()},
         "sources": _safe_json_loads(row, "sources_json", default=[], warnings=warnings, expected_type=list),
         "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
         "scope_breakdown": [str(item) for item in scope_breakdown],
@@ -666,6 +689,8 @@ def derive_activities_from_observations(
                 "summary": str(group["summary"]),
                 "confidence": str(group["confidence"]),
                 "confidence_breakdown": dict(group.get("confidence_breakdown", {})),
+                "event_confidence_breakdown": dict(group.get("event_confidence_breakdown", {})),
+                "confidence_basis": dict(group.get("confidence_basis", {})),
                 "sources": list(group["sources"]),
                 "confidence_categories": list(group["confidence_categories"]),
                 "scope_breakdown": list(group.get("scope_breakdown", [])),

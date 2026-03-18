@@ -27,6 +27,7 @@ from skill_miner_common import (
     USER_HIGHLIGHT_LIMIT,
     build_codex_session_ref,
     build_packet,
+    build_tool_call_detail,
     codex_command_names,
     codex_message_text,
     earliest_iso_timestamp,
@@ -159,6 +160,7 @@ def main() -> None:
             commentary_timestamps: list[str] = []
             tool_timestamps: list[str] = []
             packet_tool_names: list[str] = []
+            packet_tool_calls: list[dict[str, object]] = []
 
             with rollout.open(encoding="utf-8") as handle:
                 for raw_line in handle:
@@ -204,14 +206,39 @@ def main() -> None:
                     elif payload_type == "function_call":
                         if within_range(timestamp, start, end):
                             tool_names = codex_command_names(payload)
+                            raw_arguments = payload.get("arguments")
+                            try:
+                                parsed_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+                            except json.JSONDecodeError:
+                                parsed_arguments = {"raw_arguments": raw_arguments}
+                            if not isinstance(parsed_arguments, dict):
+                                parsed_arguments = {"raw_arguments": parsed_arguments}
                             if tool_names:
                                 packet_tool_names.extend(tool_names)
                                 for tool_name in tool_names:
                                     tool_counter[tool_name] += 1
+                                    packet_tool_calls.append(
+                                        build_tool_call_detail(
+                                            tool_name,
+                                            parsed_arguments,
+                                            timestamp=str(timestamp or ""),
+                                            workspace=str(meta_details.get("cwd") or "") if isinstance(meta_details, dict) else None,
+                                            invocation_kind=str(payload.get("name") or "function_call"),
+                                        )
+                                    )
                             else:
                                 fallback_name = str(payload.get("name", "unknown"))
                                 packet_tool_names.append(fallback_name)
                                 tool_counter[fallback_name] += 1
+                                packet_tool_calls.append(
+                                    build_tool_call_detail(
+                                        fallback_name,
+                                        parsed_arguments,
+                                        timestamp=str(timestamp or ""),
+                                        workspace=str(meta_details.get("cwd") or "") if isinstance(meta_details, dict) else None,
+                                        invocation_kind=str(payload.get("name") or "function_call"),
+                                    )
+                                )
                             tool_timestamps.append(timestamp)
 
             if meta_details is None:
@@ -257,7 +284,9 @@ def main() -> None:
                 user_messages=merged_user_messages,
                 assistant_messages=assistant_messages,
                 tools=packet_tool_names,
+                tool_call_details=[dict(detail) for detail in packet_tool_calls],
             )
+            ai_observation_packets = [skill_miner_packet]
 
             session_summary = f"Codex session in {meta_details.get('cwd', 'unknown workspace')}"
             if within_range(session_timestamp, start, end) or (start is None and end is None):
@@ -274,6 +303,8 @@ def main() -> None:
                             "cli_version": meta_details.get("cli_version"),
                             "model_provider": meta_details.get("model_provider"),
                             "git": meta_details.get("git"),
+                            "ai_observation": skill_miner_packet,
+                            "ai_observation_packets": ai_observation_packets,
                             "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "medium",
@@ -291,6 +322,8 @@ def main() -> None:
                             "cwd": meta_details.get("cwd"),
                             "user_highlights": merged_user_excerpts,
                             "assistant_highlights": assistant_excerpts,
+                            "ai_observation": skill_miner_packet,
+                            "ai_observation_packets": ai_observation_packets,
                             "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "medium",
@@ -310,6 +343,9 @@ def main() -> None:
                             "cwd": meta_details.get("cwd"),
                             "tools": [{"name": name, "count": count} for name, count in tool_counter.most_common()],
                             "total_calls": sum(tool_counter.values()),
+                            "tool_call_details": packet_tool_calls[:8],
+                            "ai_observation": skill_miner_packet,
+                            "ai_observation_packets": ai_observation_packets,
                             "skill_miner_packet": skill_miner_packet,
                         },
                         "confidence": "high",

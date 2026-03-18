@@ -627,15 +627,34 @@ class SkillMinerTests(unittest.TestCase):
         for observation_id, source_name, details_json in rows:
             details = json.loads(str(details_json))
             if source_name == "claude-history":
+                summary_packet = details.get("ai_observation")
+                if isinstance(summary_packet, dict):
+                    summary_packet.pop(drop_key, None)
+                ai_observation_packets = details.get("ai_observation_packets", [])
+                if isinstance(ai_observation_packets, list):
+                    for packet in ai_observation_packets:
+                        if isinstance(packet, dict):
+                            packet.pop(drop_key, None)
                 logical_packets = details.get("logical_packets", [])
                 if isinstance(logical_packets, list):
                     for logical_packet in logical_packets:
                         if not isinstance(logical_packet, dict):
                             continue
+                        packet = logical_packet.get("ai_observation")
+                        if isinstance(packet, dict):
+                            packet.pop(drop_key, None)
                         packet = logical_packet.get("skill_miner_packet")
                         if isinstance(packet, dict):
                             packet.pop(drop_key, None)
             else:
+                packet = details.get("ai_observation")
+                if isinstance(packet, dict):
+                    packet.pop(drop_key, None)
+                ai_observation_packets = details.get("ai_observation_packets", [])
+                if isinstance(ai_observation_packets, list):
+                    for item in ai_observation_packets:
+                        if isinstance(item, dict):
+                            item.pop(drop_key, None)
                 packet = details.get("skill_miner_packet")
                 if isinstance(packet, dict):
                     packet.pop(drop_key, None)

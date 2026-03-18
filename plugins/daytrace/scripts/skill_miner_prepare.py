@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -37,6 +38,7 @@ from skill_miner_common import (
     build_candidate_quality,
     build_candidate_decision_key,
     build_claude_logical_packets,
+    build_tool_call_detail,
     build_observation_contract,
     build_research_brief,
     build_research_targets,
@@ -371,6 +373,8 @@ def read_claude_packets(root: Path, workspace: Path | None, gap_hours: int) -> t
                             user_messages=list(logical_packet.get("user_messages", [])),
                             assistant_messages=list(logical_packet.get("assistant_messages", [])),
                             tools=list(logical_packet.get("tools", [])),
+                            tool_call_details=list(logical_packet.get("tool_calls", [])),
+                            referenced_files=list(logical_packet.get("referenced_files", [])),
                         ),
                         FIDELITY_ORIGINAL,
                     )
@@ -424,6 +428,7 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
             user_messages: list[str] = []
             assistant_messages: list[str] = []
             tools: list[str] = []
+            tool_call_details: list[dict[str, Any]] = []
             timestamps: list[str] = []
             for record in records:
                 record_type = record.get("type")
@@ -444,7 +449,25 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
                             if timestamp:
                                 timestamps.append(str(timestamp))
                     elif payload_type == "function_call":
-                        tools.extend(codex_command_names(payload))
+                        tool_names = codex_command_names(payload)
+                        tools.extend(tool_names)
+                        raw_arguments = payload.get("arguments")
+                        try:
+                            parsed_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+                        except json.JSONDecodeError:
+                            parsed_arguments = {"raw_arguments": raw_arguments}
+                        if not isinstance(parsed_arguments, dict):
+                            parsed_arguments = {"raw_arguments": parsed_arguments}
+                        for tool_name in tool_names or [str(payload.get("name") or "unknown")]:
+                            tool_call_details.append(
+                                build_tool_call_detail(
+                                    tool_name,
+                                    parsed_arguments,
+                                    timestamp=str(timestamp or ""),
+                                    workspace=str(cwd) if cwd else None,
+                                    invocation_kind=str(payload.get("name") or "function_call"),
+                                )
+                            )
 
             history_entry = history_by_session.get(session_id, {})
             user_messages = history_entry.get("user_messages", []) + user_messages
@@ -467,6 +490,7 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
                     user_messages=user_messages,
                     assistant_messages=assistant_messages,
                     tools=tools,
+                    tool_call_details=tool_call_details,
                 ),
                 FIDELITY_ORIGINAL,
             )
@@ -545,6 +569,24 @@ def _stored_skill_miner_packet(value: Any, *, source_name: str, fallback_workspa
     packet = dict(value)
     packet["user_rule_hints"] = list(packet.get("user_rule_hints", packet.get("user_repeated_rules", [])))
     packet["assistant_rule_hints"] = list(packet.get("assistant_rule_hints", packet.get("assistant_repeated_rules", [])))
+    packet["tool_trace"] = list(packet.get("tool_trace", packet.get("tool_signature", [])))
+    packet["tool_argument_patterns"] = list(packet.get("tool_argument_patterns", []))
+    packet["tool_call_examples"] = list(packet.get("tool_call_examples", []))
+    intent_tool_alignment = packet.get("intent_tool_alignment")
+    packet["intent_tool_alignment"] = dict(intent_tool_alignment) if isinstance(intent_tool_alignment, dict) else {
+        "status": "unknown",
+        "matched_tools": [],
+        "expected_tools": [],
+        "reason": "missing",
+    }
+    workflow_signals = packet.get("workflow_signals")
+    packet["workflow_signals"] = dict(workflow_signals) if isinstance(workflow_signals, dict) else {
+        "flags": [],
+        "counts": {"failure": 0, "retry": 0, "pivot": 0},
+        "failure_hints": [],
+        "retry_hints": [],
+        "pivot_hints": [],
+    }
     packet["source"] = source_name
     packet["repeated_rules"] = list(packet.get("user_repeated_rules", []))
     intent_trace = packet.get("intent_trace")
@@ -583,6 +625,30 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
     summary_prefix = "Claude session: "
     first_prompt = summary[len(summary_prefix) :] if summary.startswith(summary_prefix) else summary
     workspace = str(details.get("cwd") or observation.get("workspace") or "")
+    ai_observation_packets = details.get("ai_observation_packets")
+    if isinstance(ai_observation_packets, list) and ai_observation_packets:
+        rebuilt_packets = [
+            stored_packet
+            for stored_packet in (
+                _stored_skill_miner_packet(
+                    packet,
+                    source_name=CLAUDE_SOURCE,
+                    fallback_workspace=workspace or None,
+                )
+                for packet in ai_observation_packets
+                if isinstance(packet, dict)
+            )
+            if stored_packet is not None
+        ]
+        if rebuilt_packets:
+            return rebuilt_packets
+    stored_summary_packet = _stored_skill_miner_packet(
+        details.get("ai_observation"),
+        source_name=CLAUDE_SOURCE,
+        fallback_workspace=workspace or None,
+    )
+    if stored_summary_packet is not None:
+        return [stored_summary_packet]
     logical_packets = details.get("logical_packets")
     if isinstance(logical_packets, list) and logical_packets:
         rebuilt_packets: list[dict[str, Any]] = []
@@ -590,7 +656,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
             if not isinstance(logical_packet, dict):
                 continue
             stored_packet = _stored_skill_miner_packet(
-                logical_packet.get("skill_miner_packet"),
+                logical_packet.get("ai_observation") or logical_packet.get("skill_miner_packet"),
                 source_name=CLAUDE_SOURCE,
                 fallback_workspace=workspace or None,
             )
@@ -617,6 +683,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
                 user_messages.append(first_prompt)
                 user_message_source = PRIMARY_INTENT_SOURCE_SUMMARY
             packet_start = str(logical_packet.get("started_at") or observation["occurred_at"])
+            tool_call_details = logical_packet.get("tool_call_details")
             rebuilt_packets.append(
                 _tag_fidelity(
                     build_packet(
@@ -632,6 +699,7 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
                         user_messages=user_messages,
                         assistant_messages=assistant_messages,
                         tools=tools,
+                        tool_call_details=[detail for detail in tool_call_details if isinstance(detail, dict)] if isinstance(tool_call_details, list) else [],
                         user_message_source=user_message_source,
                     ),
                     FIDELITY_APPROXIMATE,
@@ -692,7 +760,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
         if not isinstance(details, dict):
             continue
         stored_packet = _stored_skill_miner_packet(
-            details.get("skill_miner_packet"),
+            details.get("ai_observation") or details.get("skill_miner_packet"),
             source_name=CODEX_SOURCE,
             fallback_workspace=str(details.get("cwd") or "").strip() or None,
         )
@@ -705,6 +773,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
     user_messages: list[str] = []
     assistant_messages: list[str] = []
     tools: list[str] = []
+    tool_call_details: list[dict[str, Any]] = []
     user_message_source = PRIMARY_INTENT_SOURCE_HIGHLIGHT
 
     for observation in ordered:
@@ -745,6 +814,9 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
                         count = 0
                     if name and count > 0:
                         tools.extend([name] * count)
+            raw_tool_call_details = details.get("tool_call_details")
+            if isinstance(raw_tool_call_details, list):
+                tool_call_details.extend([detail for detail in raw_tool_call_details if isinstance(detail, dict)])
 
     timestamp = earliest_iso_timestamp(timestamps) or str(anchor["occurred_at"])
     session_ref = build_codex_session_ref(session_id or f"store-{anchor['event_fingerprint']}", timestamp)
@@ -759,6 +831,7 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
             user_messages=user_messages,
             assistant_messages=assistant_messages,
             tools=tools,
+            tool_call_details=tool_call_details,
             user_message_source=user_message_source,
         ),
         FIDELITY_APPROXIMATE,
@@ -788,8 +861,19 @@ def read_store_packets(
 
     packets: list[dict[str, Any]] = []
     claude_packet_count = 0
+    claude_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for observation in claude_observations:
-        claude_packets = _packet_from_claude_observation(observation)
+        details = observation.get("details", {})
+        file_key = None
+        if isinstance(details, dict):
+            file_key = str(details.get("file_path") or details.get("session_id") or "").strip() or None
+        claude_groups[file_key or str(observation["event_fingerprint"])].append(observation)
+    for group in claude_groups.values():
+        preferred_observation = next(
+            (item for item in group if str(item.get("event_type") or "") == "session_summary"),
+            group[-1],
+        )
+        claude_packets = _packet_from_claude_observation(preferred_observation)
         packets.extend(claude_packets)
         claude_packet_count += len(claude_packets)
     codex_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -974,6 +1058,7 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
     intent_tokens = tokenize(intent_corpus)
     task_shape_set = set(packet.get("task_shape", []))
     tool_set = set(packet.get("tool_signature", []))
+    tool_pattern_set = set(packet.get("tool_argument_patterns", []))
     task_shapes_strs = [str(shape) for shape in packet.get("task_shape", []) if shape]
     primary_non_generic = next((shape for shape in task_shapes_strs if shape not in GENERIC_TASK_SHAPES), "")
     rule_names = {
@@ -986,6 +1071,7 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
         "intent_tokens": intent_tokens,
         "task_shape_set": task_shape_set,
         "tool_set": tool_set,
+        "tool_pattern_set": tool_pattern_set,
         "artifact_set": set(packet.get("artifact_hints", [])),
         "primary_artifact": next((str(value) for value in packet.get("artifact_hints", []) if value), ""),
         "rule_names": rule_names,
@@ -996,17 +1082,37 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
 
 
 def _similarity_score_from_features(left: dict[str, Any], right: dict[str, Any]) -> float:
-    snippet = jaccard_score(left["snippet_tokens"], right["snippet_tokens"])
-    intent = jaccard_score(left["intent_tokens"], right["intent_tokens"])
-    task_shapes = overlap_score(left["task_shape_set"], right["task_shape_set"])
-    tools = jaccard_score(left["tool_set"], right["tool_set"])
-    primary_artifact_match = 1.0 if left["primary_artifact"] and left["primary_artifact"] == right["primary_artifact"] else 0.0
-    artifacts = max(overlap_score(left["artifact_set"], right["artifact_set"]), primary_artifact_match)
-    rules = overlap_score(left["rule_names"], right["rule_names"])
-    left_specific = left["primary_non_generic_shape"]
-    same_specific_shape = 1.0 if left_specific and left_specific == right["primary_non_generic_shape"] else 0.0
-    generic_task_only = left["generic_task_only"] and right["generic_task_only"]
-    generic_tool_only = left["generic_tool_only"] and right["generic_tool_only"]
+    left_snippet_tokens = left.get("snippet_tokens", set())
+    right_snippet_tokens = right.get("snippet_tokens", set())
+    left_intent_tokens = left.get("intent_tokens", set())
+    right_intent_tokens = right.get("intent_tokens", set())
+    left_task_shapes = left.get("task_shape_set", set())
+    right_task_shapes = right.get("task_shape_set", set())
+    left_tool_set = left.get("tool_set", set())
+    right_tool_set = right.get("tool_set", set())
+    left_tool_patterns = left.get("tool_pattern_set", set())
+    right_tool_patterns = right.get("tool_pattern_set", set())
+    left_artifacts = left.get("artifact_set", set())
+    right_artifacts = right.get("artifact_set", set())
+    left_rule_names = left.get("rule_names", set())
+    right_rule_names = right.get("rule_names", set())
+    snippet = jaccard_score(left_snippet_tokens, right_snippet_tokens)
+    intent = jaccard_score(left_intent_tokens, right_intent_tokens)
+    task_shapes = overlap_score(left_task_shapes, right_task_shapes)
+    tools = max(
+        jaccard_score(left_tool_set, right_tool_set),
+        jaccard_score(left_tool_patterns, right_tool_patterns),
+    )
+    left_primary_artifact = str(left.get("primary_artifact") or "")
+    right_primary_artifact = str(right.get("primary_artifact") or "")
+    primary_artifact_match = 1.0 if left_primary_artifact and left_primary_artifact == right_primary_artifact else 0.0
+    artifacts = max(overlap_score(left_artifacts, right_artifacts), primary_artifact_match)
+    rules = overlap_score(left_rule_names, right_rule_names)
+    left_specific = str(left.get("primary_non_generic_shape") or "")
+    right_specific = str(right.get("primary_non_generic_shape") or "")
+    same_specific_shape = 1.0 if left_specific and left_specific == right_specific else 0.0
+    generic_task_only = bool(left.get("generic_task_only")) and bool(right.get("generic_task_only"))
+    generic_tool_only = bool(left.get("generic_tool_only")) and bool(right.get("generic_tool_only"))
     score = (
         (task_shapes * SIMILARITY_TASK_SHAPES_WEIGHT)
         + (intent * SIMILARITY_INTENT_WEIGHT)

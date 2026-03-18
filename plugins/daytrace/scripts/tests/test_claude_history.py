@@ -134,15 +134,19 @@ class ClaudeHistoryTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, msg=completed.stderr)
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["status"], "success")
-            self.assertEqual(len(payload["events"]), 1)
+            self.assertEqual(len(payload["events"]), 2)
 
-            event = payload["events"][0]
+            event = next(item for item in payload["events"] if item["type"] == "session_summary")
             logical_packets = event["details"]["logical_packets"]
             self.assertEqual(len(logical_packets), 2)
             self.assertEqual(logical_packets[0]["packet_index"], 0)
             self.assertEqual(logical_packets[1]["packet_index"], 1)
             for packet in logical_packets:
                 self.assertEqual(packet["cwd"], str(workspace_a))
+                self.assertIn("ai_observation", packet)
+            self.assertIn("ai_observation", event["details"])
+            commentary = next(item for item in payload["events"] if item["type"] == "commentary")
+            self.assertIn("ai_observation", commentary["details"])
 
 
 if __name__ == "__main__":
