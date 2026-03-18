@@ -132,7 +132,7 @@ source が使えない場合は `status: "skipped"` (reason 付き) または `s
 
 - ask は 0 回固定
 - 各判断ポイントで `[DayTrace]` プレフィックス付きの自己判断ログを出力
-- Phase 1 〜 5 をソース欠損・スクリプトエラーに関わらず最後まで完走する
+- Phase 1 〜 5（Phase 1.5 含む）をソース欠損・スクリプトエラーに関わらず最後まで完走する
 - 唯一の例外: `CLAUDE.md diff preview` の確認だけはユーザー確認を待つ
 
 ## 4. 実行フロー
@@ -160,6 +160,9 @@ source が使えない場合は `status: "skipped"` (reason 付き) または `s
 ```
 Phase 1: Source Assessment
     daily_report_projection.py を実行 → sources[] を確認 → 判断ログ出力
+
+Phase 1.5: DayTrace ダイジェスト
+    ログから読み取れる 1 日の概観を 3-5 行の散文で出す（Phase 2 の前に先出し）
 
 Phase 2: Daily Report
     Phase 1 の中間 JSON で日報生成 → mode に応じて自分用 / 共有用
@@ -236,7 +239,7 @@ store は **rebuildable cache / index** として扱う。
 - `daily-report`: date-first、自分用 / 共有用モード、graceful degrade
 - `post-draft`: 0 ask、narrative policy、reader 自動推定、graceful degrade
 - `skill-miner`: compress → triage → (detail + judge) → proposal の 5 フェーズ
-- `daytrace-session`: 5 フェーズ自律実行、`[DayTrace]` 判断ログ
+- `daytrace-session`: Phase 1.5 を含む全フェーズ自律実行、`[DayTrace]` 判断ログ
 - source registry（`sources.json` + user drop-in）
 - graceful degrade（全 source 欠損時も空結果で正常終了）
 

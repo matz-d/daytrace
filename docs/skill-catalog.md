@@ -237,6 +237,7 @@ scope-first であり、aggregate.py は使わず専用 CLI だけを使う。
 | フェーズ | 処理 | CLI |
 |---------|------|-----|
 | Phase 1 | Source Assessment | `daily_report_projection.py` |
+| Phase 1.5 | DayTrace ダイジェスト | Phase 1 の JSON からログの概観を 3-5 行の散文で出す |
 | Phase 2 | Daily Report | Phase 1 の中間 JSON を再利用 |
 | Phase 3 | Pattern Mining & Proposals | `skill_miner_prepare.py` → (条件付き) `detail` → `judge` → `proposal` |
 | Phase 4 | Post Draft（条件付き） | `post_draft_projection.py` |
@@ -291,7 +292,7 @@ scope-first であり、aggregate.py は使わず専用 CLI だけを使う。
 
 ```
 「今日の振り返りを全部やって」
-    → daytrace-session（Phase 1〜5 を自動完走）
+    → daytrace-session（Phase 1〜5、Phase 1.5 含む を自動完走）
 
 「今日の日報だけ作りたい」
     → daily-report（Fact & Open Loops に集中）
