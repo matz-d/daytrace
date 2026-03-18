@@ -297,6 +297,96 @@ class DerivedStoreTests(unittest.TestCase):
             with sqlite3.connect(store_path) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0], 2)
 
+    def test_get_activities_readback_preserves_extended_group_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+
+            first = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+            second = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+
+            self.assertEqual(first[0]["scope_breakdown"], ["all-day", "workspace"])
+            self.assertTrue(first[0]["mixed_scope"])
+            self.assertEqual(first[0]["confidence_breakdown"], {"ai_history": 1, "git": 1})
+            self.assertEqual(first[0]["evidence_overflow_count"], 0)
+            self.assertEqual(second[0]["scope_breakdown"], first[0]["scope_breakdown"])
+            self.assertEqual(second[0]["mixed_scope"], first[0]["mixed_scope"])
+            self.assertEqual(second[0]["confidence_breakdown"], first[0]["confidence_breakdown"])
+            self.assertEqual(second[0]["evidence_overflow_count"], first[0]["evidence_overflow_count"])
+
+    def test_get_activities_uses_max_span_in_grouping_and_cache_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store_path = root / "daytrace.sqlite3"
+
+            observations = []
+            for index in range(8):
+                hour, minute = divmod(index * 14, 60)
+                timestamp = f"2026-03-12T{9 + hour:02d}:{minute:02d}:00+09:00"
+                event = {
+                    "source": "chain-source",
+                    "timestamp": timestamp,
+                    "type": "commit",
+                    "summary": f"event-{index}",
+                    "details": {},
+                    "confidence": "high",
+                }
+                observations.append(
+                    {
+                        "observation_id": index + 1,
+                        "source_run_id": 1,
+                        "run_fingerprint": "run-1",
+                        "event_fingerprint": f"fp-{index}",
+                        "source_name": "chain-source",
+                        "scope_mode": "workspace",
+                        "workspace": str(workspace.resolve()),
+                        "requested_date": None,
+                        "since_value": "2026-03-12",
+                        "until_value": "2026-03-12T23:59:59+09:00",
+                        "all_sessions": False,
+                        "occurred_at": timestamp,
+                        "event_type": "commit",
+                        "summary": f"event-{index}",
+                        "confidence": "high",
+                        "details": {},
+                        "event": event,
+                        "confidence_categories": ["git"],
+                        "collected_at": "2026-03-12T12:00:00+09:00",
+                    }
+                )
+
+            unlimited = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                preloaded_observations=observations,
+                max_span_minutes=0,
+            )
+            limited = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                preloaded_observations=observations,
+                max_span_minutes=60,
+            )
+            limited_cached = get_activities(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12",
+                until="2026-03-12T23:59:59+09:00",
+                preloaded_observations=observations,
+                max_span_minutes=60,
+            )
+
+            self.assertEqual(len(unlimited), 1)
+            self.assertGreater(len(limited), 1)
+            self.assertEqual([item["event_count"] for item in limited_cached], [item["event_count"] for item in limited])
+            self.assertTrue(all(item["derivation_version"] == ACTIVITY_DERIVATION_VERSION for item in limited_cached))
+
     def test_get_activities_fail_soft_on_corrupted_json_columns(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aggregate_core import (
     DEFAULT_GROUP_WINDOW_MINUTES,
+    DEFAULT_MAX_SPAN_MINUTES,
     EVIDENCE_LIMIT,
     build_groups,
     build_preflight_summary,
@@ -40,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--source", action="append", dest="source_names", help="Specific source name(s) to run.")
     parser.add_argument("--group-window", type=int, default=DEFAULT_GROUP_WINDOW_MINUTES, help="Minutes for grouping nearby events.")
+    parser.add_argument("--max-span", type=int, default=DEFAULT_MAX_SPAN_MINUTES, help="Maximum span in minutes for a single group. 0 to disable.")
     parser.add_argument("--max-workers", type=int, help="Maximum concurrent source processes.")
     parser.add_argument("--store-path", help="Path to the DayTrace SQLite store.")
     parser.add_argument("--no-store", action="store_true", help="Disable SQLite store ingestion for this run.")
@@ -68,6 +70,7 @@ def main() -> None:
         confidence_categories_by_source = {
             source["name"]: normalize_confidence_categories(source) for source in sources
         }
+        scope_mode_by_source = {source["name"]: source["scope_mode"] for source in sources}
         runnable_sources, skipped_sources = select_sources(
             sources,
             source_names=args.source_names,
@@ -123,6 +126,8 @@ def main() -> None:
             group_window_minutes=args.group_window,
             confidence_categories_by_source=confidence_categories_by_source,
             evidence_limit=EVIDENCE_LIMIT,
+            max_span_minutes=args.max_span,
+            scope_mode_by_source=scope_mode_by_source,
         )
 
         emit(
@@ -136,12 +141,14 @@ def main() -> None:
                     "date": args.date,
                     "all_sessions": args.all_sessions,
                     "group_window": args.group_window,
+                    "max_span": args.max_span,
                 },
                 "config": {
                     "sources_file": str(sources_file),
                     "user_sources_dir": str(user_sources_dir) if include_user_sources else None,
                     "store_path": None if args.no_store else str(store_path),
                     "group_window_minutes": args.group_window,
+                    "max_span_minutes": args.max_span,
                     "evidence_limit": EVIDENCE_LIMIT,
                     **({"store_error": store_errors[0]} if store_errors else {}),
                     **({"store_errors": store_errors} if store_errors else {}),

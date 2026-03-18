@@ -49,7 +49,7 @@ user-invocable: true
 
 ### 引数なし実行
 
-- ask は 0 回に固定する
+- ask は 0 回を基本とする
 - 日付は `today` を使う
 - `reader` は自動推定する
 - `topic` は narrative policy で自動選定する
@@ -57,7 +57,7 @@ user-invocable: true
 
 ### 追加 ask の禁止
 
-- 入口でも途中でも質問しない
+- `Escalation Conditions` の例外を除き、入口でも途中でも質問しない
 - source 欠損や low confidence が見えても追加 ask しない
 - 抽出できなかった情報はデフォルト値で埋める
 
@@ -324,6 +324,32 @@ source 欠損の判定は `summary` と `sources` から行う。
 - 旧 `team-summary` 的な共有は、main UX ではなく `daily-report` の `共有用` へ役割を移したとみなす
 - 旧 `slack` 用途は main UX から外す
 - 互換説明は残してよいが、description や sample output の中心には置かない
+
+## Structured Judgment Log
+
+下書き生成時に以下の structured log を `[PostDraft]` タグで出力する。
+これによりデバッグ時に「なぜこのトピックが選ばれたか」を追跡可能にする。
+
+```
+[PostDraft] judgment: selected_group_id={group_id} | topic_tier={1|2|3} | topic_reason={reason} | reader={auto|override} | reader_reason={reason} | degrade_level={full|limited|empty} | source_count={N}
+```
+
+フィールド定義:
+
+- `selected_group_id`: 中心トピックとして選んだ group の ID（例: `group-003`）
+- `topic_tier`: 3段フォールバックのどの tier で決まったか
+- `topic_reason`: tier 内の選定理由（例: `highest_event_count_with_ai+git`）
+- `reader`: `auto`（自動推定）または `override`（ユーザー指定）
+- `reader_reason`: reader 推定根拠（例: `default_technical_developer` or `user_specified_非エンジニア`）
+- `degrade_level`: `full`（3+ sources）/ `limited`（1-2 sources）/ `empty`（0 sources）
+- `source_count`: 成功した source の数
+
+## Escalation Conditions
+
+以下の場合のみ確認を入れてよい:
+
+- **公開向けか私的メモか判断できない場合**: `--reader` 未指定で、入力から reader が推定不能な時は「公開記事向けと私的メモのどちらですか？」と 1 回だけ確認してよい。推定可能なら ask しない
+- それ以外は ask せずに degrade して進む
 
 ## Verification Policy
 

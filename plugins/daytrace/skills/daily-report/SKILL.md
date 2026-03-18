@@ -53,9 +53,16 @@ user-invocable: true
 
 ### 追加 ask の禁止
 
-- 入口以外では質問しない
+- 原則として入口以外では質問しない
 - 途中で source 欠損や low confidence が見えても追加 ask しない
 - 入口で取れなかった情報はデフォルト値で埋める
+
+### Escalation Conditions
+
+以下の例外条件でのみ、入口以降の確認を入れてよい:
+
+- **共有用で all-day スコープのみ、workspace ログなし**: 「共有用日報に個人端末の全日ログ（Chrome 履歴等）が含まれますが、このまま進めますか？」と 1 回だけ確認。理由: 機密境界の判断はユーザーに委ねるべき
+- それ以外は ask せずに degrade して進む
 
 ## Data Collection
 

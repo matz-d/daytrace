@@ -183,6 +183,56 @@ def resolve_decision_log_path(value: str | None) -> Path:
     return Path(value).expanduser().resolve() if value else DEFAULT_DECISION_LOG_PATH.resolve()
 
 
+RESURFACE_JACCARD_THRESHOLD = 0.3
+RESURFACE_SUPPORT_MULTIPLIER = 2
+RESURFACE_DAYS_ELAPSED = 30
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _should_resurface(candidate: dict[str, Any], prior_state: dict[str, Any]) -> bool:
+    """Check if a user_rejected candidate should resurface based on evidence change."""
+    # Condition 1: evidence_changed — intent_trace Jaccard distance > threshold
+    prior_trace = set(prior_state.get("intent_trace") or [])
+    current_trace = set(candidate.get("intent_trace") or [])
+    if prior_trace and current_trace:
+        union = prior_trace | current_trace
+        intersection = prior_trace & current_trace
+        jaccard_distance = 1.0 - (len(intersection) / len(union)) if union else 0.0
+        if jaccard_distance > RESURFACE_JACCARD_THRESHOLD:
+            return True
+
+    # Condition 2: support_grew — packet count doubled since rejection
+    prior_count = _coerce_int(prior_state.get("observation_count"), 0)
+    current_support = candidate.get("support", {})
+    current_count = (
+        _coerce_int(current_support.get("total_packets", current_support.get("packets", 0)), 0)
+        if isinstance(current_support, dict)
+        else 0
+    )
+    if prior_count > 0 and current_count >= prior_count * RESURFACE_SUPPORT_MULTIPLIER:
+        return True
+
+    # Condition 3: time_elapsed — enough days since rejection
+    decision_ts = prior_state.get("user_decision_timestamp")
+    if decision_ts:
+        try:
+            decided_at = ensure_datetime(decision_ts)
+            if decided_at:
+                elapsed = (datetime.now(tz=timezone.utc) - decided_at).days
+                if elapsed >= RESURFACE_DAYS_ELAPSED:
+                    return True
+        except (ValueError, TypeError):
+            pass
+
+    return False
+
+
 def load_latest_decision_states(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     if not path.exists():
         return {}, {"path": str(path), "status": "missing", "loaded_entries": 0, "active_entries": 0}
@@ -205,9 +255,17 @@ def load_latest_decision_states(path: Path) -> tuple[dict[str, dict[str, Any]], 
                 "candidate_id": row.get("candidate_id"),
                 "label": row.get("label"),
                 "suggested_kind": row.get("suggested_kind"),
+                "intent_trace": list(row.get("intent_trace", [])) if isinstance(row.get("intent_trace"), list) else [],
+                "constraints": list(row.get("constraints", [])) if isinstance(row.get("constraints"), list) else [],
+                "acceptance_criteria": (
+                    list(row.get("acceptance_criteria", [])) if isinstance(row.get("acceptance_criteria"), list) else []
+                ),
                 "user_decision": row.get("user_decision"),
                 "user_decision_timestamp": row.get("user_decision_timestamp"),
                 "carry_forward": carry_forward,
+                "observation_count": _coerce_int(row.get("observation_count"), 0),
+                "prior_observation_count": _coerce_int(row.get("prior_observation_count"), 0),
+                "observation_delta": _coerce_int(row.get("observation_delta"), 0),
                 "recorded_at": row.get("recorded_at"),
             }
         return latest_by_key, {
@@ -254,6 +312,22 @@ def apply_decision_states_to_candidates(
                 }
             )
             continue
+
+        # Resurface check for user_rejected candidates
+        user_decision = state.get("user_decision")
+        if user_decision == "reject":
+            if not _should_resurface(annotated, state):
+                suppressed_items.append(
+                    {
+                        "decision_key": decision_key,
+                        "label": annotated.get("label"),
+                        "user_decision": "reject",
+                        "recorded_at": state.get("recorded_at"),
+                        "suppress_reason": "resurface_conditions_not_met",
+                    }
+                )
+                continue
+
         retained.append(annotated)
 
     return retained, {

@@ -28,6 +28,7 @@ from skill_miner_common import (
     build_claude_logical_packets,
     build_claude_session_ref,
     build_packet,
+    head_tail_excerpts,
 )
 
 
@@ -153,14 +154,20 @@ def main() -> None:
                 group["user_count"] = int(group["user_count"]) + int(logical_packet.get("user_message_count") or 0)
                 group["assistant_count"] = int(group["assistant_count"]) + int(logical_packet.get("assistant_message_count") or 0)
 
-                user_excerpts: list[str] = []
-                for message in logical_packet.get("user_messages", []):
-                    append_excerpt(user_excerpts, str(message), limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
-                    append_excerpt(group["user_excerpts"], str(message), limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
-                assistant_excerpts: list[str] = []
-                for message in logical_packet.get("assistant_messages", []):
-                    append_excerpt(assistant_excerpts, str(message), limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
-                    append_excerpt(group["assistant_excerpts"], str(message), limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
+                user_excerpts = head_tail_excerpts(
+                    [str(m) for m in logical_packet.get("user_messages", [])],
+                    limit=USER_HIGHLIGHT_LIMIT,
+                    max_items=MAX_USER_HIGHLIGHTS,
+                )
+                for excerpt in user_excerpts:
+                    append_excerpt(group["user_excerpts"], excerpt, limit=USER_HIGHLIGHT_LIMIT, max_items=MAX_USER_HIGHLIGHTS)
+                assistant_excerpts = head_tail_excerpts(
+                    [str(m) for m in logical_packet.get("assistant_messages", [])],
+                    limit=ASSISTANT_HIGHLIGHT_LIMIT,
+                    max_items=MAX_ASSISTANT_HIGHLIGHTS,
+                )
+                for excerpt in assistant_excerpts:
+                    append_excerpt(group["assistant_excerpts"], excerpt, limit=ASSISTANT_HIGHLIGHT_LIMIT, max_items=MAX_ASSISTANT_HIGHLIGHTS)
 
                 assistant_summary = assistant_excerpts[-1] if assistant_excerpts else None
                 packet_start = logical_packet.get("started_at")
@@ -174,6 +181,7 @@ def main() -> None:
                     user_messages=[str(message) for message in logical_packet.get("user_messages", [])],
                     assistant_messages=[str(message) for message in logical_packet.get("assistant_messages", [])],
                     tools=[str(tool) for tool in logical_packet.get("tools", [])],
+                    referenced_files=logical_packet.get("referenced_files", []),
                 )
                 serialized_packets.append(
                     {

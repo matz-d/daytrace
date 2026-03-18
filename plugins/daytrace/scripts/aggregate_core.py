@@ -13,7 +13,17 @@ from source_registry import DEFAULT_USER_SOURCES_DIR, load_registry
 
 
 DEFAULT_GROUP_WINDOW_MINUTES = 15
+DEFAULT_MAX_SPAN_MINUTES = 60
 EVIDENCE_LIMIT = 5
+
+# Priority order for salience-based evidence selection.
+# Lower value = higher priority when selecting representative evidence.
+EVIDENCE_CATEGORY_PRIORITY: dict[str, int] = {
+    "git": 0,
+    "ai_history": 1,
+    "browser": 2,
+    "file_activity": 3,
+}
 REQUIRED_EVENT_FIELDS = {"source", "timestamp", "type", "summary", "details", "confidence"}
 
 
@@ -438,10 +448,13 @@ def build_groups(
     group_window_minutes: int,
     confidence_categories_by_source: dict[str, list[str]],
     evidence_limit: int = EVIDENCE_LIMIT,
+    max_span_minutes: int = DEFAULT_MAX_SPAN_MINUTES,
+    scope_mode_by_source: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     grouped_ranges = []
     current: dict[str, Any] | None = None
     window = timedelta(minutes=group_window_minutes)
+    max_span = timedelta(minutes=max_span_minutes) if max_span_minutes > 0 else None
 
     for event in timeline:
         event_time = ensure_datetime(event["timestamp"])
@@ -449,7 +462,9 @@ def build_groups(
             current = {"events": [event], "start": event_time, "end": event_time}
             continue
 
-        if event_time - current["end"] <= window:
+        gap_ok = event_time - current["end"] <= window
+        span_ok = max_span is None or event_time - current["start"] <= max_span
+        if gap_ok and span_ok:
             current["events"].append(event)
             current["end"] = event_time
             continue
@@ -459,6 +474,8 @@ def build_groups(
 
     if current is not None:
         grouped_ranges.append(current)
+
+    _scope_lookup = scope_mode_by_source or {}
 
     normalized_groups = []
     for index, group in enumerate(grouped_ranges, start=1):
@@ -471,6 +488,29 @@ def build_groups(
             for category in confidence_categories_by_source.get(source_name, [])
         }
         confidence = group_confidence(categories)
+
+        # confidence_breakdown: event count per confidence_category
+        confidence_breakdown: dict[str, int] = {}
+        for event in events:
+            for category in confidence_categories_by_source.get(event["source"], []):
+                confidence_breakdown[category] = confidence_breakdown.get(category, 0) + 1
+
+        # scope_breakdown: set of scope_modes present in this group
+        scope_modes: set[str] = set()
+        for source_name in source_names:
+            mode = _scope_lookup.get(source_name)
+            if mode:
+                scope_modes.add(mode)
+        scope_breakdown = sorted(scope_modes)
+        mixed_scope = len(scope_modes) > 1
+
+        # Salience-based evidence: prioritise git > ai_history > browser > file_activity
+        def _evidence_sort_key(ev: dict[str, Any]) -> tuple[int, str]:
+            source_cats = confidence_categories_by_source.get(ev["source"], [])
+            best = min((EVIDENCE_CATEGORY_PRIORITY.get(c, 99) for c in source_cats), default=99)
+            return (best, ev["timestamp"])
+
+        sorted_for_evidence = sorted(events, key=_evidence_sort_key)
         evidence = [
             {
                 "timestamp": event["timestamp"],
@@ -478,8 +518,9 @@ def build_groups(
                 "type": event["type"],
                 "summary": event["summary"],
             }
-            for event in events[:evidence_limit]
+            for event in sorted_for_evidence[:evidence_limit]
         ]
+
         # Keep `timeline` and `groups[].events` pointing at the same event objects so
         # the AR1a contract can expose `timeline[].group_id` without rebuilding copies.
         for event in events:
@@ -493,11 +534,15 @@ def build_groups(
                 "end_timestamp": group["end"].isoformat(),
                 "summary": summary,
                 "confidence": confidence,
+                "confidence_breakdown": confidence_breakdown,
                 "sources": sorted(source_names),
                 "confidence_categories": sorted(categories),
+                "scope_breakdown": scope_breakdown,
+                "mixed_scope": mixed_scope,
                 "source_count": len(source_names),
                 "event_count": len(events),
                 "evidence": evidence,
+                "evidence_overflow_count": max(0, len(events) - evidence_limit),
                 "events": events,
             }
         )

@@ -41,6 +41,8 @@ DEFAULT_TOP_N = 10
 DEFAULT_MAX_UNCLUSTERED = 10
 DEFAULT_GAP_HOURS = 8
 DEFAULT_RESEARCH_REF_LIMIT = 5
+HEAD_TAIL_RATIO = 0.7  # fraction of max_items reserved for head; remainder for tail
+
 OVERSIZED_CLUSTER_MIN_PACKETS = 8
 OVERSIZED_CLUSTER_MIN_SHARE = 0.5
 NEAR_MATCH_DENSE_MIN_COUNT = 2
@@ -54,6 +56,41 @@ PRIMARY_INTENT_SOURCES = {
     PRIMARY_INTENT_SOURCE_HIGHLIGHT,
     PRIMARY_INTENT_SOURCE_SUMMARY,
 }
+
+def head_tail_excerpts(
+    messages: list[str],
+    *,
+    limit: int,
+    max_items: int,
+    head_ratio: float = HEAD_TAIL_RATIO,
+) -> list[str]:
+    """Select excerpts from head and tail of *messages*, deduplicating.
+
+    This avoids the head-only bias of ``append_excerpt`` loops by reserving
+    ``ceil(max_items * head_ratio)`` slots for the first messages and
+    the remaining slots for the last messages.  Duplicates (e.g. when
+    the message list is short enough to overlap) are silently removed.
+    """
+    all_excerpts: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        excerpt = summarize_text(str(message), limit)
+        if excerpt and excerpt not in seen:
+            all_excerpts.append(excerpt)
+            seen.add(excerpt)
+
+    if len(all_excerpts) <= max_items:
+        return all_excerpts
+
+    head_count = max(1, int(max_items * head_ratio + 0.5))
+    tail_count = max_items - head_count
+    head = all_excerpts[:head_count]
+    tail_candidates = all_excerpts[len(all_excerpts) - tail_count:]
+    # Remove tail items already in head
+    head_set = set(head)
+    tail = [item for item in tail_candidates if item not in head_set]
+    return head + tail
+
 
 GENERIC_TASK_SHAPES = {
     "review_changes",
@@ -787,6 +824,58 @@ def overlap_score(left: set[str], right: set[str]) -> float:
     return len(left & right) / max(len(left), len(right))
 
 
+_FILE_PATH_PATTERN = re.compile(
+    r"(?:^|[\s\"'=:,])(/[\w./-]+(?:\.\w+)?)"
+    r"|(?:^|[\s\"'=:,])([\w./-]+(?:\.\w{1,10}))"
+)
+
+_COMMON_EXTENSIONS = frozenset({
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb",
+    ".java", ".c", ".cpp", ".h", ".hpp", ".sh", ".md", ".json",
+    ".yaml", ".yml", ".toml", ".sql", ".html", ".css", ".txt",
+    ".cfg", ".conf", ".env", ".lock",
+})
+
+
+def extract_referenced_files(tool_inputs: list[dict[str, Any]], workspace: str | None) -> list[str]:
+    """Extract file paths referenced in tool_use.input dicts."""
+    files: list[str] = []
+    seen: set[str] = set()
+    for input_dict in tool_inputs:
+        for value in _iter_string_values(input_dict):
+            for match in _FILE_PATH_PATTERN.finditer(value):
+                path = match.group(1) or match.group(2)
+                if not path or path in seen:
+                    continue
+                # Keep only plausible file references
+                suffix = Path(path).suffix.lower()
+                if suffix in _COMMON_EXTENSIONS or (path.startswith("/") and len(path) > 2):
+                    normalized = path
+                    if workspace and normalized.startswith(workspace):
+                        normalized = normalized[len(workspace):].lstrip("/")
+                    if normalized not in seen:
+                        seen.add(normalized)
+                        files.append(normalized)
+    return files[:20]  # cap to prevent bloat
+
+
+def _iter_string_values(obj: Any) -> list[str]:
+    """Recursively extract string values from nested dicts/lists."""
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, dict):
+        result: list[str] = []
+        for v in obj.values():
+            result.extend(_iter_string_values(v))
+        return result
+    if isinstance(obj, list):
+        result = []
+        for item in obj:
+            result.extend(_iter_string_values(item))
+        return result
+    return []
+
+
 def extract_known_commands(text: str) -> list[str]:
     commands: list[str] = []
     for raw in re.findall(r"`([^`]+)`", text):
@@ -817,6 +906,7 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
         user_messages: list[str] = []
         assistant_messages: list[str] = []
         tools: list[str] = []
+        tool_inputs: list[dict[str, Any]] = []
         timestamps: list[str] = []
         cwd = None
         session_id = None
@@ -838,19 +928,25 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
                         name = str(item.get("name") or "").lower()
                         if name:
                             tools.append(name)
+                        tool_input = item.get("input")
+                        if isinstance(tool_input, dict):
+                            tool_inputs.append(tool_input)
             tools.extend(extract_known_commands(text))
 
+        packet_cwd = str(cwd) if cwd else None
+        referenced_files = extract_referenced_files(tool_inputs, packet_cwd)
         logical_packets.append(
             {
                 "started_at": earliest_iso_timestamp(timestamps),
                 "ended_at": max(timestamps, key=compare_iso_timestamps, default=None),
                 "timestamps": timestamps,
-                "cwd": str(cwd) if cwd else None,
+                "cwd": packet_cwd,
                 "session_id": str(session_id) if session_id else None,
                 "is_sidechain": is_sidechain,
                 "user_messages": user_messages,
                 "assistant_messages": assistant_messages,
                 "tools": tools,
+                "referenced_files": referenced_files,
                 "message_count": len(user_messages) + len(assistant_messages),
                 "user_message_count": len(user_messages),
                 "assistant_message_count": len(assistant_messages),
@@ -1218,6 +1314,7 @@ def build_packet(
     user_messages: list[str],
     assistant_messages: list[str],
     tools: list[str],
+    referenced_files: list[str] | None = None,
     user_message_source: str = PRIMARY_INTENT_SOURCE_RAW,
 ) -> dict[str, Any]:
     feature_texts, _feature_source = feature_messages_for_packet(user_messages, assistant_messages)
@@ -1248,6 +1345,7 @@ def build_packet(
         "timestamp": timestamp,
         "top_tool": top_tool,
         "tool_signature": tool_signature,
+        "referenced_files": referenced_files or [],
         "task_shape": infer_task_shapes(feature_texts, []),
         "artifact_hints": infer_artifact_hints(feature_texts, []),
         "primary_intent": primary_intent,
@@ -2095,6 +2193,20 @@ def build_candidate_decision_stub(candidate: dict[str, Any]) -> dict[str, Any]:
     intent_trace = _candidate_text_list(candidate, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)
     constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
     acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
+    support = candidate.get("support")
+    prior_state = candidate.get("prior_decision_state")
+    current_observation_count = 0
+    if isinstance(support, dict):
+        try:
+            current_observation_count = int(support.get("total_packets", 0))
+        except (TypeError, ValueError):
+            current_observation_count = 0
+    prior_observation_count = 0
+    if isinstance(prior_state, dict):
+        try:
+            prior_observation_count = int(prior_state.get("observation_count", 0))
+        except (TypeError, ValueError):
+            prior_observation_count = 0
     decision_key = build_candidate_decision_key(candidate)
     return {
         "candidate_id": str(candidate.get("candidate_id") or candidate.get("packet_id") or ""),
@@ -2111,6 +2223,9 @@ def build_candidate_decision_stub(candidate: dict[str, Any]) -> dict[str, Any]:
         "user_decision": None,
         "user_decision_timestamp": None,
         "carry_forward": True,
+        "observation_count": current_observation_count,
+        "prior_observation_count": prior_observation_count,
+        "observation_delta": current_observation_count - prior_observation_count,
     }
 
 

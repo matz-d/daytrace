@@ -144,7 +144,7 @@ Validation policy:
 
 - `sources`: normalized per-source execution results
 - `timeline`: merged event list sorted by timestamp
-- `groups`: nearby events grouped with `evidence` and aggregated `confidence`
+- `groups`: nearby events grouped with `evidence` and aggregated `confidence` (see Group Contract below)
 - `summary`: source status counts, total event count, total group count, and `no_sources_available`
 
 Each entry in `sources[]` includes:
@@ -154,6 +154,29 @@ Each entry in `sources[]` includes:
 - `scope`: copied from `sources.json.scope_mode` so downstream skills can tell whether that source represents `all-day` or `workspace` evidence
 - `events_count`: normalized event count
 - optional `reason`, `message`, `command`, `duration_sec`
+
+### Group Contract
+
+Each entry in `groups[]` includes:
+
+- `id`: stable group identifier (e.g. `group-001`)
+- `start_timestamp`, `end_timestamp`: ISO 8601 boundaries
+- `summary`: human-readable summary
+- `confidence`: aggregated `high` / `medium` / `low` (from source category rules)
+- `confidence_breakdown`: `{category: event_count}` — per-category event distribution (e.g. `{"git": 2, "browser": 1}`)
+- `sources`: sorted list of contributing source names
+- `confidence_categories`: sorted set of categories
+- `scope_breakdown`: sorted list of scope_modes present (e.g. `["all-day", "workspace"]`)
+- `mixed_scope`: `true` if both `all-day` and `workspace` sources contribute
+- `source_count`, `event_count`: counts
+- `evidence`: representative events selected by salience (git > ai_history > browser > file_activity), capped at `evidence_limit`
+- `evidence_overflow_count`: number of events beyond the evidence limit
+- `events`: full event list (same objects as in `timeline[]`)
+
+Grouping parameters:
+
+- `group_window_minutes` (default 15): max gap between consecutive events
+- `max_span_minutes` (default 60): max total span of a single group; prevents rolling-chain accumulation
 
 Aggregator behavior:
 

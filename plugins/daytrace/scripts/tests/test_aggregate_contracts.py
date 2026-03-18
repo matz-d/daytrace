@@ -335,9 +335,11 @@ class AggregateContractTests(unittest.TestCase):
                     "date": None,
                     "all_sessions": True,
                     "group_window": 15,
+                    "max_span": 60,
                 },
             )
             self.assertEqual(payload["config"]["group_window_minutes"], 15)
+            self.assertEqual(payload["config"]["max_span_minutes"], 60)
             self.assertEqual(payload["config"]["evidence_limit"], 5)
             self.assertEqual(Path(payload["config"]["sources_file"]), sources_file.resolve())
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from aggregate_core import (
     DEFAULT_GROUP_WINDOW_MINUTES,
+    DEFAULT_MAX_SPAN_MINUTES,
     build_summary,
     load_expected_sources,
     resolve_date_filters,
@@ -95,6 +96,7 @@ def _hydrate_store(
     raw_since: str | None,
     raw_until: str | None,
     all_sessions: bool,
+    max_span_minutes: int,
 ) -> None:
     command = [
         "python3",
@@ -115,6 +117,7 @@ def _hydrate_store(
             command.extend(["--until", raw_until])
     if all_sessions:
         command.append("--all-sessions")
+    command.extend(["--max-span", str(max_span_minutes)])
 
     try:
         completed = subprocess.run(
@@ -153,6 +156,7 @@ def build_projection_payload(
     store_path: str | None = None,
     sources_file: str | None = None,
     group_window_minutes: int = DEFAULT_GROUP_WINDOW_MINUTES,
+    max_span_minutes: int = DEFAULT_MAX_SPAN_MINUTES,
     hydrate_missing: bool = True,
     include_patterns: bool = False,
     pattern_days: int = 7,
@@ -203,6 +207,7 @@ def build_projection_payload(
             raw_since=since,
             raw_until=until,
             all_sessions=all_sessions,
+            max_span_minutes=max_span_minutes,
         )
         source_runs = _matching_source_runs(
             resolved_store_path,
@@ -240,6 +245,7 @@ def build_projection_payload(
         until=resolved_until,
         all_sessions=all_sessions,
         group_window_minutes=group_window_minutes,
+        max_span_minutes=max_span_minutes,
         preloaded_observations=observations,
     )
     timeline = [dict(observation["event"]) for observation in observations]
@@ -267,10 +273,12 @@ def build_projection_payload(
             "date": date,
             "all_sessions": all_sessions,
             "group_window": group_window_minutes,
+            "max_span": max_span_minutes,
         },
         "config": {
             "store_path": str(resolved_store_path),
             "group_window_minutes": group_window_minutes,
+            "max_span_minutes": max_span_minutes,
             "projection_source": "store-backed",
             "hydrate_missing": hydrate_missing,
             **({"slice_completeness": slice_completeness} if slice_completeness else {}),

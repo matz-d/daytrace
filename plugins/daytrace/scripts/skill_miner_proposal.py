@@ -131,6 +131,9 @@ def decision_log_rows(proposal: dict[str, Any], prepare_payload: dict[str, Any],
                 "user_decision": item.get("user_decision"),
                 "user_decision_timestamp": item.get("user_decision_timestamp"),
                 "carry_forward": item.get("carry_forward", True),
+                "observation_count": item.get("observation_count", 0),
+                "prior_observation_count": item.get("prior_observation_count", 0),
+                "observation_delta": item.get("observation_delta", 0),
             }
         )
     return rows

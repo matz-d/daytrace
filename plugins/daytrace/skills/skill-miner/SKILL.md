@@ -294,7 +294,10 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
   "intent_trace": ["intent_1", "intent_2"],
   "user_decision": null,
   "user_decision_timestamp": null,
-  "carry_forward": true
+  "carry_forward": true,
+  "observation_count": 3,
+  "prior_observation_count": 0,
+  "observation_delta": 3
 }
 ```
 
@@ -314,12 +317,12 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 - `daytrace-session` 配下では必要に応じて `[DayTrace] パターン検出: ...` の 1 行ログに圧縮してよい
 - standalone の `skill-miner` では候補ごとの説明文で同じ内容を残してよい
 
-次回判定への反映ルール:
+次回判定への反映ルール（詳細は `references/carry-forward-state-machine.md` を参照）:
 
 - `user_decision="adopt"` かつ `CLAUDE.md` → CLAUDE.md に追記済み。次回は `## DayTrace Suggested Rules` と照合して重複 skip
-- `user_decision="adopt"` かつ `skill` → 生成済み想定。将来 store に adopted フラグを立てる（未実装）
-- `user_decision="defer"` → 次回も候補化される。observation_count 増加で confidence が自然に上がる
-- `user_decision="reject"` → 次回も候補化されうる（パターン変化を許容するため永続 reject しない）
+- `user_decision="adopt"` かつ `skill/hook/agent` → 生成済み想定。`carry_forward=false` で次回 suppress。将来 store の adopted フラグで代替
+- `user_decision="defer"` → 次回も候補化される。`observation_count` 増加で confidence が自然に上がる。`observation_delta` で変化量を追跡
+- `user_decision="reject"` → 永続 reject しない。再浮上条件（evidence_changed / support_grew / time_elapsed）を満たした場合のみ再出現。いずれも未達なら suppress
 - `user_decision=null` → 未選択。`carry_forward=true` のまま次回に自然再出現
 
 ## Deep Research Rules

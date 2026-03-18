@@ -197,6 +197,23 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertTrue(result["decision_log_stub"][0]["carry_forward"])
         self.assertEqual(result["decision_log_stub"][0]["decision_key"], build_candidate_decision_key(result["ready"][0]))
 
+    def test_decision_log_stub_tracks_observation_counts(self) -> None:
+        payload = _prepare_payload(
+            candidates=[
+                _ready_candidate(
+                    support={"total_packets": 3},
+                    prior_decision_state={"observation_count": 2},
+                )
+            ]
+        )
+
+        result = build_proposal_sections(payload)
+
+        stub = result["decision_log_stub"][0]
+        self.assertEqual(stub["observation_count"], 3)
+        self.assertEqual(stub["prior_observation_count"], 2)
+        self.assertEqual(stub["observation_delta"], 1)
+
     def test_mixed_candidates_sorted_into_correct_sections(self) -> None:
         payload = _prepare_payload(candidates=[
             _ready_candidate(),

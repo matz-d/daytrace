@@ -25,6 +25,7 @@ from aggregate_core import (
     select_sources,
     source_availability,
 )
+from common import ensure_datetime
 
 
 def make_source(
@@ -259,6 +260,130 @@ class AggregateCoreTests(unittest.TestCase):
         self.assertEqual(summary["total_events"], 2)
         self.assertEqual(summary["total_groups"], 2)
         self.assertFalse(summary["no_sources_available"])
+
+
+    def test_max_span_breaks_long_rolling_chain(self) -> None:
+        """A chain of events every 14 min should be split when total span exceeds max_span."""
+        base = "2026-03-11T10:00:00+09:00"
+        timeline = []
+        for i in range(8):
+            h, m = divmod(i * 14, 60)
+            timeline.append(
+                {
+                    "source": "a",
+                    "timestamp": f"2026-03-11T{10 + h:02d}:{m:02d}:00+09:00",
+                    "type": "commit",
+                    "summary": f"event-{i}",
+                    "details": {},
+                    "confidence": "high",
+                }
+            )
+        # 8 events at 0,14,28,42,56,70,84,98 min — total span 98 min.
+        # Without max_span: 1 group. With max_span=60: should split.
+        groups_no_limit = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={"a": ["git"]},
+            max_span_minutes=0,
+        )
+        self.assertEqual(len(groups_no_limit), 1, "max_span=0 should produce 1 group")
+
+        groups_limited = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={"a": ["git"]},
+            max_span_minutes=60,
+        )
+        self.assertGreater(len(groups_limited), 1, "max_span=60 should split a 98-min chain")
+        for group in groups_limited:
+            start = ensure_datetime(group["start_timestamp"])
+            end = ensure_datetime(group["end_timestamp"])
+            self.assertLessEqual((end - start).total_seconds(), 60 * 60 + 1)
+
+    def test_scope_breakdown_and_mixed_scope(self) -> None:
+        timeline = [
+            {
+                "source": "git-source",
+                "timestamp": "2026-03-11T10:00:00+09:00",
+                "type": "commit",
+                "summary": "fix",
+                "details": {},
+                "confidence": "high",
+            },
+            {
+                "source": "claude-source",
+                "timestamp": "2026-03-11T10:05:00+09:00",
+                "type": "session_summary",
+                "summary": "chat",
+                "details": {},
+                "confidence": "medium",
+            },
+        ]
+        groups = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={
+                "git-source": ["git"],
+                "claude-source": ["ai_history"],
+            },
+            scope_mode_by_source={
+                "git-source": "workspace",
+                "claude-source": "all-day",
+            },
+        )
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(sorted(groups[0]["scope_breakdown"]), ["all-day", "workspace"])
+        self.assertTrue(groups[0]["mixed_scope"])
+
+        # Single-scope group should not be mixed
+        groups_single = build_groups(
+            timeline[:1],
+            group_window_minutes=15,
+            confidence_categories_by_source={"git-source": ["git"]},
+            scope_mode_by_source={"git-source": "workspace"},
+        )
+        self.assertEqual(groups_single[0]["scope_breakdown"], ["workspace"])
+        self.assertFalse(groups_single[0]["mixed_scope"])
+
+    def test_confidence_breakdown_counts_per_category(self) -> None:
+        timeline = [
+            {"source": "git-source", "timestamp": "2026-03-11T10:00:00+09:00", "type": "commit", "summary": "c1", "details": {}, "confidence": "high"},
+            {"source": "git-source", "timestamp": "2026-03-11T10:02:00+09:00", "type": "commit", "summary": "c2", "details": {}, "confidence": "high"},
+            {"source": "browser-source", "timestamp": "2026-03-11T10:05:00+09:00", "type": "visit", "summary": "v1", "details": {}, "confidence": "low"},
+        ]
+        groups = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={
+                "git-source": ["git"],
+                "browser-source": ["browser"],
+            },
+        )
+        self.assertEqual(len(groups), 1)
+        breakdown = groups[0]["confidence_breakdown"]
+        self.assertEqual(breakdown["git"], 2)
+        self.assertEqual(breakdown["browser"], 1)
+
+    def test_salience_based_evidence_prefers_git_over_browser(self) -> None:
+        """With default salience, git events should appear before browser events in evidence."""
+        timeline = [
+            {"source": "browser", "timestamp": "2026-03-11T10:00:00+09:00", "type": "visit", "summary": "browsed", "details": {}, "confidence": "low"},
+            {"source": "browser", "timestamp": "2026-03-11T10:01:00+09:00", "type": "visit", "summary": "browsed2", "details": {}, "confidence": "low"},
+            {"source": "git", "timestamp": "2026-03-11T10:02:00+09:00", "type": "commit", "summary": "committed", "details": {}, "confidence": "high"},
+        ]
+        groups = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={
+                "browser": ["browser"],
+                "git": ["git"],
+            },
+            evidence_limit=2,
+        )
+        self.assertEqual(len(groups), 1)
+        # Git should come first in evidence despite being later in timeline
+        self.assertEqual(groups[0]["evidence"][0]["source"], "git")
+        self.assertEqual(groups[0]["evidence_overflow_count"], 1)
 
 
 if __name__ == "__main__":

@@ -31,10 +31,10 @@ user-invocable: true
 
 ## Entry Contract
 
-- ask は 0 回に固定する
+- ask は 0 回を基本とする
 - 「今日の振り返りをお願い」「1日のまとめ」「全部やっておいて」「今日の活動を整理して」などから日付を抽出する
 - mode / workspace / topic / reader は自然言語から抽出できればそれを使い、取れなければデフォルト
-- 途中で追加 ask しない
+- `Escalation Conditions` の例外を除き、途中で追加 ask しない
 
 ## Scripts
 
@@ -163,7 +163,7 @@ Phase 1 完了直後、Phase 2 に入る前に「今日の DayTrace ダイジェ
    - `suggested_kind == "CLAUDE.md"`: Immediate Apply Spec に従い diff preview を表示する
     - `suggested_kind == "skill"`: Skill Scaffold Draft Spec に従い scaffold context を提示する
     - `suggested_kind == "hook"` / `"agent"`: 次セッションへ送る旨を伝える
-   - CLAUDE.md diff preview への反応だけは、ユーザーの確認を待ってよい（唯一の例外）
+   - CLAUDE.md diff preview への反応は、`Escalation Conditions` の例外としてユーザー確認を待ってよい
 7. 判断ログは 1 行に圧縮する:
 
 ```
@@ -227,6 +227,25 @@ skill 候補が 1 件あり、scaffold context を提示済みです。
 判断ログは `[DayTrace]` プレフィックスで統一する。
 Phase 1 のログだけ詳細に出し、Phase 2-4 のログは 1 行に圧縮する。
 日報・提案・下書きの本文はそのまま読めるように、判断ログと明確に区切る。
+
+### Structured Judgment Fields
+
+各フェーズの判断ログに以下の structured fields を含める（デバッグ・再現性の確保）:
+
+```
+[DayTrace] Phase 1: source_count={N} | success={N} | skipped={N} | error={N} | degrade_level={full|limited|empty}
+[DayTrace] Phase 2: mode={自分用|共有用|両方} | mode_source={extracted|default|asked} | item_count={N} | primary_evidence={git|ai_history|mixed}
+[DayTrace] Phase 3: ready_count={N} | needs_research_count={N} | rejected_count={N} | detail_invoked={true|false} | judge_invoked={true|false}
+[DayTrace] Phase 4: selected_group_id={id} | topic_tier={1|2|3} | topic_reason={reason} | reader={auto|override} | skipped={true|false} | skip_reason={reason}
+```
+
+### Escalation Conditions
+
+以下の場合のみ確認を入れてよい:
+
+- **共有用日報に機密情報が含まれる可能性がある場合**: `mode=共有用` かつ `sources[]` に `all-day` スコープのみ（workspace ログなし）の場合、「共有用日報に個人端末の全日ログが含まれますが、このまま進めますか？」と 1 回だけ確認
+- **CLAUDE.md 即時反映時**: 既存の仕様通り diff preview を出して確認を待つ
+- それ以外は ask せずに degrade して進む
 
 ## Sub-Skill Reference
 

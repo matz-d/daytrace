@@ -67,7 +67,7 @@
 
 ## Derivation Version
 
-- activities: `activities-v1`
+- activities: `activities-v2`
 - patterns: `skill-miner-candidate-v1`
 
 version を上げる条件:
@@ -84,6 +84,7 @@ version を上げる条件:
 
 - ordered `event_fingerprint`
 - `group_window_minutes`
+- `max_span_minutes`
 - source ごとの `confidence_categories`
 - `activities` derivation version
 

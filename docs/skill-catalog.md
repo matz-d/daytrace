@@ -283,7 +283,7 @@ scope-first であり、aggregate.py は使わず専用 CLI だけを使う。
 ### 6-5. 制限事項
 
 - Phase 2 〜 4 の品質は各個別 skill の品質に依存する
-- CLAUDE.md diff preview への反応だけはユーザーの確認を待つ（唯一の例外）
+- CLAUDE.md diff preview と機密境界をまたぐ共有用出力では、例外的にユーザー確認を待つ
 - フェーズの 1 つが失敗してもセッション全体は止まらない
 
 ## 7. 使い分けガイド

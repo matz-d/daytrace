@@ -130,10 +130,10 @@ source が使えない場合は `status: "skipped"` (reason 付き) または `s
 
 **`daytrace-session`** は個別 skill を自律的に順次実行する統合 skill。
 
-- ask は 0 回固定
+- ask は 0 回を基本とし、機密境界確認と `CLAUDE.md diff preview` だけは例外
 - 各判断ポイントで `[DayTrace]` プレフィックス付きの自己判断ログを出力
 - Phase 1 〜 5（Phase 1.5 含む）をソース欠損・スクリプトエラーに関わらず最後まで完走する
-- 唯一の例外: `CLAUDE.md diff preview` の確認だけはユーザー確認を待つ
+- 例外: `CLAUDE.md diff preview` と、共有用出力で機密境界をまたぐ可能性がある場合の確認だけはユーザー確認を待つ
 
 ## 4. 実行フロー
 

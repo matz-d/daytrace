@@ -450,6 +450,25 @@ class ProjectionAdapterTests(unittest.TestCase):
                 for event in group["events"]:
                     self.assertEqual(event["group_id"], group["id"])
 
+    def test_daily_projection_honors_max_span_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+
+            payload = self.run_cli(
+                DAILY_PROJECTION,
+                store_path,
+                workspace,
+                sources_file,
+                "--no-hydrate",
+                "--max-span",
+                "1",
+            )
+
+            self.assertEqual(payload["config"]["max_span_minutes"], 1)
+            self.assertEqual(payload["filters"]["max_span"], 1)
+            self.assertEqual([group["event_count"] for group in payload["groups"]], [1, 1, 1])
+
     def test_post_projection_timeline_has_group_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))

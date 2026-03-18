@@ -6,12 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from aggregate_core import DEFAULT_GROUP_WINDOW_MINUTES, build_groups
+from aggregate_core import DEFAULT_GROUP_WINDOW_MINUTES, DEFAULT_MAX_SPAN_MINUTES, build_groups
 from common import isoformat_or_now, parse_datetime
 from store import bootstrap_store, canonical_json, connect_store, resolve_store_path, stable_hash
 
 
-ACTIVITY_DERIVATION_VERSION = "activities-v1"
+ACTIVITY_DERIVATION_VERSION = "activities-v2"
 PATTERN_DERIVATION_VERSION = "skill-miner-candidate-v1"
 
 
@@ -136,6 +136,15 @@ def _row_to_source_run(row: sqlite3.Row) -> dict[str, Any]:
 
 def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
     warnings: list[str] = []
+    activity_payload = _safe_json_loads(row, "activity_json", default={}, warnings=warnings, expected_type=dict)
+    confidence_breakdown = activity_payload.get("confidence_breakdown", {}) if isinstance(activity_payload, dict) else {}
+    if not isinstance(confidence_breakdown, dict):
+        warnings.append(_decode_warning("activity_json.confidence_breakdown", "unexpected_type"))
+        confidence_breakdown = {}
+    scope_breakdown = activity_payload.get("scope_breakdown", []) if isinstance(activity_payload, dict) else []
+    if not isinstance(scope_breakdown, list):
+        warnings.append(_decode_warning("activity_json.scope_breakdown", "unexpected_type"))
+        scope_breakdown = []
     payload = {
         "activity_id": str(row["activity_id"]),
         "derivation_version": str(row["derivation_version"]),
@@ -148,11 +157,15 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
         "end_timestamp": str(row["end_timestamp"]),
         "summary": str(row["summary"]),
         "confidence": str(row["confidence"]),
+        "confidence_breakdown": {str(key): int(value) for key, value in confidence_breakdown.items() if isinstance(key, str)},
         "sources": _safe_json_loads(row, "sources_json", default=[], warnings=warnings, expected_type=list),
         "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
+        "scope_breakdown": [str(item) for item in scope_breakdown],
+        "mixed_scope": bool(activity_payload.get("mixed_scope", False)) if isinstance(activity_payload, dict) else False,
         "source_count": int(row["source_count"]),
         "event_count": int(row["event_count"]),
         "evidence": _safe_json_loads(row, "evidence_json", default=[], warnings=warnings, expected_type=list),
+        "evidence_overflow_count": int(activity_payload.get("evidence_overflow_count", 0)) if isinstance(activity_payload, dict) else 0,
         "observation_fingerprints": _safe_json_loads(
             row,
             "observation_fingerprints_json",
@@ -160,7 +173,7 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
             warnings=warnings,
             expected_type=list,
         ),
-        "activity": _safe_json_loads(row, "activity_json", default={}, warnings=warnings, expected_type=dict),
+        "activity": activity_payload,
         "derived_at": str(row["derived_at"]),
     }
     return _attach_decode_warnings(payload, warnings)
@@ -506,15 +519,18 @@ def compute_activity_query_fingerprint(
     until: str | None,
     all_sessions: bool | None,
     group_window_minutes: int,
+    max_span_minutes: int,
 ) -> str:
     return stable_hash(
         {
+            "derivation_version": ACTIVITY_DERIVATION_VERSION,
             "workspace": _normalize_workspace_filter(workspace),
             "requested_date": requested_date,
             "since": since,
             "until": until,
             "all_sessions": all_sessions,
             "group_window_minutes": group_window_minutes,
+            "max_span_minutes": max_span_minutes,
         }
     )
 
@@ -523,6 +539,7 @@ def compute_activities_input_fingerprint(
     observations: list[dict[str, Any]],
     *,
     group_window_minutes: int,
+    max_span_minutes: int,
     confidence_categories_by_source: dict[str, list[str]] | None = None,
 ) -> str:
     if confidence_categories_by_source is None:
@@ -531,6 +548,7 @@ def compute_activities_input_fingerprint(
         {
             "derivation_version": ACTIVITY_DERIVATION_VERSION,
             "group_window_minutes": group_window_minutes,
+            "max_span_minutes": max_span_minutes,
             "observation_fingerprints": [observation["event_fingerprint"] for observation in observations],
             "confidence_categories_by_source": confidence_categories_by_source,
         }
@@ -549,12 +567,24 @@ def _build_confidence_categories_by_source(observations: list[dict[str, Any]]) -
     return confidence_categories_by_source
 
 
+def _build_scope_mode_by_source(observations: list[dict[str, Any]]) -> dict[str, str]:
+    scope_mode_by_source: dict[str, str] = {}
+    for observation in observations:
+        source_name = str(observation["source_name"])
+        scope_mode = observation.get("scope_mode")
+        if scope_mode and source_name not in scope_mode_by_source:
+            scope_mode_by_source[source_name] = str(scope_mode)
+    return scope_mode_by_source
+
+
 def derive_activities_from_observations(
     observations: list[dict[str, Any]],
     *,
     group_window_minutes: int = DEFAULT_GROUP_WINDOW_MINUTES,
+    max_span_minutes: int = DEFAULT_MAX_SPAN_MINUTES,
 ) -> tuple[list[dict[str, Any]], str]:
     confidence_categories_by_source = _build_confidence_categories_by_source(observations)
+    scope_mode_by_source = _build_scope_mode_by_source(observations)
     timeline = []
     for observation in observations:
         event = dict(observation["event"])
@@ -565,12 +595,15 @@ def derive_activities_from_observations(
     input_fingerprint = compute_activities_input_fingerprint(
         observations,
         group_window_minutes=group_window_minutes,
+        max_span_minutes=max_span_minutes,
         confidence_categories_by_source=confidence_categories_by_source,
     )
     groups = build_groups(
         timeline,
         group_window_minutes=group_window_minutes,
         confidence_categories_by_source=confidence_categories_by_source,
+        max_span_minutes=max_span_minutes,
+        scope_mode_by_source=scope_mode_by_source,
     )
 
     activities = []
@@ -593,11 +626,15 @@ def derive_activities_from_observations(
                 "end_timestamp": str(group["end_timestamp"]),
                 "summary": str(group["summary"]),
                 "confidence": str(group["confidence"]),
+                "confidence_breakdown": dict(group.get("confidence_breakdown", {})),
                 "sources": list(group["sources"]),
                 "confidence_categories": list(group["confidence_categories"]),
+                "scope_breakdown": list(group.get("scope_breakdown", [])),
+                "mixed_scope": bool(group.get("mixed_scope", False)),
                 "source_count": int(group["source_count"]),
                 "event_count": int(group["event_count"]),
                 "evidence": list(group["evidence"]),
+                "evidence_overflow_count": int(group.get("evidence_overflow_count", 0)),
                 "observation_fingerprints": observation_fingerprints,
                 "activity": activity_json,
             }
@@ -701,6 +738,7 @@ def get_activities(
     until: str | None = None,
     all_sessions: bool | None = None,
     group_window_minutes: int = DEFAULT_GROUP_WINDOW_MINUTES,
+    max_span_minutes: int = DEFAULT_MAX_SPAN_MINUTES,
     refresh: bool = False,
     preloaded_observations: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -713,6 +751,7 @@ def get_activities(
         until=until,
         all_sessions=all_sessions,
         group_window_minutes=group_window_minutes,
+        max_span_minutes=max_span_minutes,
     )
     if preloaded_observations is not None:
         observations = preloaded_observations
@@ -742,6 +781,7 @@ def get_activities(
     current_input_fingerprint = compute_activities_input_fingerprint(
         observations,
         group_window_minutes=group_window_minutes,
+        max_span_minutes=max_span_minutes,
     )
     existing = _read_activities(normalized_store_path, query_fingerprint=query_fingerprint)
     existing_input_fingerprint = existing[0]["input_fingerprint"] if existing else None
@@ -749,6 +789,7 @@ def get_activities(
         activities, input_fingerprint = derive_activities_from_observations(
             observations,
             group_window_minutes=group_window_minutes,
+            max_span_minutes=max_span_minutes,
         )
         _persist_activities(
             normalized_store_path,

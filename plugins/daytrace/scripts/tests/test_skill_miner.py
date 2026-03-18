@@ -1730,6 +1730,48 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(matched["prior_decision_state"]["user_decision"], "defer")
             self.assertEqual(payload["config"]["decision_log"]["matched_candidates"], 1)
 
+    def test_prepare_resurfaces_rejected_candidate_when_support_grew(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            first_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            candidate = first_payload["candidates"][0]
+            self.assertGreaterEqual(candidate["support"]["total_packets"], 2)
+            decision_log = root / "decision-log.jsonl"
+            write_jsonl(
+                decision_log,
+                [
+                    {
+                        "record_type": "skill_miner_decision_stub",
+                        "candidate_id": candidate["candidate_id"],
+                        "decision_key": build_candidate_decision_key(candidate),
+                        "label": candidate["label"],
+                        "suggested_kind": "CLAUDE.md",
+                        "intent_trace": candidate.get("intent_trace", []),
+                        "constraints": candidate.get("constraints", []),
+                        "acceptance_criteria": candidate.get("acceptance_criteria", []),
+                        "user_decision": "reject",
+                        "carry_forward": True,
+                        "observation_count": 1,
+                        "recorded_at": "2026-03-18T00:00:00+09:00",
+                    }
+                ],
+            )
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--decision-log-path",
+                str(decision_log),
+            )
+
+            matched = next(item for item in payload["candidates"] if item["label"] == candidate["label"])
+            self.assertEqual(matched["prior_decision_state"]["user_decision"], "reject")
+            self.assertEqual(matched["prior_decision_state"]["observation_count"], 1)
+            self.assertEqual(payload["summary"]["decision_log_suppressed_candidates"], 0)
+
     def test_issue_sized_cluster_is_held_for_research(self) -> None:
         candidate = {
             "label": "review changes (review, markdown)",
