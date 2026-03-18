@@ -57,9 +57,18 @@ python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tm
 python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
 ```
 
+### skill_miner_decision.py
+
+proposal 選択結果を `--user-decision-file` 互換 JSON に正規化する helper。
+
+```bash
+python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
+```
+
 補足:
 
 - `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- `skill_miner_decision.py` が出す JSON は `skill_miner_proposal.py --user-decision-file` にそのまま渡せる
 - handoff bundle は `--skill-creator-handoff-dir` に保存される
 - デモ時に副作用を隔離したい場合は `/tmp/daytrace-demo/...` を使ってよい
 
@@ -74,6 +83,8 @@ python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.d
 python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710000000"
 python3 plugins/daytrace/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "codex-abc123" --detail-file /tmp/detail.json
 python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
+python3 plugins/daytrace/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
+python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file /tmp/user-decision.json
 ```
 
 ## Prepare Output Reading Guide

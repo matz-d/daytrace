@@ -18,6 +18,7 @@
         "scripts/skill_miner_prepare.py",
         "scripts/skill_miner_detail.py",
         "scripts/skill_miner_research_judge.py",
+        "scripts/skill_miner_decision.py",
         "scripts/skill_miner_proposal.py",
         "scripts/post_draft_projection.py"
       ]
@@ -38,6 +39,7 @@
         "scripts/skill_miner_prepare.py",
         "scripts/skill_miner_detail.py",
         "scripts/skill_miner_research_judge.py",
+        "scripts/skill_miner_decision.py",
         "scripts/skill_miner_proposal.py"
       ]
     },

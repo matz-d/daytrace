@@ -65,14 +65,17 @@ python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tm
 ```
 
 最終 proposal 組み立て:
-
 ```bash
 python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
 ```
-
+ユーザー判断の writeback:
+```bash
+python3 <plugin-root>/scripts/skill_miner_decision.py --proposal-file /tmp/proposal.json --candidate-index 1 --decision adopt --completion-state completed --output-file /tmp/user-decision.json
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs --user-decision-file /tmp/user-decision.json
+```
 永続化 path の扱い:
-
 - `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- `skill_miner_decision.py` は proposal 選択結果を `--user-decision-file` 互換 JSON に正規化する
 - `skill_miner_proposal.py` の skill handoff は `--skill-creator-handoff-dir` に保存される
 - CLI 自体は既定値を持つが、orchestration 側では副作用を意図的に扱うため path を明示する
 
@@ -278,9 +281,8 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 ```
 
 ## Decision Log Contract
-
 `decision_log_stub[]` は proposal ごとに全候補分を出力し、次回判定への橋渡しに使う。
-
+ユーザーが具体的な adopt / defer / reject を返した場合は、`skill_miner_decision.py` で `--user-decision-file` を作り、`skill_miner_proposal.py` を同じ `--decision-log-path` で再実行して persist する。
 ```json
 {
   "decision_key": "stable-match-key",
@@ -300,25 +302,19 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
   "observation_delta": 3
 }
 ```
-
 フィールド説明:
-
 - `decision_key`: 次回 prepare の readback に使う安定キー。persist する時はこれを優先して残す
 - `user_decision`: セッション中にユーザーが adopt / defer / reject を選んだ場合のみ埋まる。Python 側は `null` で初期化する
 - `user_decision_timestamp`: `user_decision` 設定時の ISO8601。Python 側は `null` で初期化する
 - `carry_forward`: 次回 prepare で考慮すべきか。デフォルト `true`
 - `intent_trace`: 監査用。proposal markdown には展開しない
 - `decision_log_stub` は次回判定用の機械的な橋渡しに限定し、分類 override の長い説明は保持しない
-
 分類 override の記録ルール:
-
 - override 理由は `decision_log_stub` ではなく、人間向けの判断ログまたは候補説明に短く残す
 - 推奨フォーマット: `分類 override: heuristic=<from> → final=<to> / reason: <short reason>`
 - `daytrace-session` 配下では必要に応じて `[DayTrace] パターン検出: ...` の 1 行ログに圧縮してよい
 - standalone の `skill-miner` では候補ごとの説明文で同じ内容を残してよい
-
 次回判定への反映ルール（詳細は `references/carry-forward-state-machine.md` を参照）:
-
 - `user_decision="adopt"` かつ `CLAUDE.md` → CLAUDE.md に追記済み。次回は `## DayTrace Suggested Rules` と照合して重複 skip
 - `user_decision="adopt"` かつ `skill/hook/agent` → 生成成功（`done`）を確認できた場合のみ `carry_forward=false` で次回 suppress。成功未確認・中断時は `defer` 扱いで suppress しない（将来 store の adopted フラグで代替）
 - `user_decision="defer"` → 次回も候補化される。`observation_count` 増加で confidence が自然に上がる。`observation_delta` で変化量を追跡
