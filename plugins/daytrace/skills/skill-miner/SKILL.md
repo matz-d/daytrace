@@ -218,7 +218,7 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 
 - proposal markdown には `intent_trace` を直接展開しない（raw intent の羅列はノイズになるため）
 - 根拠表示は `evidence_items[].summary` で完結させる
-- `intent_trace` は `decision_log_stub` にのみ含める（デバッグ・監査用）
+- `intent_trace` は `decision_log_stub` にのみ含める（デバッグ・監査用詳細は Decision Log Contract を参照）
 - LLM が分類 override する場合、`intent_trace` を根拠として判断ログ内で引用してよい
 - `needs_research` の `research_brief.questions` に intent 不一致を含めてよい
 
@@ -283,6 +283,7 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 
 ```json
 {
+  "decision_key": "stable-match-key",
   "candidate_id": "id",
   "label": "display name",
   "recommended_action": "adopt | defer | reject",
@@ -299,10 +300,19 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 
 フィールド説明:
 
+- `decision_key`: 次回 prepare の readback に使う安定キー。persist する時はこれを優先して残す
 - `user_decision`: セッション中にユーザーが adopt / defer / reject を選んだ場合のみ埋まる。Python 側は `null` で初期化する
 - `user_decision_timestamp`: `user_decision` 設定時の ISO8601。Python 側は `null` で初期化する
 - `carry_forward`: 次回 prepare で考慮すべきか。デフォルト `true`
 - `intent_trace`: 監査用。proposal markdown には展開しない
+- `decision_log_stub` は次回判定用の機械的な橋渡しに限定し、分類 override の長い説明は保持しない
+
+分類 override の記録ルール:
+
+- override 理由は `decision_log_stub` ではなく、人間向けの判断ログまたは候補説明に短く残す
+- 推奨フォーマット: `分類 override: heuristic=<from> → final=<to> / reason: <short reason>`
+- `daytrace-session` 配下では必要に応じて `[DayTrace] パターン検出: ...` の 1 行ログに圧縮してよい
+- standalone の `skill-miner` では候補ごとの説明文で同じ内容を残してよい
 
 次回判定への反映ルール:
 
@@ -421,7 +431,10 @@ DayTrace 側の責務:
 
 skill-creator への Handoff:
 
-- DayTrace は scaffold context を構造化テキストで提示するだけで、skill-creator を自動起動しない
+- DayTrace は scaffold context を proposal markdown では構造化テキストとして提示し、skill-creator を自動起動しない
+- `skill_miner_proposal.py --skill-creator-handoff-dir <dir>` を付けた場合は、ready な `skill` candidate ごとに JSON handoff bundle を 1 ファイル保存する
+- 保存される bundle には少なくとも `record_type`, `recorded_at`, `candidate_id`, `label`, `suggested_kind`, `context`, `handoff` が入る
+- persisted handoff path は `skill_creator_handoff.context_file` として返り、監査や手渡し再利用に使える
 - ユーザーが `/skill-creator` を呼ぶ際に context を参照して渡す
 - proposal markdown の末尾に以下のガイドを表示する:
 
@@ -432,7 +445,7 @@ skill-creator への Handoff:
 ```
 
 - skill-creator は自然言語入力を受け付けるため、構造化 JSON の受け渡しは不要
-- DayTrace の scaffold_draft は skill-creator にとっての参考情報であり、binding ではない
+- DayTrace の scaffold_draft / persisted handoff bundle は skill-creator にとっての参考情報であり、binding ではない
 
 DayTrace がやらないこと:
 

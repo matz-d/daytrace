@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prepare-file", required=True, help="Path to the JSON file produced by skill_miner_prepare.py.")
     parser.add_argument("--judge-file", action="append", default=[], help="Path to a JSON file produced by skill_miner_research_judge.py.")
     parser.add_argument("--decision-log-path", help="Optional JSONL path to persist decision_log_stub entries.")
-    parser.add_argument("--skill-creator-handoff-dir", help="Optional directory to persist skill-creator handoff bundles.")
+    parser.add_argument("--skill-creator-handoff-dir", help="Optional directory to persist JSON skill-creator handoff bundles (context + handoff metadata).")
     parser.add_argument("--user-decision-file", help="Optional JSON file with user decisions to persist alongside decision stubs.")
     return parser
 
@@ -228,6 +228,11 @@ def safe_slug(value: str) -> str:
     return slug[:64] or "skill-handoff"
 
 
+def safe_timestamp_fragment(value: str) -> str:
+    fragment = "".join(char for char in value if char.isalnum())
+    return fragment or "unknown-time"
+
+
 def persist_skill_creator_handoffs(
     proposal: dict[str, Any],
     *,
@@ -249,7 +254,7 @@ def persist_skill_creator_handoffs(
                 continue
             skill_name = str(context.get("skill_name") or candidate.get("label") or f"skill-{index}")
             candidate_id = str(candidate.get("candidate_id") or f"candidate-{index}")
-            file_name = f"{recorded_at.replace(':', '').replace('-', '')}-{safe_slug(skill_name)}-{safe_slug(candidate_id)}.json"
+            file_name = f"{safe_timestamp_fragment(recorded_at)}-{safe_slug(skill_name)}-{safe_slug(candidate_id)}.json"
             bundle_path = handoff_dir / file_name
             bundle = {
                 "record_type": "skill_creator_handoff",

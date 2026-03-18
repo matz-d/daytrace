@@ -19,6 +19,7 @@ from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
     load_judgments,
+    persist_skill_creator_handoffs,
     proposal_item_lines,
     rejected_item_lines,
 )
@@ -708,6 +709,39 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(handoff_bundle["context"]["skill_name"], "build-automation")
             self.assertIn("公式 handoff:", payload["markdown"])
             self.assertNotIn(str(context_file), payload["markdown"])
+
+    def test_persist_skill_creator_handoffs_sanitizes_timestamp_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handoff_dir = Path(temp_dir) / "handoffs"
+            proposal = {
+                "ready": [
+                    _ready_candidate(
+                        suggested_kind="skill",
+                        skill_scaffold_context={
+                            "skill_name": "build-automation",
+                            "goal": "build automation を再利用可能なスキルとして固定化する",
+                        },
+                        skill_creator_handoff={
+                            "tool": "skill-creator",
+                            "entrypoint": "/skill-creator",
+                            "suggested_invocation": "/skill-creator build-automation をスキルにしてください",
+                        },
+                    )
+                ]
+            }
+
+            result = persist_skill_creator_handoffs(
+                proposal,
+                handoff_dir=handoff_dir,
+                recorded_at="2026-03-18T00:00:00+09:00",
+            )
+
+            self.assertEqual(result["status"], "persisted")
+            context_file = Path(result["items"][0]["context_file"])
+            self.assertTrue(context_file.exists())
+            self.assertEqual(context_file.name.split("-", 1)[0], "20260318T0000000900")
+            self.assertNotIn("+", context_file.name)
+            self.assertNotIn(":", context_file.name)
 
     def test_cli_applies_user_decision_overlay_before_persisting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
