@@ -1503,6 +1503,10 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                     else:
                         register_near_match(left_index, right_index, score, reason="complete_link_guard")
                 elif CLUSTER_NEAR_MATCH_THRESHOLD <= score < CLUSTER_MERGE_THRESHOLD:
+                    # Plain near-matches stay as research input only. Downstream blocking is
+                    # reserved for complete-link guard failures, which indicate a bridge-like
+                    # merge attempt that looked acceptable pairwise but was rejected at the
+                    # component level.
                     register_near_match(left_index, right_index, score)
 
     groups: dict[int, list[int]] = defaultdict(list)

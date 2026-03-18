@@ -121,6 +121,8 @@ class E2EPipelineTests(unittest.TestCase):
                 str(sources_file),
                 "--days",
                 "7",
+                "--reference-date",
+                "2026-03-15",
                 "--top-n",
                 "5",
                 "--max-unclustered",

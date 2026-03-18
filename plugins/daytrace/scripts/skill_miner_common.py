@@ -1825,6 +1825,10 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
             reason = str(item.get("reason") or "").strip()
             if reason:
                 near_match_reasons.append(reason)
+    # Intentional: ordinary near-matches are used to seed research targets, but they do not
+    # block a ready candidate on their own. We only promote this to a blocking quality flag
+    # when complete-link guard failures also appeared, because that means the cluster already
+    # attempted a bridge merge that was rejected at the component boundary.
     near_match_dense = (
         split_signal
         and
