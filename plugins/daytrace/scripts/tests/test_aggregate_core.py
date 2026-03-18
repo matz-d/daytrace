@@ -264,7 +264,6 @@ class AggregateCoreTests(unittest.TestCase):
 
     def test_max_span_breaks_long_rolling_chain(self) -> None:
         """A chain of events every 14 min should be split when total span exceeds max_span."""
-        base = "2026-03-11T10:00:00+09:00"
         timeline = []
         for i in range(8):
             h, m = divmod(i * 14, 60)

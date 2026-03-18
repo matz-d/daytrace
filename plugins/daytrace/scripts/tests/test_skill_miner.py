@@ -31,6 +31,7 @@ from skill_miner_common import (
     build_proposal_sections,
     candidate_label,
     compact_snippet,
+    extract_referenced_files,
     judge_research_candidate,
 )
 import skill_miner_prepare
@@ -54,6 +55,23 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class SkillMinerTests(unittest.TestCase):
+    def test_extract_referenced_files_strips_only_workspace_boundary(self) -> None:
+        workspace = "/home/user/project"
+        files = extract_referenced_files(
+            [
+                {
+                    "command": (
+                        "python3 /home/user/project/src/app.py "
+                        "/home/user/project-other/file.py"
+                    )
+                }
+            ],
+            workspace,
+        )
+        self.assertIn("src/app.py", files)
+        self.assertIn("/home/user/project-other/file.py", files)
+        self.assertNotIn("-other/file.py", files)
+
     def create_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         workspace = root / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)

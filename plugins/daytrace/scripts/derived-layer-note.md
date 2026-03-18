@@ -30,6 +30,8 @@
 導出ルール:
 
 - grouping window は `group_window_minutes` で固定する
+- activity の最大 span は `max_span_minutes` で制限する（`0` は無制限）
+- grouping 判定は「直前 event との gap が window 以内」かつ「group 先頭からの span が max_span 以内」を同時に満たす場合のみ継続する
 - timeline は `occurred_at` 昇順で評価する
 - confidence は current aggregate と同じ `git + ai_history = high`, `git or ai_history = medium`, その他 `low`
 - `activities[].activity_json` には current `groups[]` と同型の payload を保持する

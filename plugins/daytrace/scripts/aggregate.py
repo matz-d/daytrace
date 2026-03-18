@@ -56,6 +56,8 @@ def main() -> None:
         workspace = resolve_workspace(args.workspace)
         if args.group_window < 0:
             raise ValueError("--group-window must be >= 0")
+        if args.max_span < 0:
+            raise ValueError("--max-span must be >= 0")
         default_sources_file = (SCRIPT_DIR / "sources.json").resolve()
         sources_file = Path(args.sources_file).expanduser().resolve()
         include_user_sources = sources_file == default_sources_file or bool(args.user_sources_dir)

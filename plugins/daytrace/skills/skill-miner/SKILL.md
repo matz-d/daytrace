@@ -320,10 +320,10 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 次回判定への反映ルール（詳細は `references/carry-forward-state-machine.md` を参照）:
 
 - `user_decision="adopt"` かつ `CLAUDE.md` → CLAUDE.md に追記済み。次回は `## DayTrace Suggested Rules` と照合して重複 skip
-- `user_decision="adopt"` かつ `skill/hook/agent` → 生成済み想定。`carry_forward=false` で次回 suppress。将来 store の adopted フラグで代替
+- `user_decision="adopt"` かつ `skill/hook/agent` → 生成成功（`done`）を確認できた場合のみ `carry_forward=false` で次回 suppress。成功未確認・中断時は `defer` 扱いで suppress しない（将来 store の adopted フラグで代替）
 - `user_decision="defer"` → 次回も候補化される。`observation_count` 増加で confidence が自然に上がる。`observation_delta` で変化量を追跡
 - `user_decision="reject"` → 永続 reject しない。再浮上条件（evidence_changed / support_grew / time_elapsed）を満たした場合のみ再出現。いずれも未達なら suppress
-- `user_decision=null` → 未選択。`carry_forward=true` のまま次回に自然再出現
+- `user_decision=null` → 未選択。`carry_forward=true` のまま次回に自然再出現（store 移行時は `user_decision="adopt" && carry_forward=false` を初期 migrated adopted として取り込む）
 
 ## Deep Research Rules
 

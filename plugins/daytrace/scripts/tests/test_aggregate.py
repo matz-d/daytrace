@@ -732,6 +732,19 @@ class AggregateCliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertIn("No such file", payload["message"])
 
+    def test_aggregate_rejects_negative_max_span(self) -> None:
+        completed = subprocess.run(
+            ["python3", str(AGGREGATE), "--max-span", "-1"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "--max-span must be >= 0")
+
     def test_aggregate_discovers_and_runs_user_drop_in_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

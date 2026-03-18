@@ -57,6 +57,23 @@ def _attach_decode_warnings(payload: dict[str, Any], warnings: list[str]) -> dic
     return payload
 
 
+def _coerce_int(
+    value: Any,
+    *,
+    default: int = 0,
+    warnings: list[str] | None = None,
+    warning_field: str | None = None,
+) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if warnings is not None and warning_field:
+            warnings.append(_decode_warning(warning_field, "invalid_int"))
+        return default
+
+
 def _load_confidence_categories(row: sqlite3.Row, field: str, warnings: list[str]) -> list[str]:
     raw_categories = _safe_json_loads(row, field, default=[], warnings=warnings)
     if isinstance(raw_categories, list):
@@ -141,6 +158,19 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
     if not isinstance(confidence_breakdown, dict):
         warnings.append(_decode_warning("activity_json.confidence_breakdown", "unexpected_type"))
         confidence_breakdown = {}
+    normalized_confidence_breakdown: dict[str, int] = {}
+    invalid_confidence_breakdown_value = False
+    for key, value in confidence_breakdown.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            invalid_confidence_breakdown_value = True
+            continue
+        normalized_confidence_breakdown[str(key)] = coerced
+    if invalid_confidence_breakdown_value:
+        warnings.append(_decode_warning("activity_json.confidence_breakdown", "invalid_int_value"))
     scope_breakdown = activity_payload.get("scope_breakdown", []) if isinstance(activity_payload, dict) else []
     if not isinstance(scope_breakdown, list):
         warnings.append(_decode_warning("activity_json.scope_breakdown", "unexpected_type"))
@@ -157,7 +187,7 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
         "end_timestamp": str(row["end_timestamp"]),
         "summary": str(row["summary"]),
         "confidence": str(row["confidence"]),
-        "confidence_breakdown": {str(key): int(value) for key, value in confidence_breakdown.items() if isinstance(key, str)},
+        "confidence_breakdown": normalized_confidence_breakdown,
         "sources": _safe_json_loads(row, "sources_json", default=[], warnings=warnings, expected_type=list),
         "confidence_categories": _load_confidence_categories(row, "confidence_categories_json", warnings),
         "scope_breakdown": [str(item) for item in scope_breakdown],
@@ -165,7 +195,16 @@ def _row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
         "source_count": int(row["source_count"]),
         "event_count": int(row["event_count"]),
         "evidence": _safe_json_loads(row, "evidence_json", default=[], warnings=warnings, expected_type=list),
-        "evidence_overflow_count": int(activity_payload.get("evidence_overflow_count", 0)) if isinstance(activity_payload, dict) else 0,
+        "evidence_overflow_count": (
+            _coerce_int(
+                activity_payload.get("evidence_overflow_count", 0),
+                default=0,
+                warnings=warnings,
+                warning_field="activity_json.evidence_overflow_count",
+            )
+            if isinstance(activity_payload, dict)
+            else 0
+        ),
         "observation_fingerprints": _safe_json_loads(
             row,
             "observation_fingerprints_json",
@@ -634,7 +673,7 @@ def derive_activities_from_observations(
                 "source_count": int(group["source_count"]),
                 "event_count": int(group["event_count"]),
                 "evidence": list(group["evidence"]),
-                "evidence_overflow_count": int(group.get("evidence_overflow_count", 0)),
+                "evidence_overflow_count": _coerce_int(group.get("evidence_overflow_count", 0), default=0),
                 "observation_fingerprints": observation_fingerprints,
                 "activity": activity_json,
             }

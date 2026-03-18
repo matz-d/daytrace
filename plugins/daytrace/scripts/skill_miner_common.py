@@ -851,8 +851,13 @@ def extract_referenced_files(tool_inputs: list[dict[str, Any]], workspace: str |
                 suffix = Path(path).suffix.lower()
                 if suffix in _COMMON_EXTENSIONS or (path.startswith("/") and len(path) > 2):
                     normalized = path
-                    if workspace and normalized.startswith(workspace):
-                        normalized = normalized[len(workspace):].lstrip("/")
+                    if workspace:
+                        workspace_base = workspace.rstrip("/")
+                        workspace_prefix = f"{workspace_base}/"
+                        if normalized.startswith(workspace_prefix):
+                            normalized = normalized[len(workspace_prefix):]
+                        elif normalized == workspace_base:
+                            normalized = ""
                     if normalized not in seen:
                         seen.add(normalized)
                         files.append(normalized)

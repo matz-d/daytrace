@@ -177,6 +177,7 @@ Grouping parameters:
 
 - `group_window_minutes` (default 15): max gap between consecutive events
 - `max_span_minutes` (default 60): max total span of a single group; prevents rolling-chain accumulation
+- `evidence_limit` (default 5): max number of representative events in `evidence[]`; additional events are counted in `evidence_overflow_count`
 
 Aggregator behavior:
 
