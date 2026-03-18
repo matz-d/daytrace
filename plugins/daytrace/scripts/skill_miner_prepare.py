@@ -23,6 +23,7 @@ from skill_miner_common import (
     PRIMARY_INTENT_SOURCE_SUMMARY,
     CLAUDE_SOURCE,
     CODEX_SOURCE,
+    DEFAULT_DECISION_LOG_PATH,
     DEFAULT_GAP_HOURS,
     DEFAULT_MAX_UNCLUSTERED,
     DEFAULT_RESEARCH_REF_LIMIT,
@@ -34,7 +35,9 @@ from skill_miner_common import (
     build_claude_session_ref,
     build_codex_session_ref,
     build_candidate_quality,
+    build_candidate_decision_key,
     build_claude_logical_packets,
+    build_observation_contract,
     build_research_brief,
     build_research_targets,
     build_packet,
@@ -73,6 +76,7 @@ WORKSPACE_ADAPTIVE_MIN_PACKETS = 4
 WORKSPACE_ADAPTIVE_MIN_CANDIDATES = 1
 CLUSTER_MERGE_THRESHOLD = 0.55
 CLUSTER_NEAR_MATCH_THRESHOLD = 0.45
+COMPLETE_LINK_AUDIT_THRESHOLD = 0.5
 STORE_HYDRATE_TIMEOUT_SEC = 90
 COMPARE_LEGACY_OVERLAP_WARNING_THRESHOLD = 0.5
 
@@ -118,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Choose raw history, store-backed observations, or auto fallback.",
     )
     parser.add_argument("--store-path", help="Path to the DayTrace SQLite store. Used for store-backed prepare and pattern persistence.")
+    parser.add_argument("--decision-log-path", help="Path to the persisted decision log used for next-run carry-forward handling.")
     parser.add_argument("--sources-file", help="Path to sources.json used when validating store-backed auto input.")
     parser.add_argument("--claude-root", default=str(DEFAULT_CLAUDE_ROOT), help="Claude projects root.")
     parser.add_argument("--codex-history-file", default=str(DEFAULT_CODEX_HISTORY), help="Codex history.jsonl path.")
@@ -151,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
 class UnionFind:
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
+        self.members = [{index} for index in range(size)]
 
     def find(self, index: int) -> int:
         while self.parent[index] != index:
@@ -163,12 +169,98 @@ class UnionFind:
         root_right = self.find(right)
         if root_left != root_right:
             self.parent[root_right] = root_left
+            self.members[root_left].update(self.members[root_right])
+            self.members[root_right] = set()
 
 
 def source_status(name: str, status: str, **extra: Any) -> dict[str, Any]:
     payload = {"name": name, "status": status}
     payload.update(extra)
     return payload
+
+
+def resolve_decision_log_path(value: str | None) -> Path:
+    return Path(value).expanduser().resolve() if value else DEFAULT_DECISION_LOG_PATH.resolve()
+
+
+def load_latest_decision_states(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if not path.exists():
+        return {}, {"path": str(path), "status": "missing", "loaded_entries": 0, "active_entries": 0}
+
+    try:
+        latest_by_key: dict[str, dict[str, Any]] = {}
+        loaded_entries = 0
+        for row in load_jsonl(path):
+            if row.get("record_type") != "skill_miner_decision_stub":
+                continue
+            loaded_entries += 1
+            decision_key = str(row.get("decision_key") or build_candidate_decision_key(row)).strip()
+            if not decision_key:
+                continue
+            carry_forward = row.get("carry_forward")
+            if not isinstance(carry_forward, bool):
+                carry_forward = True
+            latest_by_key[decision_key] = {
+                "decision_key": decision_key,
+                "candidate_id": row.get("candidate_id"),
+                "label": row.get("label"),
+                "suggested_kind": row.get("suggested_kind"),
+                "user_decision": row.get("user_decision"),
+                "user_decision_timestamp": row.get("user_decision_timestamp"),
+                "carry_forward": carry_forward,
+                "recorded_at": row.get("recorded_at"),
+            }
+        return latest_by_key, {
+            "path": str(path),
+            "status": "loaded",
+            "loaded_entries": loaded_entries,
+            "active_entries": len(latest_by_key),
+        }
+    except Exception as exc:
+        return {}, {
+            "path": str(path),
+            "status": "error",
+            "loaded_entries": 0,
+            "active_entries": 0,
+            "message": str(exc),
+        }
+
+
+def apply_decision_states_to_candidates(
+    candidates: list[dict[str, Any]],
+    decision_states_by_key: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    retained: list[dict[str, Any]] = []
+    suppressed_items: list[dict[str, Any]] = []
+    matched_candidates = 0
+
+    for candidate in candidates:
+        annotated = dict(candidate)
+        decision_key = build_candidate_decision_key(annotated)
+        annotated["decision_key"] = decision_key
+        state = decision_states_by_key.get(decision_key)
+        if state is None:
+            retained.append(annotated)
+            continue
+        matched_candidates += 1
+        annotated["prior_decision_state"] = dict(state)
+        if not state.get("carry_forward", True):
+            suppressed_items.append(
+                {
+                    "decision_key": decision_key,
+                    "label": annotated.get("label"),
+                    "user_decision": state.get("user_decision"),
+                    "recorded_at": state.get("recorded_at"),
+                }
+            )
+            continue
+        retained.append(annotated)
+
+    return retained, {
+        "matched_candidates": matched_candidates,
+        "suppressed_candidates": len(suppressed_items),
+        "suppressed_items": suppressed_items[:10],
+    }
 
 
 def _tag_fidelity(packet: dict[str, Any], fidelity: str) -> dict[str, Any]:
@@ -381,6 +473,20 @@ def _stored_skill_miner_packet(value: Any, *, source_name: str, fallback_workspa
     packet["assistant_rule_hints"] = list(packet.get("assistant_rule_hints", packet.get("assistant_repeated_rules", [])))
     packet["source"] = source_name
     packet["repeated_rules"] = list(packet.get("user_repeated_rules", []))
+    intent_trace = packet.get("intent_trace")
+    if not isinstance(intent_trace, list):
+        intent_trace = []
+    if not intent_trace:
+        fallback_trace = [
+            str(packet.get("full_user_intent") or "").strip(),
+            str(packet.get("primary_intent") or "").strip(),
+        ]
+        intent_trace = [value for value in fallback_trace if value]
+    packet["intent_trace"] = intent_trace[:4]
+    constraints = packet.get("constraints")
+    packet["constraints"] = list(constraints) if isinstance(constraints, list) else []
+    acceptance_criteria = packet.get("acceptance_criteria")
+    packet["acceptance_criteria"] = list(acceptance_criteria) if isinstance(acceptance_criteria, list) else []
     if fallback_workspace and not packet.get("workspace"):
         packet["workspace"] = fallback_workspace
     packet["_fidelity"] = str(packet.get("_fidelity") or FIDELITY_CANONICAL)
@@ -783,7 +889,15 @@ def _build_similarity_features(packet: dict[str, Any]) -> dict[str, Any]:
     workspace = packet.get("workspace")
     snippets = packet.get("representative_snippets", [])
     snippet_tokens = set().union(*(tokenize(compact_snippet(item, workspace)) for item in snippets)) if snippets else set()
-    intent_tokens = tokenize(str(packet.get("primary_intent") or ""))
+    intent_corpus = " ".join(
+        [
+            str(packet.get("primary_intent") or ""),
+            *[str(value) for value in packet.get("intent_trace", [])[:2] if value],
+            *[str(value) for value in packet.get("constraints", [])[:2] if value],
+            *[str(value) for value in packet.get("acceptance_criteria", [])[:2] if value],
+        ]
+    )
+    intent_tokens = tokenize(intent_corpus)
     task_shape_set = set(packet.get("task_shape", []))
     tool_set = set(packet.get("tool_signature", []))
     task_shapes_strs = [str(shape) for shape in packet.get("task_shape", []) if shape]
@@ -1067,6 +1181,85 @@ def build_intent_analysis(packets: list[dict[str, Any]], limit: int = 10) -> dic
     }
 
 
+def _pair_similarity(
+    left_index: int,
+    right_index: int,
+    *,
+    features_by_index: list[dict[str, Any]],
+    similarity_cache: dict[tuple[int, int], float],
+) -> float:
+    pair = (min(left_index, right_index), max(left_index, right_index))
+    cached = similarity_cache.get(pair)
+    if cached is not None:
+        return cached
+    score = _similarity_score_from_features(features_by_index[pair[0]], features_by_index[pair[1]])
+    similarity_cache[pair] = score
+    return score
+
+
+def _component_merge_allowed(
+    left_index: int,
+    right_index: int,
+    *,
+    union_find: UnionFind,
+    features_by_index: list[dict[str, Any]],
+    similarity_cache: dict[tuple[int, int], float],
+) -> bool:
+    left_root = union_find.find(left_index)
+    right_root = union_find.find(right_index)
+    if left_root == right_root:
+        return False
+    left_members = union_find.members[left_root]
+    right_members = union_find.members[right_root]
+    if not left_members or not right_members:
+        return False
+    if len(left_members) == 1 and len(right_members) == 1:
+        return True
+    for left_member in left_members:
+        for right_member in right_members:
+            if _pair_similarity(
+                left_member,
+                right_member,
+                features_by_index=features_by_index,
+                similarity_cache=similarity_cache,
+            ) <= COMPLETE_LINK_AUDIT_THRESHOLD:
+                return False
+    return True
+
+
+def _split_label(packet: dict[str, Any]) -> str | None:
+    task_shapes = [str(shape) for shape in packet.get("task_shape", []) if shape]
+    primary_shape = next((shape for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
+    if not primary_shape and task_shapes:
+        primary_shape = task_shapes[0]
+    artifact_hints = [str(value) for value in packet.get("artifact_hints", []) if value]
+    rule_hints = [
+        str(item.get("normalized") or "")
+        for item in packet_user_rule_hints(packet)
+        if isinstance(item, dict) and item.get("normalized")
+    ]
+    if primary_shape and artifact_hints:
+        return f"{primary_shape.replace('_', ' ')} / {artifact_hints[0]}"
+    if primary_shape and rule_hints:
+        return f"{primary_shape.replace('_', ' ')} / {rule_hints[0]}"
+    if primary_shape:
+        return primary_shape.replace("_", " ")
+    if artifact_hints:
+        return artifact_hints[0]
+    if rule_hints:
+        return rule_hints[0]
+    return None
+
+
+def build_split_suggestions(group_packets: list[dict[str, Any]], limit: int = 3) -> list[str]:
+    counts: Counter[str] = Counter()
+    for packet in group_packets:
+        label = _split_label(packet)
+        if label:
+            counts[label] += 1
+    return [label for label, count in counts.most_common(limit) if count >= 2]
+
+
 def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
     if not packets:
         return [], [], {"block_count": 0, "block_comparisons": 0}
@@ -1083,6 +1276,26 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     near_matches_by_index: dict[int, list[dict[str, Any]]] = defaultdict(list)
     block_comparisons = 0
     seen_pairs: set[tuple[int, int]] = set()
+    similarity_cache: dict[tuple[int, int], float] = {}
+
+    def register_near_match(left_index: int, right_index: int, score: float, *, reason: str | None = None) -> None:
+        left_payload = {
+            "packet_id": sorted_packets[right_index]["packet_id"],
+            "score": score,
+            "primary_intent": sorted_packets[right_index]["primary_intent"],
+            "session_ref": sorted_packets[right_index].get("session_ref"),
+        }
+        right_payload = {
+            "packet_id": sorted_packets[left_index]["packet_id"],
+            "score": score,
+            "primary_intent": sorted_packets[left_index]["primary_intent"],
+            "session_ref": sorted_packets[left_index].get("session_ref"),
+        }
+        if reason:
+            left_payload["reason"] = reason
+            right_payload["reason"] = reason
+        near_matches_by_index[left_index].append(left_payload)
+        near_matches_by_index[right_index].append(right_payload)
 
     for block_indexes in blocks.values():
         for offset, left_index in enumerate(block_indexes):
@@ -1092,26 +1305,25 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                     continue
                 seen_pairs.add(pair)
                 block_comparisons += 1
-                score = _similarity_score_from_features(features_by_index[left_index], features_by_index[right_index])
+                score = _pair_similarity(
+                    left_index,
+                    right_index,
+                    features_by_index=features_by_index,
+                    similarity_cache=similarity_cache,
+                )
                 if score >= CLUSTER_MERGE_THRESHOLD:
-                    union_find.union(left_index, right_index)
+                    if _component_merge_allowed(
+                        left_index,
+                        right_index,
+                        union_find=union_find,
+                        features_by_index=features_by_index,
+                        similarity_cache=similarity_cache,
+                    ):
+                        union_find.union(left_index, right_index)
+                    else:
+                        register_near_match(left_index, right_index, score, reason="complete_link_guard")
                 elif CLUSTER_NEAR_MATCH_THRESHOLD <= score < CLUSTER_MERGE_THRESHOLD:
-                    near_matches_by_index[left_index].append(
-                        {
-                            "packet_id": sorted_packets[right_index]["packet_id"],
-                            "score": score,
-                            "primary_intent": sorted_packets[right_index]["primary_intent"],
-                            "session_ref": sorted_packets[right_index].get("session_ref"),
-                        }
-                    )
-                    near_matches_by_index[right_index].append(
-                        {
-                            "packet_id": sorted_packets[left_index]["packet_id"],
-                            "score": score,
-                            "primary_intent": sorted_packets[left_index]["primary_intent"],
-                            "session_ref": sorted_packets[left_index].get("session_ref"),
-                        }
-                    )
+                    register_near_match(left_index, right_index, score)
 
     groups: dict[int, list[int]] = defaultdict(list)
     for index in range(len(sorted_packets)):
@@ -1194,6 +1406,10 @@ def cluster_packets(packets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             "near_matches": nearest,
             "research_targets": research_targets,
             "evidence_items": build_evidence_items(group_packets),
+            "split_suggestions": build_split_suggestions(group_packets),
+            "intent_trace": _aggregate_candidate_list_field(group_packets, "intent_trace", 4),
+            "constraints": _aggregate_candidate_list_field(group_packets, "constraints", 4),
+            "acceptance_criteria": _aggregate_candidate_list_field(group_packets, "acceptance_criteria", 4),
         }
         candidate["score"] = candidate_score(support)
         candidate.update(build_candidate_quality(candidate, total_packets_all=total_packets_all))
@@ -1216,6 +1432,19 @@ def _top_values(values: list[Any], limit: int) -> list[Any]:
             ordered.append(value)
     ordered.sort(key=lambda item: (counts[item], str(item)), reverse=True)
     return ordered[:limit]
+
+
+def _aggregate_candidate_list_field(group_packets: list[dict[str, Any]], field: str, limit: int) -> list[str]:
+    values: list[str] = []
+    for packet in group_packets:
+        raw = packet.get(field)
+        if not isinstance(raw, list):
+            continue
+        for item in raw:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    return _top_values(values, limit)
 
 
 def _dedupe_matches(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1399,6 +1628,9 @@ def main() -> None:
         unclustered = effective_window["unclustered"]
         stats = effective_window["stats"]
         date_window_start = effective_window["date_window_start"]
+        resolved_decision_log_path = resolve_decision_log_path(args.decision_log_path)
+        decision_states_by_key, decision_log_status = load_latest_decision_states(resolved_decision_log_path)
+        candidates, decision_log_application = apply_decision_states_to_candidates(candidates, decision_states_by_key)
         top_candidates = candidates[: max(0, args.top_n)]
         limited_unclustered = unclustered[: max(0, args.max_unclustered)]
 
@@ -1417,6 +1649,8 @@ def main() -> None:
                 "block_comparisons": stats["block_comparisons"],
                 "no_sources_available": len(all_packets) == 0,
                 "adaptive_window_expanded": adaptive_expanded,
+                "decision_log_matched_candidates": decision_log_application["matched_candidates"],
+                "decision_log_suppressed_candidates": decision_log_application["suppressed_candidates"],
             },
             "config": {
                 "days": args.days,
@@ -1441,10 +1675,15 @@ def main() -> None:
                     "initial_packet_count": len(initial_window["packets"]),
                     "initial_candidate_count": len(initial_window["candidates"]),
                 },
+                "decision_log": {
+                    **decision_log_status,
+                    **decision_log_application,
+                },
                 **({"store_hydration": store_hydration} if store_hydration else {}),
                 **({"input_completeness": store_slice_completeness} if selected_input_source == "store" and store_slice_completeness else {}),
             },
         }
+        payload["observation_contract"] = build_observation_contract(payload)
         if args.compare_legacy and selected_input_source == "store":
             legacy_packets, _legacy_statuses = collect_raw_packets(
                 workspace=workspace,

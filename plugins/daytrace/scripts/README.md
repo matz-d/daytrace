@@ -235,6 +235,7 @@ Contract notes:
 - `--sources-file` lets auto mode validate the current manifest against a specific source registry instead of the built-in default
 - `--compare-legacy` adds a lightweight comparison summary between the selected path and the raw-history path
 - normal broad-scope execution is `--all-sessions --days 7`; use a larger explicit `--days` only when a longer observation window is intentionally needed
+- `--decision-log-path` lets prepare read prior decision state for carry-forward / suppression; orchestration should pass the same path to proposal so write/read stay aligned
 - no state file is used; execution mode is determined only by CLI flags
 
 `candidates[].evidence_items[]` example:
@@ -327,6 +328,13 @@ Important fields:
 - `needs_research`: candidates still held back after prepare and optional research judgment
 - `rejected`: candidates and unclustered references that should not be proposed
 - `markdown`: preformatted proposal sections for the LLM/user-facing output
+- `--decision-log-path`: optional JSONL output path for `decision_log_stub`; pass the same path used by prepare if you want next-run carry-forward behavior to close the loop
+- `--skill-creator-handoff-dir`: optional output directory for persisted skill scaffold / handoff bundles
+
+Contract notes:
+
+- the CLI has defaults under `~/.daytrace`, but orchestrators should pass persistence paths explicitly so side effects stay intentional
+- `prepare` readback and `proposal` persistence only form one learning loop when they share the same decision-log path
 
 ### `session_ref` contract
 

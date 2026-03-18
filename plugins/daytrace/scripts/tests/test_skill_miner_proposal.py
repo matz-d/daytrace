@@ -14,7 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from skill_miner_common import DEFAULT_TOP_N, build_proposal_sections, merge_judgment_into_candidate
+from skill_miner_common import DEFAULT_TOP_N, build_candidate_decision_key, build_proposal_sections, merge_judgment_into_candidate
 from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
@@ -31,13 +31,25 @@ GOLDEN_MARKDOWN = FIXTURES_DIR / "golden_proposal.md"
 
 
 def _render_markdown_from_fixture() -> str:
-    completed = subprocess.run(
-        ["python3", str(PROPOSAL), "--prepare-file", str(GOLDEN_PREPARE)],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        decision_log = Path(temp_dir) / "decision-log.jsonl"
+        handoff_dir = Path(temp_dir) / "handoffs"
+        completed = subprocess.run(
+            [
+                "python3",
+                str(PROPOSAL),
+                "--prepare-file",
+                str(GOLDEN_PREPARE),
+                "--decision-log-path",
+                str(decision_log),
+                "--skill-creator-handoff-dir",
+                str(handoff_dir),
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     if completed.returncode != 0:
         raise AssertionError(completed.stderr)
     payload = json.loads(completed.stdout)
@@ -69,6 +81,9 @@ def _ready_candidate(**overrides: Any) -> dict[str, Any]:
         ],
         "evidence_summary": "Repeated review pattern with findings-first format",
         "confidence_reason": "2+ evidence items with matching intent",
+        "intent_trace": ["Review workflow", "Keep findings-first output"],
+        "constraints": ["Do not edit unrelated files."],
+        "acceptance_criteria": ["Include file and line references."],
     }
     base.update(overrides)
     return base
@@ -129,6 +144,58 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertEqual(result["summary"]["needs_research_count"], 1)
         self.assertIsNone(result["selection_prompt"])
 
+    def test_ready_candidate_without_suggested_kind_gets_skill_scaffold_context_and_handoff(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Build automation",
+            common_task_shapes=["implement_feature", "run_tests"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[candidate]))
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "skill")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "heuristic")
+        self.assertIn("skill_scaffold_context", result["ready"][0])
+        self.assertIn("skill_creator_handoff", result["ready"][0])
+        self.assertEqual(result["ready"][0]["skill_scaffold_context"]["skill_name"], "build-automation")
+        self.assertEqual(result["ready"][0]["skill_creator_handoff"]["tool"], "skill-creator")
+        self.assertEqual(result["ready"][0]["skill_creator_handoff"]["entrypoint"], "/skill-creator")
+        self.assertEqual(result["decision_log_stub"][0]["recommended_action"], "adopt")
+        self.assertEqual(result["learning_feedback"]["status"], "ready_candidates_available")
+
+    def test_ready_hook_candidate_gets_next_step_stub(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="hook-1",
+            label="Run tests before close",
+            suggested_kind="hook",
+            common_task_shapes=["run_tests"],
+            common_tool_signatures=["pytest"],
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[candidate]))
+
+        self.assertEqual(result["ready"][0]["next_step_stub"]["kind"], "hook")
+        self.assertEqual(result["ready"][0]["next_step_stub"]["trigger_event"], "Stop")
+
+    def test_decision_log_stub_carries_constraints_and_acceptance_criteria(self) -> None:
+        payload = _prepare_payload(candidates=[_ready_candidate()])
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["decision_log_stub"][0]["constraints"], ["Do not edit unrelated files."])
+        self.assertEqual(result["decision_log_stub"][0]["acceptance_criteria"], ["Include file and line references."])
+
+    def test_decision_log_stub_defaults_to_carry_forward_until_user_decides(self) -> None:
+        payload = _prepare_payload(candidates=[_ready_candidate()])
+
+        result = build_proposal_sections(payload)
+
+        self.assertTrue(result["decision_log_stub"][0]["carry_forward"])
+        self.assertEqual(result["decision_log_stub"][0]["decision_key"], build_candidate_decision_key(result["ready"][0]))
+
     def test_mixed_candidates_sorted_into_correct_sections(self) -> None:
         payload = _prepare_payload(candidates=[
             _ready_candidate(),
@@ -173,6 +240,27 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertIn("### 観測範囲", result["markdown"])
         self.assertIn("今回は有力候補なし", result["markdown"])
         self.assertIn("検出候補数", result["markdown"])
+
+    def test_needs_research_output_includes_learning_feedback_and_split_candidates(self) -> None:
+        payload = _prepare_payload(
+            candidates=[
+                _needs_research_candidate(
+                    split_suggestions=["review changes / review", "prepare report / markdown"],
+                    quality_flags=["oversized_cluster"],
+                    support={"total_packets": 4, "claude_packets": 2, "codex_packets": 2},
+                )
+            ]
+        )
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["learning_feedback"]["status"], "needs_more_observation")
+        self.assertEqual(result["decision_log_stub"][0]["recommended_action"], "defer")
+        self.assertEqual(
+            result["learning_feedback"]["split_candidates"][0]["split_suggestions"],
+            ["review changes / review", "prepare report / markdown"],
+        )
+        self.assertIn("次に育てやすい候補", result["markdown"])
 
     def test_markdown_contains_section_headers(self) -> None:
         payload = _prepare_payload(candidates=[_ready_candidate()])
@@ -241,6 +329,29 @@ class JudgmentMergeTests(unittest.TestCase):
 
         self.assertNotIn("weak_semantic_cohesion", merged.get("quality_flags", []))
         self.assertIn("generic_task_shape", merged.get("quality_flags", []))
+        self.assertIn("weak_semantic_cohesion", merged.get("resolved_quality_flags", []))
+
+    def test_promote_ready_resolves_research_blocking_flags(self) -> None:
+        candidate = _needs_research_candidate(
+            quality_flags=["oversized_cluster", "split_recommended", "near_match_dense", "generic_task_shape"],
+        )
+        judgment = {
+            "judgment": {
+                "recommendation": "promote_ready",
+                "proposed_triage_status": "ready",
+                "proposed_confidence": "strong",
+            },
+        }
+        merged = merge_judgment_into_candidate(candidate, judgment)
+
+        self.assertEqual(
+            set(merged.get("resolved_quality_flags", [])),
+            {"oversized_cluster", "split_recommended", "near_match_dense"},
+        )
+        self.assertNotIn("oversized_cluster", merged.get("quality_flags", []))
+        self.assertNotIn("split_recommended", merged.get("quality_flags", []))
+        self.assertNotIn("near_match_dense", merged.get("quality_flags", []))
+        self.assertIn("generic_task_shape", merged.get("quality_flags", []))
 
     def test_judgment_with_sections_routes_correctly(self) -> None:
         """Promoted candidate should appear in ready section of proposal."""
@@ -262,6 +373,31 @@ class JudgmentMergeTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["ready_count"], 1)
         self.assertEqual(result["summary"]["needs_research_count"], 0)
+
+    def test_promoted_candidate_markdown_discloses_resolved_flags(self) -> None:
+        candidate = _needs_research_candidate(
+            quality_flags=["split_recommended", "near_match_dense"],
+            confidence_reason="mixed cluster before deep review",
+        )
+        judgment_payload = {
+            "candidate_id": "c2",
+            "judgment": {
+                "recommendation": "promote_ready",
+                "proposed_triage_status": "ready",
+                "proposed_confidence": "strong",
+                "summary": "Deep review confirmed one reusable build flow.",
+            },
+        }
+        payload = _prepare_payload(candidates=[candidate])
+        result = build_proposal_sections(
+            payload,
+            judgments_by_candidate_id={"c2": judgment_payload},
+        )
+
+        self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertIn("研究で解消", result["markdown"])
+        self.assertIn("分割推奨", result["markdown"])
+        self.assertIn("近接クラスタ競合", result["markdown"])
 
 
 class MarkdownFormatTests(unittest.TestCase):
@@ -287,6 +423,8 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("Review workflow", text)
         self.assertIn("固定先: CLAUDE.md", text)
         self.assertIn("期待効果", text)
+        self.assertIn("制約", text)
+        self.assertIn("受け入れ条件", text)
 
     def test_proposal_item_lines_without_classification(self) -> None:
         lines = proposal_item_lines(1, _needs_research_candidate(), include_classification=False)
@@ -296,6 +434,50 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("現状", text)
         self.assertIn("次のステップ", text)
         self.assertNotIn("固定先", text)
+
+    def test_proposal_item_lines_for_skill_include_official_handoff(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="skill",
+            skill_scaffold_context={
+                "goal": "build automation を再利用可能なスキルとして固定化する",
+                "artifact_hints": ["code"],
+                "rule_hints": ["tests-before-close"],
+                "observation_count": 3,
+                "representative_examples": ["Implement the build command and run tests before finishing."],
+            },
+            skill_creator_handoff={
+                "tool": "skill-creator",
+                "entrypoint": "/skill-creator",
+                "suggested_invocation": "/skill-creator build-automation をスキルにしてください",
+                "context_file": "/tmp/handoff.json",
+            },
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("scaffold goal", text)
+        self.assertIn("scaffold要点", text)
+        self.assertIn("scaffold例", text)
+        self.assertIn("公式 handoff", text)
+        self.assertIn("/skill-creator build-automation", text)
+
+    def test_proposal_item_lines_for_hook_include_next_step_stub(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="hook",
+            next_step_stub={
+                "kind": "hook",
+                "prompt": "「Run tests before close を hook にしてください」と次セッションで指示",
+                "trigger_event": "Stop",
+                "action_summary": "関連変更があるときにテスト系コマンドを自動で実行する",
+            },
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("次ステップ", text)
+        self.assertIn("trigger=Stop", text)
 
     def test_rejected_item_lines_format(self) -> None:
         candidate = {"label": "One-off task", "confidence_reason": "single occurrence"}
@@ -464,6 +646,115 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(payload["summary"]["ready_count"], 0)
             self.assertEqual(payload["summary"]["needs_research_count"], 0)
             self.assertEqual(payload["summary"]["rejected_count"], 0)
+
+    def test_cli_persists_decision_log_and_skill_creator_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            decision_log = Path(temp_dir) / "decision-log.jsonl"
+            handoff_dir = Path(temp_dir) / "handoffs"
+            prepare_file.write_text(
+                json.dumps(
+                    _prepare_payload(
+                        candidates=[
+                            _ready_candidate(
+                                suggested_kind="",
+                                label="Build automation",
+                                common_task_shapes=["implement_feature", "run_tests"],
+                                artifact_hints=["code"],
+                                rule_hints=[],
+                                support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+                            )
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PROPOSAL),
+                    "--prepare-file",
+                    str(prepare_file),
+                    "--decision-log-path",
+                    str(decision_log),
+                    "--skill-creator-handoff-dir",
+                    str(handoff_dir),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["persistence"]["decision_log"]["status"], "persisted")
+            self.assertEqual(payload["persistence"]["skill_creator_handoff"]["status"], "persisted")
+            self.assertTrue(decision_log.exists())
+            rows = [json.loads(line) for line in decision_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["record_type"], "skill_miner_decision_stub")
+            self.assertEqual(rows[0]["candidate_id"], "c1")
+            self.assertEqual(rows[0]["recommended_action"], "adopt")
+            self.assertTrue(rows[0]["carry_forward"])
+            self.assertEqual(rows[0]["decision_key"], build_candidate_decision_key(payload["ready"][0]))
+            handoff_items = payload["persistence"]["skill_creator_handoff"]["items"]
+            self.assertEqual(len(handoff_items), 1)
+            context_file = Path(handoff_items[0]["context_file"])
+            self.assertTrue(context_file.exists())
+            handoff_bundle = json.loads(context_file.read_text(encoding="utf-8"))
+            self.assertEqual(handoff_bundle["record_type"], "skill_creator_handoff")
+            self.assertEqual(handoff_bundle["context"]["skill_name"], "build-automation")
+            self.assertIn("公式 handoff:", payload["markdown"])
+            self.assertNotIn(str(context_file), payload["markdown"])
+
+    def test_cli_applies_user_decision_overlay_before_persisting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            decision_log = Path(temp_dir) / "decision-log.jsonl"
+            user_decision_file = Path(temp_dir) / "user-decision.json"
+            prepare_file.write_text(
+                json.dumps(_prepare_payload(candidates=[_ready_candidate()])),
+                encoding="utf-8",
+            )
+            user_decision_file.write_text(
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "candidate_id": "c1",
+                                "user_decision": "adopt",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PROPOSAL),
+                    "--prepare-file",
+                    str(prepare_file),
+                    "--decision-log-path",
+                    str(decision_log),
+                    "--user-decision-file",
+                    str(user_decision_file),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["user_decision_overlay"]["applied"], 1)
+            rows = [json.loads(line) for line in decision_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(rows[0]["user_decision"], "adopt")
+            self.assertFalse(rows[0]["carry_forward"])
 
 
 class LoadJudgmentsTests(unittest.TestCase):

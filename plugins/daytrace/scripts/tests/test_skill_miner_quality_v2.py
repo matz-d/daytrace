@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from skill_miner_common import (
     apply_claude_md_immediate_rules,
     build_packet,
+    build_primary_intent_fields,
     build_claude_md_immediate_apply_preview,
     build_proposal_sections,
     clean_user_message_text,
@@ -53,6 +54,9 @@ def make_packet(
     task_shape: list[str],
     artifact_hints: list[str],
     repeated_rules: list[str],
+    intent_trace: list[str] | None = None,
+    constraints: list[str] | None = None,
+    acceptance_criteria: list[str] | None = None,
     top_tool: str = "rg",
     tool_signature: list[str] | None = None,
     timestamp: str = "2026-03-09T00:00:00+09:00",
@@ -72,6 +76,9 @@ def make_packet(
         "primary_intent": primary_intent,
         "full_user_intent": primary_intent,
         "primary_intent_source": "raw_user_message",
+        "intent_trace": intent_trace or [primary_intent],
+        "constraints": constraints or [],
+        "acceptance_criteria": acceptance_criteria or [],
         "representative_snippets": snippets,
         "user_rule_hints": [{"normalized": value, "raw_snippet": value} for value in repeated_rules],
         "assistant_rule_hints": [],
@@ -177,6 +184,20 @@ def legacy_cluster_packets(packets: list[dict[str, object]]) -> tuple[list[dict[
 
 
 class SkillMinerQualityV2Tests(unittest.TestCase):
+    def test_primary_intent_keeps_constraint_directive_with_partial_token_overlap(self) -> None:
+        primary_intent, _full_user_intent, source = build_primary_intent_fields(
+            [
+                "実装方針を整理して提案してください",
+                "提案の最後に、必ずテスト結果を示してください",
+            ],
+            [],
+            "/tmp/workspace",
+        )
+
+        self.assertEqual(source, "raw_user_message")
+        self.assertIn("実装方針を整理して提案してください", primary_intent)
+        self.assertIn("必ずテスト結果を示してください", primary_intent)
+
     def test_similarity_score_weight_budget_matches_v2_targets(self) -> None:
         self.assertEqual(
             SIMILARITY_WEIGHT_BUDGET,
@@ -320,6 +341,52 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertIn("artifact+rule:config:findings-first", keys)
         self.assertNotIn("tool:rg", keys)
 
+    def test_stable_block_keys_expand_to_secondary_artifact_and_rule(self) -> None:
+        packet = make_packet(
+            "pkt-top-k",
+            primary_intent="Implement config sync and keep findings-first output with line refs.",
+            snippets=["Implement config sync and keep findings-first output with line refs."],
+            task_shape=["implement_feature", "edit_config"],
+            artifact_hints=["config", "markdown"],
+            repeated_rules=["tests-before-close", "file-line-refs"],
+            top_tool="python3",
+            tool_signature=["python3", "pytest"],
+        )
+
+        keys = stable_block_keys(packet)
+
+        self.assertIn("task+artifact:implement_feature:config", keys)
+        self.assertIn("task+artifact:implement_feature:markdown", keys)
+        self.assertIn("task+rule:implement_feature:tests-before-close", keys)
+        self.assertIn("task+rule:implement_feature:file-line-refs", keys)
+
+    def test_split_suggestions_push_candidate_to_needs_research(self) -> None:
+        from skill_miner_common import build_candidate_quality
+
+        candidate = {
+            "support": {
+                "total_packets": 5,
+                "claude_packets": 3,
+                "codex_packets": 2,
+                "recent_packets_7d": 4,
+            },
+            "common_task_shapes": ["implement_feature", "prepare_report"],
+            "common_tool_signatures": ["python3", "pytest"],
+            "rule_hints": ["findings-first"],
+            "artifact_hints": ["code", "report"],
+            "representative_examples": [
+                "Implement feature with tests and summarize by severity",
+                "Implement feature with tests and summarize by severity",
+            ],
+            "split_suggestions": ["implement feature / code", "prepare report / report"],
+        }
+
+        quality = build_candidate_quality(candidate, total_packets_all=12)
+
+        self.assertFalse(quality["proposal_ready"])
+        self.assertEqual(quality["triage_status"], "needs_research")
+        self.assertIn("split_recommended", quality["quality_flags"])
+
     def test_build_packet_uses_user_first_feature_corpus(self) -> None:
         packet = build_packet(
             packet_id="pkt-user-first",
@@ -338,6 +405,63 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertNotIn("write_markdown", packet["task_shape"])
         self.assertNotIn("markdown", packet["artifact_hints"])
         self.assertEqual(packet["representative_snippets"], ["Review this PR and return findings first."])
+
+    def test_build_packet_captures_intent_trace_constraints_and_acceptance_criteria(self) -> None:
+        packet = build_packet(
+            packet_id="pkt-intent-trace",
+            source="codex-history",
+            session_ref="codex:pkt-intent-trace:1",
+            session_id="pkt-intent-trace",
+            workspace="/tmp/workspace",
+            timestamp="2026-03-09T00:00:00+09:00",
+            user_messages=[
+                "Review this PR.",
+                "Keep findings-first output.",
+                "Do not edit unrelated files.",
+                "Include file and line references.",
+            ],
+            assistant_messages=["I will inspect the diff and summarize findings."],
+            tools=["rg", "git"],
+        )
+
+        self.assertGreaterEqual(len(packet["intent_trace"]), 3)
+        self.assertIn("Do not edit unrelated files.", packet["constraints"])
+        self.assertTrue(any("findings-first" in item.lower() for item in packet["acceptance_criteria"]))
+        self.assertTrue(any("line references" in item.lower() for item in packet["acceptance_criteria"]))
+        self.assertIn("Review this PR.", packet["primary_intent"])
+
+    def test_bare_rule_labels_are_treated_as_directives(self) -> None:
+        self.assertTrue(is_directive_like_user_message("findings-first"))
+        self.assertTrue(is_directive_like_user_message("- file-line-refs"))
+        self.assertTrue(is_directive_like_user_message("`tests-before-close`"))
+
+    def test_build_packet_captures_bare_rule_labels(self) -> None:
+        packet = build_packet(
+            packet_id="pkt-bare-rules",
+            source="codex-history",
+            session_ref="codex:pkt-bare-rules:1",
+            session_id="pkt-bare-rules",
+            workspace="/tmp/workspace",
+            timestamp="2026-03-09T00:00:00+09:00",
+            user_messages=[
+                "Review this PR.",
+                "findings-first",
+                "- file-line-refs",
+                "`tests-before-close`",
+            ],
+            assistant_messages=["I will inspect the diff and summarize findings."],
+            tools=["rg", "git"],
+        )
+
+        self.assertEqual(
+            set(packet["acceptance_criteria"]),
+            {"findings-first", "file-line-refs", "tests-before-close"},
+        )
+        self.assertEqual(
+            {item["normalized"] for item in packet["user_rule_hints"]},
+            {"findings-first", "file-line-refs", "tests-before-close"},
+        )
+        self.assertIn("Review this PR.", packet["primary_intent"])
 
     def test_similarity_score_weakens_generic_cluster_entry(self) -> None:
         left = make_packet(
@@ -920,6 +1044,46 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertIn("見送り理由の傾向", sections["markdown"])
         self.assertIn("2026-03-10T09:00:00+09:00 codex-history: Keep findings-first review format.", sections["markdown"])
         self.assertEqual(sections["needs_research"][0]["evidence_items"][0]["session_ref"], "codex:abc:1")
+
+    def test_cluster_packets_complete_link_guard_blocks_bridge_merge(self) -> None:
+        packets = [
+            make_packet(
+                "pkt-guard-a",
+                primary_intent="Implement config sync and update config.yaml with tests.",
+                snippets=["Implement config sync and update config.yaml with tests."],
+                task_shape=["implement_feature", "edit_config"],
+                artifact_hints=["config"],
+                repeated_rules=["tests-before-close"],
+                top_tool="python3",
+                tool_signature=["python3", "pytest"],
+            ),
+            make_packet(
+                "pkt-guard-b",
+                primary_intent="Implement config-to-markdown sync and update config.yaml and summary.md with tests.",
+                snippets=["Implement config-to-markdown sync and update config.yaml and summary.md with tests."],
+                task_shape=["implement_feature", "edit_config"],
+                artifact_hints=["config", "markdown"],
+                repeated_rules=["tests-before-close"],
+                top_tool="python3",
+                tool_signature=["python3", "pytest"],
+            ),
+            make_packet(
+                "pkt-guard-c",
+                primary_intent="Implement markdown sync and update summary.md with tests.",
+                snippets=["Implement markdown sync and update summary.md with tests."],
+                task_shape=["implement_feature", "edit_config"],
+                artifact_hints=["markdown"],
+                repeated_rules=[],
+                top_tool="python3",
+                tool_signature=["python3", "pytest"],
+            ),
+        ]
+
+        candidates, unclustered, _stats = cluster_packets(packets)
+
+        self.assertTrue(all(candidate["support"]["total_packets"] < 3 for candidate in candidates))
+        self.assertEqual(len(unclustered), 1)
+        self.assertEqual(len(candidates), 1)
 
     def test_benchmark_metrics_improve_against_legacy_behavior(self) -> None:
         packets: list[dict[str, object]] = []

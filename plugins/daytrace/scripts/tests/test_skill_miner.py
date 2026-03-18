@@ -24,7 +24,15 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from skill_miner_common import annotate_unclustered_packet, build_candidate_quality, build_proposal_sections, candidate_label, compact_snippet, judge_research_candidate
+from skill_miner_common import (
+    annotate_unclustered_packet,
+    build_candidate_decision_key,
+    build_candidate_quality,
+    build_proposal_sections,
+    candidate_label,
+    compact_snippet,
+    judge_research_candidate,
+)
 import skill_miner_prepare
 from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, filter_packets_by_days, read_claude_packets, read_codex_packets, read_store_packets
 
@@ -978,6 +986,9 @@ class SkillMinerTests(unittest.TestCase):
                     "primary_intent",
                     "full_user_intent",
                     "primary_intent_source",
+                    "intent_trace",
+                    "constraints",
+                    "acceptance_criteria",
                     "task_shape",
                     "artifact_hints",
                     "tool_signature",
@@ -1600,6 +1611,85 @@ class SkillMinerTests(unittest.TestCase):
             self.assertIn("objective", candidate["research_brief"])
             self.assertGreaterEqual(len(candidate["research_brief"]["questions"]), 3)
             self.assertGreaterEqual(len(candidate["research_brief"]["decision_rules"]), 3)
+
+    def test_prepare_suppresses_non_carry_forward_candidate_from_decision_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            first_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            candidate = first_payload["candidates"][0]
+            decision_log = root / "decision-log.jsonl"
+            write_jsonl(
+                decision_log,
+                [
+                    {
+                        "record_type": "skill_miner_decision_stub",
+                        "candidate_id": candidate["candidate_id"],
+                        "decision_key": build_candidate_decision_key(candidate),
+                        "label": candidate["label"],
+                        "suggested_kind": "CLAUDE.md",
+                        "intent_trace": candidate.get("intent_trace", []),
+                        "constraints": candidate.get("constraints", []),
+                        "acceptance_criteria": candidate.get("acceptance_criteria", []),
+                        "user_decision": "adopt",
+                        "carry_forward": False,
+                        "recorded_at": "2026-03-18T00:00:00+09:00",
+                    }
+                ],
+            )
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--decision-log-path",
+                str(decision_log),
+            )
+
+            labels = {item["label"] for item in payload["candidates"]}
+            self.assertNotIn(candidate["label"], labels)
+            self.assertEqual(payload["summary"]["decision_log_suppressed_candidates"], 1)
+            self.assertEqual(payload["config"]["decision_log"]["matched_candidates"], 1)
+
+    def test_prepare_keeps_carry_forward_candidate_and_attaches_prior_decision_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            first_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            candidate = first_payload["candidates"][0]
+            decision_log = root / "decision-log.jsonl"
+            write_jsonl(
+                decision_log,
+                [
+                    {
+                        "record_type": "skill_miner_decision_stub",
+                        "candidate_id": candidate["candidate_id"],
+                        "label": candidate["label"],
+                        "suggested_kind": "CLAUDE.md",
+                        "intent_trace": candidate.get("intent_trace", []),
+                        "constraints": candidate.get("constraints", []),
+                        "acceptance_criteria": candidate.get("acceptance_criteria", []),
+                        "user_decision": "defer",
+                        "carry_forward": True,
+                        "recorded_at": "2026-03-18T00:00:00+09:00",
+                    }
+                ],
+            )
+
+            payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--decision-log-path",
+                str(decision_log),
+            )
+
+            matched = next(item for item in payload["candidates"] if item["label"] == candidate["label"])
+            self.assertEqual(matched["prior_decision_state"]["user_decision"], "defer")
+            self.assertEqual(payload["summary"]["decision_log_suppressed_candidates"], 0)
+            self.assertEqual(payload["config"]["decision_log"]["matched_candidates"], 1)
 
     def test_issue_sized_cluster_is_held_for_research(self) -> None:
         candidate = {

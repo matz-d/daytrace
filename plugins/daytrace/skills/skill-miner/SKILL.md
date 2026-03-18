@@ -34,13 +34,13 @@ aggregator は使わない。`skill-miner` 専用 CLI だけを使う。
 提案フェーズ:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3
+python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3 --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl
 ```
 
 workspace 制限を外して広域観測する場合:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3 --all-sessions
+python3 <plugin-root>/scripts/skill_miner_prepare.py --input-source auto --store-path ~/.daytrace/daytrace.sqlite3 --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions
 ```
 
 補足:
@@ -67,8 +67,14 @@ python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tm
 最終 proposal 組み立て:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
 ```
+
+永続化 path の扱い:
+
+- `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- `skill_miner_proposal.py` の skill handoff は `--skill-creator-handoff-dir` に保存される
+- CLI 自体は既定値を持つが、orchestration 側では副作用を意図的に扱うため path を明示する
 
 ## Execution Rules
 
@@ -208,6 +214,14 @@ B0 観測の方法と優先順位ルールは `references/b0-observation.md` を
 proposal の冒頭には観測範囲を明示し、3 区分で返す。
 内部 triage key（`ready` / `needs_research` / `rejected`）はそのままで、ユーザー向け見出しだけを変更する。
 
+`intent_trace` ルール:
+
+- proposal markdown には `intent_trace` を直接展開しない（raw intent の羅列はノイズになるため）
+- 根拠表示は `evidence_items[].summary` で完結させる
+- `intent_trace` は `decision_log_stub` にのみ含める（デバッグ・監査用）
+- LLM が分類 override する場合、`intent_trace` を根拠として判断ログ内で引用してよい
+- `needs_research` の `research_brief.questions` に intent 不一致を含めてよい
+
 ```markdown
 ### 観測範囲
 観測範囲: {workspace名} / 直近 {N}日間 / {使用した source リスト}
@@ -263,6 +277,41 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 候補が増える条件: {いつ再実行すると候補が出やすいか（例: 同じ workspace で 2-3 週間使い続けると反復パターンが明確化しやすい）}
 ```
 
+## Decision Log Contract
+
+`decision_log_stub[]` は proposal ごとに全候補分を出力し、次回判定への橋渡しに使う。
+
+```json
+{
+  "candidate_id": "id",
+  "label": "display name",
+  "recommended_action": "adopt | defer | reject",
+  "triage_status": "ready | needs_research | rejected",
+  "suggested_kind": "CLAUDE.md | skill | hook | agent",
+  "reason_codes": ["quality_flag_1", "..."],
+  "split_suggestions": ["split_axis_1"],
+  "intent_trace": ["intent_1", "intent_2"],
+  "user_decision": null,
+  "user_decision_timestamp": null,
+  "carry_forward": true
+}
+```
+
+フィールド説明:
+
+- `user_decision`: セッション中にユーザーが adopt / defer / reject を選んだ場合のみ埋まる。Python 側は `null` で初期化する
+- `user_decision_timestamp`: `user_decision` 設定時の ISO8601。Python 側は `null` で初期化する
+- `carry_forward`: 次回 prepare で考慮すべきか。デフォルト `true`
+- `intent_trace`: 監査用。proposal markdown には展開しない
+
+次回判定への反映ルール:
+
+- `user_decision="adopt"` かつ `CLAUDE.md` → CLAUDE.md に追記済み。次回は `## DayTrace Suggested Rules` と照合して重複 skip
+- `user_decision="adopt"` かつ `skill` → 生成済み想定。将来 store に adopted フラグを立てる（未実装）
+- `user_decision="defer"` → 次回も候補化される。observation_count 増加で confidence が自然に上がる
+- `user_decision="reject"` → 次回も候補化されうる（パターン変化を許容するため永続 reject しない）
+- `user_decision=null` → 未選択。`carry_forward=true` のまま次回に自然再出現
+
 ## Deep Research Rules
 
 `needs_research` 候補だけ追加調査してよい。
@@ -306,17 +355,129 @@ diff preview 例:
 +- Use pytest for verification.
 ```
 
+## Pre-Classification Contract
+
+`suggested_kind` は Python 側の `infer_suggested_kind()` がヒューリスティックに事前付与する。
+LLM は override できるが、明確な理由がない限り Python のデフォルトを尊重する。
+
+判定ルール（優先順）:
+
+1. `CLAUDE.md`: `artifact_hints` に `claude-md` または `rule_hints` に CLAUDE.md 系ルール名 → `CLAUDE.md`
+2. `hook`: 上位 `task_shape` が全て hook 向き（`run_tests` 等） → `hook`
+3. `skill`: 非汎用 `task_shape` が 1 つ以上 → `skill`
+4. `agent`: `total_packets >= 4` かつ（agent 向き `task_shape` または `rule_hints` あり） → `agent`
+5. フォールバック: 上記いずれにも該当しない → `skill`
+
+`agent` は Python 側がヒューリスティックに候補提示できるが、条件が厳しいため実際に付与されるケースは少ない。
+LLM は `suggested_kind_source="heuristic"` の場合、evidence を確認して override してよい。
+
+LLM が override する条件:
+
+- candidate の `representative_examples` を読み、明らかに別分類が適切な場合
+- Python 側が `skill` をデフォルトで返したが、内容がルール固定だけで手順がない場合（→ `CLAUDE.md` に override）
+- Python 側が `skill` をデフォルトで返したが、「どう振る舞うか」が主題で継続的役割が明白な場合（→ `agent` に override）
+- Python 側が `agent` を返したが、定型フローに落とせる場合（→ `skill` に override）
+- override 時は判断ログに理由を記録する
+
+## Oversized Cluster Guard
+
+`oversized_cluster` / `weak_semantic_cohesion` / `split_recommended` / `near_match_dense` は research 段階の blocking signal とみなす。
+これらが未解消のまま `ready` に入ることはない。
+
+- judgment なしの blocking signal → `needs_research` に強制
+- judgment で `promote_ready` された candidate → 追加調査で blocking signal を解消済みとして `提案（固定化を推奨）` へ昇格してよい
+- proposal markdown には `研究で解消: ...` を出し、何を解消して ready にしたかを残す
+- oversized が解消されたことを claim するのは「cluster 全体が縮んだ」という意味ではなく、「sampled refs では 1 つの再利用可能パターンとして説明できた」という意味に限る
+
+## Skill Scaffold Draft Spec
+
+`suggested_kind=skill` の candidate が選択された場合、DayTrace は skill scaffold context を構造化して提示する。
+実際の skill 生成は `skill-creator` skill に委ねる。
+
+DayTrace 側の責務:
+
+1. candidate から `skill_scaffold_context` を構造化する（`build_skill_scaffold_context()` が返す）
+2. context には `skill_name`, `goal`, `task_shapes`, `artifact_hints`, `rule_hints`, `execution_hints`, `representative_examples`, `evidence_summaries` を含む
+3. scaffold context を `skill-creator` への引き継ぎプロンプトとして出力する
+
+出力テンプレート:
+
+```markdown
+### Skill Scaffold Draft: {skill_name}
+
+この候補は {observation_count}回の反復パターンから抽出されました。
+
+**Goal:** {goal}
+**成果物:** {artifact_hints}
+**適用ルール:** {rule_hints}
+
+**代表的な使用例:**
+- {example_1}
+- {example_2}
+
+→ `/skill-creator` で本格的な SKILL.md を生成できます。
+  上記の context を skill-creator に渡してください。
+```
+
+skill-creator への Handoff:
+
+- DayTrace は scaffold context を構造化テキストで提示するだけで、skill-creator を自動起動しない
+- ユーザーが `/skill-creator` を呼ぶ際に context を参照して渡す
+- proposal markdown の末尾に以下のガイドを表示する:
+
+```markdown
+→ この候補を skill 化するには:
+  `/skill-creator {skill_name} をスキルにしてください` と伝えてください。
+  上記の Goal / 成果物 / 適用ルール / 代表例が引き継がれます。
+```
+
+- skill-creator は自然言語入力を受け付けるため、構造化 JSON の受け渡しは不要
+- DayTrace の scaffold_draft は skill-creator にとっての参考情報であり、binding ではない
+
+DayTrace がやらないこと:
+
+- SKILL.md ファイルの直接生成
+- skill-creator の自動起動
+- skill のデプロイや有効化
+- scaffold context の skill-creator 側フォーマットへの変換
+
 ## Detail / Draft Rules
 
 - `提案（固定化を推奨）` に候補がある場合だけ、次セッションで 1 件選んでもらう
 - 選択候補の `session_refs` だけを `skill_miner_detail.py --refs ...` で取得する
-- `CLAUDE.md` 以外は次セッションへ送る
+- `CLAUDE.md` は immediate apply path で対応する
+- `skill` は Skill Scaffold Draft Spec に従い scaffold context を出す
+- `hook` / `agent` は以下の Next Step Contract に従う
 - detail phase でも raw history 全量には戻らない
+
+### Hook / Agent Next Step Contract
+
+`hook` または `agent` の候補が選択された場合、設計案を提示して次セッションへ送る。
+DayTrace は設計案の提示のみを担い、settings.json 書き込みや agent 定義ファイル生成は行わない。
+
+hook 設計案（`tool_signature` + `rule_hints` から抽出）:
+
+- **トリガーイベント:** PreToolUse | PostToolUse | Stop | ...
+- **対象ツール:** tool_name リスト
+- **アクション:** 実行内容の 1 文説明
+- **ガード条件:** 実行しない条件の 1 文説明
+- ガイド: `「{candidate_label} を hook にしてください」と次セッションで指示`
+
+agent 設計案（`representative_examples` + `rule_hints` から抽出）:
+
+- **役割:** 1 文での役割定義
+- **行動原則:** rule_hints ベースの振る舞いルール
+- **想定トリガー:** いつこの agent を使うか
+- **参考パターン:** representative_examples から 1-2 件
+- ガイド: `「{candidate_label} を agent にしてください」と次セッションで指示`
 
 ## Completion Check
 
 - `prepare` は 1 回だけ実行している
 - 期間 contract は `7 日開始 + workspace-only adaptive 30 日` / `--all-sessions` に固定されている
 - 4 分類以外の古い説明が残っていない
+- `suggested_kind` が Python の `infer_suggested_kind()` で事前付与されている
+- `oversized_cluster` が ready に流れていない
 - proposal phase の根拠が `evidence_items[]` だけで表示できる
-- `0 件` を正常系として扱い、返却上限は `prepare` の `top_n` と一致している
+- `0 件` を正常系として扱い、観測サマリと成長兆候を表示している
+- 返却上限は `prepare` の `top_n` と一致している

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -19,10 +20,19 @@ DETAIL_SOURCE = "skill-miner-detail"
 RESEARCH_JUDGE_SOURCE = "skill-miner-research-judge"
 PROPOSAL_SOURCE = "skill-miner-proposal"
 
+DEFAULT_DAYTRACE_DIR = Path("~/.daytrace").expanduser()
+DEFAULT_DECISION_LOG_PATH = DEFAULT_DAYTRACE_DIR / "skill-miner-decisions.jsonl"
+DEFAULT_SKILL_CREATOR_HANDOFF_DIR = DEFAULT_DAYTRACE_DIR / "skill-creator-handoffs"
+
 MAX_SNIPPETS = 2
 RAW_SNIPPET_LIMIT = 100
 PRIMARY_INTENT_LIMIT = 300
 FULL_USER_INTENT_LIMIT = 1200
+MAX_INTENT_TRACE_ITEMS = 4
+MAX_CONSTRAINT_ITEMS = 4
+MAX_ACCEPTANCE_CRITERIA_ITEMS = 4
+MAX_BLOCK_KEYS = 12
+PRIMARY_INTENT_DIRECTIVE_EXTRAS = 2
 MAX_USER_HIGHLIGHTS = 8
 USER_HIGHLIGHT_LIMIT = 400
 MAX_ASSISTANT_HIGHLIGHTS = 3
@@ -33,6 +43,7 @@ DEFAULT_GAP_HOURS = 8
 DEFAULT_RESEARCH_REF_LIMIT = 5
 OVERSIZED_CLUSTER_MIN_PACKETS = 8
 OVERSIZED_CLUSTER_MIN_SHARE = 0.5
+NEAR_MATCH_DENSE_MIN_COUNT = 2
 SKILL_MINER_PACKET_VERSION = 2
 
 PRIMARY_INTENT_SOURCE_RAW = "raw_user_message"
@@ -59,6 +70,62 @@ GENERIC_TOOL_SIGNATURES = {
     "read",
     "rg",
     "sed",
+}
+
+VALID_SUGGESTED_KINDS = {"CLAUDE.md", "skill", "hook", "agent"}
+CONSTRAINT_RULE_NAMES = {"never-do", "confirm-before"}
+ACCEPTANCE_RULE_NAMES = {"findings-first", "file-line-refs", "tests-before-close", "format-rule"}
+CLAUDE_MD_RULE_NAMES = {
+    "findings-first",
+    "file-line-refs",
+    "tests-before-close",
+    "always-do",
+    "never-do",
+    "format-rule",
+    "confirm-before",
+}
+HOOK_SHAPES = {"run_tests"}
+SKILL_SHAPES = {"prepare_report", "write_markdown", "debug_failure", "implement_feature", "edit_config", "review_changes"}
+AGENT_SHAPES = {"summarize_findings", "search_code", "inspect_files"}
+CONSTRAINT_KEYWORDS = (
+    "never",
+    "avoid",
+    "do not",
+    "don't",
+    "without",
+    "must not",
+    "禁止",
+    "しないで",
+    "やめて",
+    "避け",
+    "確認してから",
+    "先に確認",
+)
+ACCEPTANCE_KEYWORDS = (
+    "include",
+    "return",
+    "report",
+    "list",
+    "show",
+    "verify",
+    "test",
+    "format",
+    "severity",
+    "line",
+    "refs",
+    "出力",
+    "根拠",
+    "行番号",
+    "重要度",
+    "テスト",
+    "検証",
+)
+READY_BLOCKING_FLAGS = {"oversized_cluster", "split_recommended", "weak_semantic_cohesion", "near_match_dense"}
+READY_BLOCKING_FLAG_LABELS = {
+    "oversized_cluster": "巨大クラスタ",
+    "split_recommended": "分割推奨",
+    "weak_semantic_cohesion": "意味のまとまり不足",
+    "near_match_dense": "近接クラスタ競合",
 }
 
 BROAD_LABEL_TASK_SHAPES = {"prepare_report", "write_markdown", "search_code", "inspect_files", "summarize_findings"}
@@ -262,6 +329,8 @@ ASSISTANT_REPEATED_RULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ),
 ]
 
+DIRECTIVE_RULE_NAMES = {label for label, _patterns in USER_REPEATED_RULE_PATTERNS}
+
 MATCH_TEXT_NORMALIZATIONS: tuple[tuple[str, str], ...] = (
     ("pull request", "pr"),
     ("findings first", "findings-first"),
@@ -357,6 +426,10 @@ def normalize_match_text(text: str) -> str:
     return normalized
 
 
+def normalized_directive_label(text: str) -> str:
+    return normalize_match_text(text).strip(" \t\r\n-*_`'\"[](){}:;,.!?")
+
+
 def pattern_in_text(text: str, pattern: str) -> bool:
     lowered = text.lower()
     needle = pattern.lower()
@@ -417,6 +490,38 @@ def compact_snippet(text: str, workspace: str | None, limit: int = RAW_SNIPPET_L
 
 def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _dedupe_texts(values: list[str], *, limit: int | None = None) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _collapse_whitespace(str(value))
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+        if limit is not None and len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _token_overlap_ratio(left: str, right: str) -> float:
+    left_tokens = tokenize(left)
+    right_tokens = tokenize(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
+
+
+def _candidate_text_list(candidate: dict[str, Any], key: str, *, limit: int) -> list[str]:
+    raw = candidate.get(key)
+    if not isinstance(raw, list):
+        return []
+    return _dedupe_texts([str(item) for item in raw if str(item).strip()], limit=limit)
 
 
 def _line_is_user_wrapper(line: str) -> bool:
@@ -480,11 +585,90 @@ def _message_priority(text: str) -> tuple[int, int, int]:
     task_shapes = infer_task_shapes([text], [])
     artifact_hints = infer_artifact_hints([text], [])
     has_specific_shape = any(shape not in GENERIC_TASK_SHAPES for shape in task_shapes)
+    directive_like = is_directive_like_user_message(text)
     return (
         1 if has_specific_shape else 0,
+        1 if directive_like else 0,
         len(task_shapes),
         len(artifact_hints) + token_count,
     )
+
+
+def build_intent_trace(
+    user_messages: list[str],
+    assistant_messages: list[str],
+    workspace: str | None,
+) -> list[str]:
+    cleaned_user_messages = [
+        compact_snippet(cleaned, workspace, limit=PRIMARY_INTENT_LIMIT)
+        for cleaned in (clean_user_message_text(message) for message in user_messages)
+        if cleaned
+    ]
+    if cleaned_user_messages:
+        return _dedupe_texts(cleaned_user_messages, limit=MAX_INTENT_TRACE_ITEMS)
+
+    assistant_fallbacks = [
+        compact_snippet(_collapse_whitespace(str(message)), workspace, limit=PRIMARY_INTENT_LIMIT)
+        for message in assistant_messages
+        if _collapse_whitespace(str(message))
+    ]
+    return _dedupe_texts(assistant_fallbacks, limit=MAX_INTENT_TRACE_ITEMS)
+
+
+def _directive_kind(text: str, workspace: str | None) -> str | None:
+    directive_label = normalized_directive_label(text)
+    if directive_label in CONSTRAINT_RULE_NAMES:
+        return "constraint"
+    if directive_label in ACCEPTANCE_RULE_NAMES:
+        return "acceptance"
+    normalized_rules = [
+        str(item.get("normalized") or "")
+        for item in infer_rule_hints([text], workspace, role="user")
+        if item.get("normalized")
+    ]
+    if any(rule in CONSTRAINT_RULE_NAMES for rule in normalized_rules):
+        return "constraint"
+    if any(rule in ACCEPTANCE_RULE_NAMES for rule in normalized_rules):
+        return "acceptance"
+
+    lowered = normalize_match_text(text)
+    if any(pattern_in_text(lowered, keyword) for keyword in CONSTRAINT_KEYWORDS):
+        return "constraint"
+    if any(pattern_in_text(lowered, keyword) for keyword in ACCEPTANCE_KEYWORDS):
+        return "acceptance"
+    return None
+
+
+def build_constraints(user_messages: list[str], workspace: str | None) -> list[str]:
+    constraints: list[str] = []
+    for message in user_messages:
+        cleaned = clean_user_message_text(message)
+        if not cleaned or not is_directive_like_user_message(cleaned):
+            continue
+        if _directive_kind(cleaned, workspace) != "constraint":
+            continue
+        directive_label = normalized_directive_label(cleaned)
+        if directive_label in DIRECTIVE_RULE_NAMES:
+            constraints.append(directive_label)
+        else:
+            constraints.append(compact_snippet(cleaned, workspace, limit=PRIMARY_INTENT_LIMIT))
+    return _dedupe_texts(constraints, limit=MAX_CONSTRAINT_ITEMS)
+
+
+def build_acceptance_criteria(user_messages: list[str], workspace: str | None) -> list[str]:
+    criteria: list[str] = []
+    for message in user_messages:
+        cleaned = clean_user_message_text(message)
+        if not cleaned or not is_directive_like_user_message(cleaned):
+            continue
+        if _directive_kind(cleaned, workspace) != "acceptance":
+            continue
+        directive_label = normalized_directive_label(cleaned)
+        if directive_label in DIRECTIVE_RULE_NAMES:
+            criteria.append(directive_label)
+        else:
+            criteria.append(compact_snippet(cleaned, workspace, limit=PRIMARY_INTENT_LIMIT))
+    return _dedupe_texts(criteria, limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
 
 
 def build_primary_intent_fields(
@@ -496,25 +680,47 @@ def build_primary_intent_fields(
 ) -> tuple[str, str, str]:
     cleaned_candidates: list[tuple[tuple[int, int, int], int, int, str]] = []
     cleaned_fallbacks: list[tuple[int, int, str]] = []
+    intent_trace = build_intent_trace(user_messages, assistant_messages, workspace)
+    directive_extras: list[str] = []
+    chronological_cleaned: list[str] = []
 
     for index, message in enumerate(user_messages):
         cleaned = clean_user_message_text(message)
         if not cleaned:
             continue
+        chronological_cleaned.append(cleaned)
         token_count = len(tokenize(cleaned))
-        if token_count >= 4:
+        if token_count >= 4 or is_directive_like_user_message(cleaned):
             cleaned_candidates.append((_message_priority(cleaned), index, len(cleaned), cleaned))
         else:
             cleaned_fallbacks.append((index, len(cleaned), cleaned))
+        if is_directive_like_user_message(cleaned):
+            directive_extras.append(cleaned)
 
     if cleaned_candidates:
         _priority, _index, _length, selected = max(
             cleaned_candidates,
             key=lambda item: (item[0], item[1], item[2]),
         )
+        if _directive_kind(selected, workspace) is not None:
+            for candidate_text in chronological_cleaned:
+                if candidate_text == selected:
+                    continue
+                if _directive_kind(candidate_text, workspace) is None:
+                    selected = candidate_text
+                    break
+        primary_parts = [selected]
+        for directive in _dedupe_texts(directive_extras):
+            if normalize_match_text(directive) == normalize_match_text(selected):
+                continue
+            if _token_overlap_ratio(selected, directive) >= 0.75:
+                continue
+            primary_parts.append(directive)
+            if len(primary_parts) >= 1 + PRIMARY_INTENT_DIRECTIVE_EXTRAS:
+                break
         return (
-            compact_snippet(selected, workspace, limit=PRIMARY_INTENT_LIMIT),
-            compact_snippet(selected, workspace, limit=FULL_USER_INTENT_LIMIT),
+            compact_snippet("; ".join(primary_parts), workspace, limit=PRIMARY_INTENT_LIMIT),
+            compact_snippet(" | ".join(intent_trace or [selected]), workspace, limit=FULL_USER_INTENT_LIMIT),
             user_message_source,
         )
 
@@ -522,7 +728,7 @@ def build_primary_intent_fields(
         _index, _length, selected = max(cleaned_fallbacks, key=lambda item: (item[0], item[1]))
         return (
             compact_snippet(selected, workspace, limit=PRIMARY_INTENT_LIMIT),
-            compact_snippet(selected, workspace, limit=FULL_USER_INTENT_LIMIT),
+            compact_snippet(" | ".join(intent_trace or [selected]), workspace, limit=FULL_USER_INTENT_LIMIT),
             user_message_source,
         )
 
@@ -554,6 +760,8 @@ def is_directive_like_user_message(text: str) -> bool:
     if any(re.search(pattern, lowered) for pattern in DIRECTIVE_ENGLISH_PATTERNS):
         return True
     if any(pattern in candidate for pattern in DIRECTIVE_JAPANESE_PATTERNS):
+        return True
+    if normalized_directive_label(candidate) in DIRECTIVE_RULE_NAMES:
         return True
     return False
 
@@ -724,10 +932,14 @@ def _infer_rule_items(
         if role == "user" and not is_directive_like_user_message(candidate_text):
             continue
         lowered = normalize_match_text(candidate_text)
+        directive_label = normalized_directive_label(candidate_text)
         for label, rule_patterns in patterns:
-            if any(pattern_in_text(lowered, pattern) for pattern in rule_patterns):
+            if directive_label == label or any(pattern_in_text(lowered, pattern) for pattern in rule_patterns):
                 matched_messages[label].add(candidate_text)
-                snippets.setdefault(label, compact_snippet(candidate_text, workspace, limit=PRIMARY_INTENT_LIMIT))
+                snippets.setdefault(
+                    label,
+                    label if directive_label == label else compact_snippet(candidate_text, workspace, limit=PRIMARY_INTENT_LIMIT),
+                )
 
     rules: list[dict[str, str]] = []
     for label, _patterns in patterns:
@@ -1013,6 +1225,9 @@ def build_packet(
     snippets: list[str] = []
     for message in feature_texts:
         append_unique_snippet(snippets, message, workspace)
+    intent_trace = build_intent_trace(user_messages, assistant_messages, workspace)
+    constraints = build_constraints(user_messages, workspace)
+    acceptance_criteria = build_acceptance_criteria(user_messages, workspace)
     primary_intent, full_user_intent, primary_intent_source = build_primary_intent_fields(
         user_messages,
         assistant_messages,
@@ -1038,6 +1253,9 @@ def build_packet(
         "primary_intent": primary_intent,
         "full_user_intent": full_user_intent,
         "primary_intent_source": primary_intent_source,
+        "intent_trace": intent_trace,
+        "constraints": constraints,
+        "acceptance_criteria": acceptance_criteria,
         "representative_snippets": snippets,
         "user_rule_hints": user_rule_hints,
         "assistant_rule_hints": assistant_rule_hints,
@@ -1094,31 +1312,33 @@ def stable_block_keys(packet: dict[str, Any]) -> list[str]:
     task_shapes = packet.get("task_shape") or []
     artifact_hints = [str(value) for value in packet.get("artifact_hints", []) if value]
     repeated_rules = [str(item.get("normalized") or "") for item in packet_user_rule_hints(packet) if item.get("normalized")]
-    first_shape = next((str(shape) for shape in task_shapes if shape not in GENERIC_TASK_SHAPES), "")
-    if not first_shape and task_shapes:
-        first_shape = str(task_shapes[0])
-    first_artifact = artifact_hints[0] if artifact_hints else ""
-    first_rule = repeated_rules[0] if repeated_rules else ""
 
-    if first_shape and first_artifact:
-        keys.append(f"task+artifact:{first_shape}:{first_artifact}")
-    if first_shape and first_rule:
-        keys.append(f"task+rule:{first_shape}:{first_rule}")
-    if first_artifact and first_rule:
-        keys.append(f"artifact+rule:{first_artifact}:{first_rule}")
-    if first_shape:
-        keys.append(f"task:{first_shape}")
-    if first_artifact:
-        keys.append(f"artifact:{first_artifact}")
-    if first_rule:
-        keys.append(f"rule:{first_rule}")
+    specific_shapes = [str(shape) for shape in task_shapes if str(shape) and str(shape) not in GENERIC_TASK_SHAPES]
+    shape_candidates = _dedupe_texts(specific_shapes or [str(shape) for shape in task_shapes if shape], limit=2)
+    artifact_candidates = _dedupe_texts(artifact_hints, limit=2)
+    rule_candidates = _dedupe_texts(repeated_rules, limit=2)
+
+    for shape in shape_candidates:
+        for artifact in artifact_candidates:
+            keys.append(f"task+artifact:{shape}:{artifact}")
+        for rule in rule_candidates:
+            keys.append(f"task+rule:{shape}:{rule}")
+    for artifact in artifact_candidates:
+        for rule in rule_candidates:
+            keys.append(f"artifact+rule:{artifact}:{rule}")
+    for shape in shape_candidates:
+        keys.append(f"task:{shape}")
+    for artifact in artifact_candidates:
+        keys.append(f"artifact:{artifact}")
+    for rule in rule_candidates:
+        keys.append(f"rule:{rule}")
     if top_tool != "none" and top_tool not in GENERIC_TOOL_SIGNATURES:
         keys.append(f"tool:{top_tool}")
     elif top_tool != "none" and not keys:
         keys.append(f"tool:{top_tool}")
     if not keys:
         keys.append("misc")
-    return list(dict.fromkeys(keys))
+    return list(dict.fromkeys(keys))[:MAX_BLOCK_KEYS]
 
 
 def candidate_score(support: dict[str, Any]) -> float:
@@ -1145,6 +1365,8 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
     tool_signatures = [str(value) for value in candidate.get("common_tool_signatures", []) if value]
     rule_hints = [str(value) for value in candidate.get("rule_hints", []) if value]
     representative_examples = [str(value) for value in candidate.get("representative_examples", []) if value]
+    split_suggestions = [str(value) for value in candidate.get("split_suggestions", []) if str(value).strip()]
+    near_matches = candidate.get("near_matches")
 
     quality_flags: list[str] = []
     cluster_share = (float(total_packets) / float(total_packets_all)) if total_packets_all > 0 else 0.0
@@ -1168,6 +1390,32 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
         weak_semantic_cohesion = jaccard_score(left_tokens, right_tokens) < 0.2
     if weak_semantic_cohesion:
         quality_flags.append("weak_semantic_cohesion")
+
+    split_signal = len(split_suggestions) >= 2
+    if split_signal:
+        quality_flags.append("split_recommended")
+
+    near_match_scores: list[float] = []
+    near_match_reasons: list[str] = []
+    if isinstance(near_matches, list):
+        for item in near_matches:
+            if not isinstance(item, dict):
+                continue
+            try:
+                near_match_scores.append(float(item.get("score", 0.0)))
+            except (TypeError, ValueError):
+                continue
+            reason = str(item.get("reason") or "").strip()
+            if reason:
+                near_match_reasons.append(reason)
+    near_match_dense = (
+        split_signal
+        and
+        len(near_match_scores) >= NEAR_MATCH_DENSE_MIN_COUNT
+        and "complete_link_guard" in near_match_reasons
+    )
+    if near_match_dense:
+        quality_flags.append("near_match_dense")
 
     single_session_like = total_packets <= 1
     if single_session_like:
@@ -1194,6 +1442,10 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
         score -= 1
     if weak_semantic_cohesion:
         score -= 1
+    if split_signal:
+        score -= 1
+    if near_match_dense:
+        score -= 1
     if single_session_like:
         score -= 2
 
@@ -1206,14 +1458,22 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
         confidence = "medium"
 
     generic_cluster = generic_task_shape and generic_tools
-    proposal_ready = confidence in {"strong", "medium"} and not is_oversized_cluster and not weak_semantic_cohesion and not generic_cluster and not single_session_like
+    proposal_ready = (
+        confidence in {"strong", "medium"}
+        and not is_oversized_cluster
+        and not weak_semantic_cohesion
+        and not generic_cluster
+        and not split_signal
+        and not near_match_dense
+        and not single_session_like
+    )
 
     triage_status = "ready"
     if single_session_like:
         triage_status = "rejected"
     elif proposal_ready:
         triage_status = "ready"
-    elif is_oversized_cluster or weak_semantic_cohesion:
+    elif is_oversized_cluster or weak_semantic_cohesion or split_signal or near_match_dense:
         triage_status = "needs_research"
     elif confidence == "insufficient":
         triage_status = "rejected"
@@ -1241,6 +1501,17 @@ def build_candidate_quality(candidate: dict[str, Any], total_packets_all: int) -
         "evidence_summary": evidence_summary,
         "confidence_reason": confidence_reason,
     }
+
+
+HOOK_TOOL_INDICATORS = {"lint", "eslint", "prettier", "black", "isort", "ruff", "mypy", "flake8", "shellcheck", "hadolint"}
+HOOK_RULE_INDICATORS = {"tests-before-close", "format-rule"}
+RULE_DOMINANT_INDICATORS = {"always-do", "never-do", "format-rule", "confirm-before", "findings-first", "file-line-refs", "concise-updates"}
+SKILL_ARTIFACT_INDICATORS = {"report", "markdown", "review", "code"}
+SKILL_SHAPE_INDICATORS = {"prepare_report", "write_markdown", "debug_failure", "implement_feature", "run_tests"}
+
+
+def infer_suggested_kind(candidate: dict[str, Any]) -> str:
+    return infer_suggested_kind_details(candidate)["kind"]
 
 
 def annotate_unclustered_packet(packet: dict[str, Any]) -> dict[str, Any]:
@@ -1311,6 +1582,9 @@ def build_research_targets(
 def build_research_brief(candidate: dict[str, Any]) -> dict[str, Any]:
     label = str(candidate.get("label") or "candidate")
     quality_flags = [str(value) for value in candidate.get("quality_flags", []) if value]
+    intent_trace = _candidate_text_list(candidate, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)
+    constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
+    acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
     objective = f"Validate whether '{label}' is one repeatable automation candidate or a merged cluster that should be split or rejected."
     questions = [
         "Do the target refs show one stable objective repeated across sessions?",
@@ -1329,6 +1603,12 @@ def build_research_brief(candidate: dict[str, Any]) -> dict[str, Any]:
         decision_rules.append("Do not treat shared review/search tooling alone as evidence of one reusable automation pattern.")
     if "weak_semantic_cohesion" in quality_flags:
         decision_rules.append("If representative examples point to different goals, keep the candidate out of ready state.")
+    if len(intent_trace) >= 2:
+        questions.append("Which intent variants are the same workflow, and which ones indicate a mixed cluster?")
+    if constraints:
+        decision_rules.append("Keep the observed user constraints intact when deciding whether this should become one reusable workflow.")
+    if acceptance_criteria:
+        questions.append("Do the sampled refs preserve the observed acceptance/output expectations closely enough to justify one proposal?")
 
     return {
         "objective": objective,
@@ -1365,6 +1645,8 @@ def build_detail_signal(detail: dict[str, Any]) -> dict[str, Any]:
         "user_repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
         "assistant_repeated_rules": [item.get("normalized") for item in assistant_repeated_rules if item.get("normalized")],
         "repeated_rules": [item.get("normalized") for item in user_repeated_rules if item.get("normalized")],
+        "constraints": build_constraints(user_texts, str(detail.get("workspace") or "")),
+        "acceptance_criteria": build_acceptance_criteria(user_texts, str(detail.get("workspace") or "")),
         "tool_names": tools,
         "primary_intent": primary_intent,
     }
@@ -1622,6 +1904,248 @@ def _normalize_proposed_rules(proposed_rules: list[str] | str) -> list[str]:
     return normalized
 
 
+def infer_suggested_kind_details(candidate: dict[str, Any]) -> dict[str, str]:
+    task_shapes = [str(value) for value in candidate.get("common_task_shapes", candidate.get("task_shape", [])) if value]
+    artifact_hints = [str(value) for value in candidate.get("artifact_hints", []) if value]
+    rule_hints = [str(value) for value in candidate.get("rule_hints", []) if value]
+    support = candidate.get("support") if isinstance(candidate.get("support"), dict) else {}
+    total_packets = int(support.get("total_packets", 0))
+
+    if "claude-md" in artifact_hints or any(rule in CLAUDE_MD_RULE_NAMES for rule in rule_hints):
+        return {"kind": "CLAUDE.md", "reason": "rule-centric repeated instruction"}
+    if task_shapes and all(shape in HOOK_SHAPES for shape in task_shapes[:2]):
+        return {"kind": "hook", "reason": "deterministic repeated automation step"}
+    if any(shape in SKILL_SHAPES for shape in task_shapes):
+        return {"kind": "skill", "reason": "multi-step reusable workflow"}
+    if total_packets >= 4 and (any(shape in AGENT_SHAPES for shape in task_shapes) or rule_hints):
+        return {"kind": "agent", "reason": "behavior-oriented repeated guidance"}
+    return {"kind": "skill", "reason": "default reusable workflow fallback"}
+
+
+def _normalize_candidate_kind(candidate: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(candidate)
+    raw_kind = str(candidate.get("suggested_kind") or "").strip()
+    if raw_kind in VALID_SUGGESTED_KINDS:
+        normalized["suggested_kind_source"] = "provided"
+        return normalized
+    inferred = infer_suggested_kind_details(candidate)
+    normalized["suggested_kind"] = inferred["kind"]
+    normalized["suggested_kind_reason"] = inferred["reason"]
+    normalized["suggested_kind_source"] = "heuristic"
+    return normalized
+
+
+def _skill_slug(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", normalize_match_text(text))
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug[:48] or "daytrace-skill-draft"
+
+
+def build_skill_creator_handoff(context: dict[str, Any]) -> dict[str, Any]:
+    skill_name = str(context.get("skill_name") or "daytrace-skill-draft").strip() or "daytrace-skill-draft"
+    goal = str(context.get("goal") or "this repeated workflow").strip() or "this repeated workflow"
+    artifact_hints = ", ".join(str(item) for item in context.get("artifact_hints", []) if str(item).strip()) or "n/a"
+    rule_hints = ", ".join(str(item) for item in context.get("rule_hints", []) if str(item).strip()) or "n/a"
+    representative_examples = [str(item) for item in context.get("representative_examples", []) if str(item).strip()]
+    intent_trace = [str(item) for item in context.get("intent_trace", []) if str(item).strip()]
+    constraints = [str(item) for item in context.get("constraints", []) if str(item).strip()]
+    acceptance_criteria = [str(item) for item in context.get("acceptance_criteria", []) if str(item).strip()]
+    example_lines = "\n".join(f"- {example}" for example in representative_examples[:3]) or "- n/a"
+    intent_lines = "\n".join(f"- {item}" for item in intent_trace[:3]) or "- n/a"
+    constraint_lines = "\n".join(f"- {item}" for item in constraints[:3]) or "- n/a"
+    acceptance_lines = "\n".join(f"- {item}" for item in acceptance_criteria[:3]) or "- n/a"
+
+    prompt = "\n".join(
+        [
+            f"Create or refine a reusable skill named `{skill_name}`.",
+            f"Goal: {goal}",
+            f"Artifact hints: {artifact_hints}",
+            f"Rule hints: {rule_hints}",
+            "Representative examples:",
+            example_lines,
+            "Intent trace:",
+            intent_lines,
+            "Constraints:",
+            constraint_lines,
+            "Acceptance criteria:",
+            acceptance_lines,
+            "Use the official skill-creator workflow and treat the scaffold context as guidance, not a final draft.",
+        ]
+    )
+
+    return {
+        "tool": "skill-creator",
+        "entrypoint": "/skill-creator",
+        "official": True,
+        "mode": "manual-handoff",
+        "target_skill_name": skill_name,
+        "suggested_invocation": f"/skill-creator {skill_name} をスキルにしてください",
+        "prompt": prompt,
+        "instructions": [
+            "Open /skill-creator manually.",
+            "Pass the scaffold context alongside this prompt.",
+            "Let skill-creator produce the actual SKILL.md and any bundled resources.",
+        ],
+        "required_context_fields": [
+            "skill_name",
+            "goal",
+            "task_shapes",
+            "artifact_hints",
+            "rule_hints",
+            "intent_trace",
+            "constraints",
+            "acceptance_criteria",
+            "representative_examples",
+            "evidence_summaries",
+        ],
+    }
+
+
+def candidate_split_suggestions(candidate: dict[str, Any]) -> list[str]:
+    split_suggestions = candidate.get("split_suggestions")
+    if isinstance(split_suggestions, list) and split_suggestions:
+        return [str(value) for value in split_suggestions if str(value).strip()]
+    judgment = candidate.get("research_judgment")
+    if isinstance(judgment, dict):
+        raw = judgment.get("split_suggestions")
+        if isinstance(raw, list):
+            return [str(value) for value in raw if str(value).strip()]
+    return []
+
+
+def build_next_step_stub(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    kind = str(candidate.get("suggested_kind") or "").strip()
+    if kind not in {"hook", "agent"}:
+        return None
+
+    label = str(candidate.get("label") or "candidate").strip() or "candidate"
+    task_shapes = [str(value) for value in candidate.get("common_task_shapes", candidate.get("task_shape", [])) if str(value).strip()]
+    tool_names = [
+        str(value)
+        for value in candidate.get("common_tool_signatures", candidate.get("tool_signature", []))
+        if str(value).strip() and str(value) not in GENERIC_TOOL_SIGNATURES
+    ][:3]
+    rule_hints = [str(value) for value in candidate.get("rule_hints", []) if str(value).strip()]
+    constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
+    acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
+    representative_examples = [str(value) for value in candidate.get("representative_examples", []) if str(value).strip()]
+
+    if kind == "hook":
+        trigger_event = "Stop" if "run_tests" in task_shapes or "tests-before-close" in rule_hints else "PostToolUse"
+        action_summary = "再現性の高い定型チェックを自動で挟む"
+        if "run_tests" in task_shapes:
+            action_summary = "関連変更があるときにテスト系コマンドを自動で実行する"
+        elif tool_names:
+            action_summary = f"{', '.join(tool_names)} 周辺の定型処理を自動化する"
+        guard_condition = constraints[0] if constraints else "無関係な変更や一度きりの作業では実行しない"
+        return {
+            "kind": "hook",
+            "prompt": f"「{label} を hook にしてください」と次セッションで指示",
+            "trigger_event": trigger_event,
+            "target_tools": tool_names,
+            "action_summary": action_summary,
+            "guard_condition": guard_condition,
+        }
+
+    behavior_rules = _dedupe_texts([*rule_hints[:2], *constraints[:2], *acceptance_criteria[:1]], limit=3)
+    role_summary = representative_examples[0] if representative_examples else f"{label} を継続的に補助する"
+    return {
+        "kind": "agent",
+        "prompt": f"「{label} を agent にしてください」と次セッションで指示",
+        "role_summary": role_summary,
+        "behavior_rules": behavior_rules,
+        "trigger": "同種の依頼が続く時に呼び出し、振る舞いを固定化する",
+    }
+
+
+def build_candidate_decision_key(candidate: dict[str, Any]) -> str:
+    normalized = _normalize_candidate_kind(candidate)
+    identity = {
+        "suggested_kind": str(normalized.get("suggested_kind") or "").strip(),
+        "label": normalize_match_text(str(normalized.get("label") or normalized.get("primary_intent") or "").strip()),
+        "intent_trace": [
+            normalize_match_text(item)
+            for item in _candidate_text_list(normalized, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)[:2]
+        ],
+        "constraints": [
+            normalize_match_text(item)
+            for item in _candidate_text_list(normalized, "constraints", limit=MAX_CONSTRAINT_ITEMS)[:2]
+        ],
+        "acceptance_criteria": [
+            normalize_match_text(item)
+            for item in _candidate_text_list(normalized, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)[:2]
+        ],
+    }
+    serialized = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def build_candidate_decision_stub(candidate: dict[str, Any]) -> dict[str, Any]:
+    candidate = _normalize_candidate_kind(candidate)
+    triage_status = str(candidate.get("triage_status") or "")
+    if triage_status == "ready" and candidate.get("proposal_ready"):
+        action = "adopt"
+    elif triage_status == "needs_research":
+        action = "defer"
+    else:
+        action = "reject"
+    reason_codes = [str(flag) for flag in candidate.get("quality_flags", []) if str(flag).strip()]
+    if not reason_codes:
+        reason_codes = [triage_status or "unknown"]
+    intent_trace = _candidate_text_list(candidate, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)
+    constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
+    acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
+    decision_key = build_candidate_decision_key(candidate)
+    return {
+        "candidate_id": str(candidate.get("candidate_id") or candidate.get("packet_id") or ""),
+        "decision_key": decision_key,
+        "label": str(candidate.get("label") or candidate.get("primary_intent") or ""),
+        "recommended_action": action,
+        "triage_status": triage_status,
+        "suggested_kind": str(candidate.get("suggested_kind") or ""),
+        "reason_codes": reason_codes,
+        "split_suggestions": candidate_split_suggestions(candidate),
+        "intent_trace": intent_trace,
+        "constraints": constraints,
+        "acceptance_criteria": acceptance_criteria,
+        "user_decision": None,
+        "user_decision_timestamp": None,
+        "carry_forward": True,
+    }
+
+
+def build_learning_feedback(
+    ready: list[dict[str, Any]],
+    needs_research: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if ready:
+        return {
+            "status": "ready_candidates_available",
+            "reason_summary": "formalizable patterns were found",
+            "next_step": "adopt one ready candidate or inspect the scaffold context / next-step stub before applying it",
+            "split_candidates": [],
+        }
+
+    split_candidates = [
+        {
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "label": str(candidate.get("label") or ""),
+            "split_suggestions": candidate_split_suggestions(candidate),
+        }
+        for candidate in needs_research
+        if candidate_split_suggestions(candidate)
+    ]
+    return {
+        "status": "needs_more_observation" if needs_research else "insufficient_signal",
+        "reason_summary": _no_ready_reason_summary(needs_research, rejected),
+        "next_step": _no_ready_next_step(metadata),
+        "split_candidates": split_candidates,
+    }
+
+
 def build_claude_md_immediate_apply_preview(cwd: str | Path, proposed_rules: list[str] | str) -> dict[str, Any]:
     target_path = Path(cwd).expanduser().resolve() / CLAUDE_MD_FILENAME
     normalized_rules = _normalize_proposed_rules(proposed_rules)
@@ -1719,9 +2243,10 @@ def merge_judgment_into_candidate(candidate: dict[str, Any], judgment_payload: d
     merged = dict(candidate)
     if not judgment_payload:
         return merged
-    judgment = judgment_payload.get("judgment", judgment_payload)
-    if not isinstance(judgment, dict):
+    raw_judgment = judgment_payload.get("judgment", judgment_payload)
+    if not isinstance(raw_judgment, dict):
         return merged
+    judgment = dict(raw_judgment)
     merged["research_judgment"] = judgment
     recommendation = str(judgment.get("recommendation") or "")
     proposed_triage_status = str(judgment.get("proposed_triage_status") or merged.get("triage_status") or "")
@@ -1737,8 +2262,69 @@ def merge_judgment_into_candidate(candidate: dict[str, Any], judgment_payload: d
     elif judgment_reasons:
         merged["confidence_reason"] = judgment_reasons[0]
     if recommendation == "promote_ready":
-        merged["quality_flags"] = [flag for flag in merged.get("quality_flags", []) if flag != "weak_semantic_cohesion"]
+        resolved_quality_flags = {
+            str(flag).strip()
+            for flag in merged.get("resolved_quality_flags", [])
+            if str(flag).strip() in READY_BLOCKING_FLAGS
+        }
+        resolved_quality_flags.update(
+            str(flag).strip()
+            for flag in merged.get("quality_flags", [])
+            if str(flag).strip() in READY_BLOCKING_FLAGS
+        )
+        if resolved_quality_flags:
+            merged["resolved_quality_flags"] = sorted(resolved_quality_flags)
+            judgment["resolved_quality_flags"] = sorted(resolved_quality_flags)
+            merged["quality_flags"] = [
+                flag for flag in merged.get("quality_flags", []) if str(flag).strip() not in READY_BLOCKING_FLAGS
+            ]
     return merged
+
+
+def _is_oversized_and_unresolved(candidate: dict[str, Any]) -> bool:
+    """Return True if candidate still carries oversized_cluster after research resolution."""
+    quality_flags = candidate.get("quality_flags") or []
+    if "oversized_cluster" not in quality_flags:
+        return False
+    if "oversized_cluster" in _resolved_ready_blocking_flags(candidate):
+        return False
+    return True
+
+
+def _resolved_ready_blocking_flags(candidate: dict[str, Any]) -> set[str]:
+    resolved_flags = {
+        str(flag).strip()
+        for flag in candidate.get("resolved_quality_flags", [])
+        if str(flag).strip() in READY_BLOCKING_FLAGS
+    }
+    if resolved_flags:
+        return resolved_flags
+    judgment = candidate.get("research_judgment")
+    if not isinstance(judgment, dict) or judgment.get("recommendation") != "promote_ready":
+        return set()
+    explicit_flags = {
+        str(flag).strip()
+        for flag in judgment.get("resolved_quality_flags", [])
+        if str(flag).strip() in READY_BLOCKING_FLAGS
+    }
+    if explicit_flags:
+        return explicit_flags
+    return {
+        str(flag).strip()
+        for flag in candidate.get("quality_flags", [])
+        if str(flag).strip() in READY_BLOCKING_FLAGS
+    }
+
+
+def _ready_state_guard_reasons(candidate: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    quality_flags = {str(flag) for flag in candidate.get("quality_flags", []) if str(flag).strip()}
+    resolved_flags = _resolved_ready_blocking_flags(candidate)
+    unresolved_flags = sorted(flag for flag in READY_BLOCKING_FLAGS if flag in quality_flags and flag not in resolved_flags)
+    if unresolved_flags:
+        labels = [READY_BLOCKING_FLAG_LABELS.get(flag, flag) for flag in unresolved_flags]
+        reasons.append(f"未解消の注意信号={','.join(labels)}")
+    return reasons
 
 
 def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candidate_id: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -1752,8 +2338,30 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
             continue
         candidate_id = str(raw_candidate.get("candidate_id") or "")
         candidate = merge_judgment_into_candidate(raw_candidate, judgments_by_candidate_id.get(candidate_id))
+
         triage_status = str(candidate.get("triage_status") or "")
+
         if triage_status == "ready" and candidate.get("proposal_ready"):
+            guard_reasons = _ready_state_guard_reasons(candidate)
+            if guard_reasons:
+                candidate["triage_status"] = "needs_research"
+                candidate["proposal_ready"] = False
+                candidate["confidence_reason"] = (
+                    f"{candidate.get('confidence_reason', '')} "
+                    f"(ready guard: {'; '.join(guard_reasons)} のため有望候補に留めました)"
+                ).strip()
+                triage_status = "needs_research"
+
+        if triage_status == "ready" and candidate.get("proposal_ready"):
+            candidate = _normalize_candidate_kind(candidate)
+            if str(candidate.get("suggested_kind") or "") == "skill":
+                scaffold_context = build_skill_scaffold_context(candidate)
+                candidate["skill_scaffold_context"] = scaffold_context
+                candidate["skill_creator_handoff"] = build_skill_creator_handoff(scaffold_context)
+            elif str(candidate.get("suggested_kind") or "") in {"hook", "agent"}:
+                next_step_stub = build_next_step_stub(candidate)
+                if next_step_stub is not None:
+                    candidate["next_step_stub"] = next_step_stub
             ready.append(candidate)
         elif triage_status == "needs_research":
             needs_research.append(candidate)
@@ -1766,12 +2374,23 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
 
     markdown = build_proposal_markdown(ready, needs_research, rejected, metadata=prepare_payload)
     selection_prompt = "どの候補をドラフト化しますか？番号か候補名で指定してください。" if ready else None
+    decision_log_stub = [build_candidate_decision_stub(candidate) for candidate in ready + needs_research + rejected]
+    learning_feedback = build_learning_feedback(
+        ready,
+        needs_research,
+        rejected,
+        metadata=prepare_payload,
+    )
+    observation_contract = build_observation_contract(prepare_payload)
     return {
         "ready": ready,
         "needs_research": needs_research,
         "rejected": rejected,
         "selection_prompt": selection_prompt,
         "markdown": markdown,
+        "decision_log_stub": decision_log_stub,
+        "learning_feedback": learning_feedback,
+        "observation_contract": observation_contract,
         "summary": {
             "ready_count": len(ready),
             "needs_research_count": len(needs_research),
@@ -1836,6 +2455,123 @@ def _no_ready_next_step(metadata: dict[str, Any] | None) -> str:
     return "同じ作業パターンが数回たまったタイミングで再観測すると、候補が浮上しやすい"
 
 
+def build_observation_contract(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    metadata = metadata or {}
+    config = metadata.get("config") if isinstance(metadata.get("config"), dict) else {}
+    sources = metadata.get("sources") if isinstance(metadata.get("sources"), list) else []
+
+    workspace = config.get("workspace")
+    workspace_label = "current workspace"
+    if isinstance(workspace, str) and workspace.strip():
+        workspace_label = Path(workspace).name or workspace
+    elif config.get("all_sessions"):
+        workspace_label = "all sessions"
+
+    successful_sources: list[str] = []
+    degraded_sources: list[dict[str, str]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        name = str(source.get("name") or source.get("source") or "unknown").strip() or "unknown"
+        status = str(source.get("status") or "").strip()
+        if status in {"", "success"}:
+            successful_sources.append(name)
+            continue
+        degraded_sources.append(
+            {
+                "name": name,
+                "status": status or "unknown",
+                "reason": str(source.get("reason") or source.get("message") or status or "unknown"),
+            }
+        )
+
+    adaptive_window = config.get("adaptive_window") if isinstance(config.get("adaptive_window"), dict) else {}
+    input_fidelity = str(config.get("input_fidelity") or "original")
+    approximate = input_fidelity == "approximate"
+    adaptive_expanded = bool(adaptive_window.get("expanded"))
+    return {
+        "mode": str(config.get("observation_mode") or ("all-sessions" if config.get("all_sessions") else "workspace")),
+        "workspace_label": workspace_label,
+        "days": config.get("effective_days") or config.get("days"),
+        "successful_sources": successful_sources,
+        "input_fidelity": input_fidelity,
+        "approximate": approximate,
+        "degraded": approximate or bool(degraded_sources),
+        "degraded_sources": degraded_sources,
+        "adaptive_window": {
+            "enabled": bool(adaptive_window.get("enabled")),
+            "expanded": adaptive_expanded,
+            "reason": adaptive_window.get("reason"),
+            "initial_days": adaptive_window.get("initial_days") or config.get("days"),
+            "effective_days": config.get("effective_days") or config.get("days"),
+            "fallback_days": adaptive_window.get("fallback_days"),
+        },
+        "adaptive_window_expanded": adaptive_expanded,
+    }
+
+
+def _observation_stats_lines(metadata: dict[str, Any] | None) -> list[str]:
+    """Build observation stats lines for enriched 0-candidate output."""
+    metadata = metadata or {}
+    summary = metadata.get("summary") if isinstance(metadata.get("summary"), dict) else {}
+    config = metadata.get("config") if isinstance(metadata.get("config"), dict) else {}
+    total_packets = summary.get("total_packets", 0)
+    total_candidates = summary.get("total_candidates", 0)
+    days = config.get("effective_days") or config.get("days") or "?"
+    sources = metadata.get("sources") if isinstance(metadata.get("sources"), list) else []
+    source_names = [
+        str(s.get("name") or "")
+        for s in sources
+        if isinstance(s, dict) and str(s.get("status") or "").strip() in {"", "success"}
+    ]
+    lines = [
+        f"観測サマリ: {total_packets}件のセッションを {days}日間にわたり観測し、{total_candidates}件のクラスタを検出",
+    ]
+    if source_names:
+        lines.append(f"使用ソース: {', '.join(source_names)}")
+    return lines
+
+
+def _growth_signal_lines(needs_research: list[dict[str, Any]]) -> list[str]:
+    """Build growth signal lines from needs_research candidates."""
+    if not needs_research:
+        return []
+    lines = ["成長兆候（もう少しで提案に届く候補）:"]
+    for candidate in needs_research[:3]:
+        label = candidate.get("label", "unnamed")
+        support = candidate.get("support") if isinstance(candidate.get("support"), dict) else {}
+        total = int(support.get("total_packets", 0))
+        lines.append(f"  - {label} ({total}回出現)")
+    return lines
+
+
+def _degraded_mode_lines(metadata: dict[str, Any] | None) -> list[str]:
+    contract = build_observation_contract(metadata)
+    adaptive_window = contract.get("adaptive_window", {})
+    lines: list[str] = []
+
+    if adaptive_window.get("expanded"):
+        reason = str(adaptive_window.get("reason") or "unknown")
+        initial_days = adaptive_window.get("initial_days") or contract.get("days")
+        fallback_days = adaptive_window.get("fallback_days") or adaptive_window.get("effective_days") or contract.get("days")
+        lines.append(
+            f"注記: 観測窓を {initial_days}日 -> {fallback_days}日に自動拡張しました（reason: {reason}）"
+        )
+
+    if contract.get("approximate"):
+        lines.append("注記: 入力の一部が近似復元データです。候補の確信度は保守的に扱ってください。")
+
+    degraded_sources = [
+        f"{str(source.get('name') or 'unknown')}({str(source.get('reason') or source.get('status') or 'unknown')})"
+        for source in contract.get("degraded_sources", [])
+        if isinstance(source, dict)
+    ]
+    if degraded_sources:
+        lines.append("注記: 一部ソースが degraded です: " + ", ".join(sorted(degraded_sources)))
+
+    return lines
+
+
 def build_proposal_markdown(
     ready: list[dict[str, Any]],
     needs_research: list[dict[str, Any]],
@@ -1846,6 +2582,9 @@ def build_proposal_markdown(
     lines: list[str] = []
     lines.append("### 観測範囲")
     lines.append(_observation_scope_line(metadata))
+    degraded_lines = _degraded_mode_lines(metadata)
+    if degraded_lines:
+        lines.extend(degraded_lines)
     lines.append("")
     lines.append("## 提案（固定化を推奨）")
     if ready:
@@ -1855,9 +2594,19 @@ def build_proposal_markdown(
         lines.append("今回は有力候補なし")
         detected_count = _detected_candidate_count(metadata, ready, needs_research, rejected)
         lines.append("")
+        lines.extend(_observation_stats_lines(metadata))
         lines.append(f"検出候補数: {detected_count}件中 0 件が提案条件を満たした")
+        growth_lines = _growth_signal_lines(needs_research)
+        if growth_lines:
+            lines.extend(growth_lines)
         lines.append(f"見送り理由の傾向: {_no_ready_reason_summary(needs_research, rejected)}")
         lines.append(f"候補が増える条件: {_no_ready_next_step(metadata)}")
+        first_split_candidate = next((candidate for candidate in needs_research if candidate_split_suggestions(candidate)), None)
+        if isinstance(first_split_candidate, dict):
+            lines.append(
+                "次に育てやすい候補: "
+                f"{first_split_candidate.get('label', 'candidate')} -> {', '.join(candidate_split_suggestions(first_split_candidate)[:3])}"
+            )
 
     lines.append("")
     lines.append("## 有望候補（もう少し観測が必要）")
@@ -1881,6 +2630,39 @@ def build_proposal_markdown(
     return "\n".join(lines)
 
 
+def build_skill_scaffold_summary_lines(candidate: dict[str, Any]) -> list[str]:
+    context = candidate.get("skill_scaffold_context")
+    if not isinstance(context, dict):
+        return []
+
+    lines: list[str] = []
+    goal = str(context.get("goal") or "").strip()
+    if goal:
+        lines.append(f"   scaffold goal: {goal}")
+
+    summary_parts: list[str] = []
+    artifact_hints = [str(item).strip() for item in context.get("artifact_hints", []) if str(item).strip()]
+    rule_hints = [str(item).strip() for item in context.get("rule_hints", []) if str(item).strip()]
+    observation_count = context.get("observation_count")
+    if artifact_hints:
+        summary_parts.append(f"成果物={', '.join(artifact_hints[:2])}")
+    if rule_hints:
+        summary_parts.append(f"ルール={', '.join(rule_hints[:2])}")
+    if isinstance(observation_count, int) and observation_count > 0:
+        summary_parts.append(f"観測={observation_count}回")
+    if summary_parts:
+        lines.append(f"   scaffold要点: {' / '.join(summary_parts)}")
+
+    representative_examples = [
+        summarize_text(str(item).strip(), 100)
+        for item in context.get("representative_examples", [])
+        if str(item).strip()
+    ]
+    if representative_examples:
+        lines.append(f"   scaffold例: {representative_examples[0]}")
+    return lines
+
+
 def proposal_item_lines(index: int, candidate: dict[str, Any], *, include_classification: bool) -> list[str]:
     lines = [f"{index}. {candidate.get('label', 'Unnamed candidate')}"]
     if include_classification:
@@ -1895,15 +2677,50 @@ def proposal_item_lines(index: int, candidate: dict[str, Any], *, include_classi
         source_label = f"{source_count}ソース" if source_count > 0 else "source 不明"
         lines.append(f"   出現: {total_packets}回 / {source_label}")
     lines.extend(build_evidence_chain_lines(candidate))
+    constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
+    acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
+    intent_trace = _candidate_text_list(candidate, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)
+    if intent_trace:
+        lines.append(f"   意図トレース: {' / '.join(intent_trace[:2])}")
+    if constraints:
+        lines.append(f"   制約: {' / '.join(constraints[:2])}")
+    if acceptance_criteria:
+        lines.append(f"   受け入れ条件: {' / '.join(acceptance_criteria[:2])}")
     judgment = candidate.get("research_judgment")
     if include_classification:
+        handoff = candidate.get("skill_creator_handoff")
+        if str(candidate.get("suggested_kind") or "") == "skill" and isinstance(handoff, dict):
+            lines.extend(build_skill_scaffold_summary_lines(candidate))
+            invocation = str(handoff.get("suggested_invocation") or "").strip()
+            if invocation:
+                lines.append(f"   公式 handoff: {invocation}")
+        next_step_stub = candidate.get("next_step_stub")
+        if isinstance(next_step_stub, dict):
+            lines.append(f"   次ステップ: {next_step_stub.get('prompt', '')}")
+            if str(next_step_stub.get("kind") or "") == "hook":
+                lines.append(
+                    f"   stub: trigger={next_step_stub.get('trigger_event', 'n/a')} / action={next_step_stub.get('action_summary', 'n/a')}"
+                )
+            elif str(next_step_stub.get("kind") or "") == "agent":
+                lines.append(f"   stub: role={next_step_stub.get('role_summary', 'n/a')}")
+        resolved_flags = [
+            READY_BLOCKING_FLAG_LABELS.get(str(flag).strip(), str(flag).strip())
+            for flag in candidate.get("resolved_quality_flags", [])
+            if str(flag).strip()
+        ]
+        if resolved_flags:
+            lines.append(f"   研究で解消: {', '.join(resolved_flags[:4])}")
         lines.append(f"   期待効果: {candidate.get('label', 'この候補')} の再利用フローを安定化できる")
         lines.append("   → この作法を固定すれば、毎回の指示が不要になります")
     elif isinstance(judgment, dict):
         lines.append(f"   現状: {judgment.get('summary', candidate.get('confidence_reason', '追加調査が必要'))}")
+        if candidate_split_suggestions(candidate):
+            lines.append(f"   分割候補: {', '.join(candidate_split_suggestions(candidate)[:3])}")
         lines.append("   次のステップ: 追加でログをためて再観測し、分割が必要か判断する")
     else:
         lines.append(f"   現状: {candidate.get('confidence_reason', '追加調査が必要')}")
+        if candidate_split_suggestions(candidate):
+            lines.append(f"   分割候補: {', '.join(candidate_split_suggestions(candidate)[:3])}")
         lines.append("   次のステップ: 1-2 週間ほど運用してから再観測し、意味のまとまりを確認する")
     return lines
 
@@ -1955,6 +2772,57 @@ def recent_packet_count(timestamps: list[str], latest_timestamp: str | None) -> 
         if current and current.timestamp() >= threshold:
             count += 1
     return count
+
+
+def build_skill_scaffold_context(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Build structured context for skill scaffold draft generation.
+
+    This provides the input for skill-creator to generate a SKILL.md draft.
+    DayTrace produces the context; skill-creator produces the skill.
+    """
+    label = str(candidate.get("label") or "Unnamed skill")
+    task_shapes = [str(s) for s in candidate.get("common_task_shapes", candidate.get("task_shape", [])) if s]
+    artifact_hints = [str(a) for a in candidate.get("artifact_hints", []) if a]
+    rule_hints = [str(r) for r in candidate.get("rule_hints", []) if r]
+    intent_trace = _candidate_text_list(candidate, "intent_trace", limit=MAX_INTENT_TRACE_ITEMS)
+    constraints = _candidate_text_list(candidate, "constraints", limit=MAX_CONSTRAINT_ITEMS)
+    acceptance_criteria = _candidate_text_list(candidate, "acceptance_criteria", limit=MAX_ACCEPTANCE_CRITERIA_ITEMS)
+    representative_examples = [str(e) for e in candidate.get("representative_examples", []) if e]
+    evidence_items = candidate.get("evidence_items", [])
+    support = candidate.get("support") if isinstance(candidate.get("support"), dict) else {}
+
+    goal = f"{label} を再利用可能なスキルとして固定化する"
+    if task_shapes:
+        goal = f"{task_shapes[0].replace('_', ' ')} ベースの {label} を再利用可能なスキルとして固定化する"
+
+    execution_hints: list[str] = []
+    if artifact_hints:
+        execution_hints.append(f"成果物タイプ: {', '.join(artifact_hints)}")
+    if rule_hints:
+        execution_hints.append(f"適用ルール: {', '.join(rule_hints)}")
+
+    evidence_summaries = []
+    for item in (evidence_items or [])[:3]:
+        if isinstance(item, dict):
+            summary = str(item.get("summary") or "").strip()
+            if summary:
+                evidence_summaries.append(summary)
+
+    return {
+        "skill_name": _skill_slug(label),
+        "goal": goal,
+        "task_shapes": task_shapes,
+        "artifact_hints": artifact_hints,
+        "rule_hints": rule_hints,
+        "intent_trace": intent_trace,
+        "constraints": constraints,
+        "acceptance_criteria": acceptance_criteria,
+        "execution_hints": execution_hints,
+        "representative_examples": representative_examples[:3],
+        "evidence_summaries": evidence_summaries,
+        "observation_count": int(support.get("total_packets", 0)),
+        "source_diversity": int(support.get("claude_packets", 0) > 0) + int(support.get("codex_packets", 0) > 0),
+    }
 
 
 def workspace_matches(candidate: str | None, workspace: Path | None) -> bool:

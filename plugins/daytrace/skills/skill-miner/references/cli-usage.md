@@ -10,13 +10,13 @@
 提案フェーズ用。全セッションを圧縮 candidate view で横断分析する。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py
+python3 <plugin-root>/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl
 ```
 
 広域観測:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
+python3 <plugin-root>/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions
 ```
 
 補足:
@@ -30,7 +30,7 @@ python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions
 例:
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_prepare.py --all-sessions --days 3650 --dump-intents
+python3 <plugin-root>/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions --days 3650 --dump-intents
 ```
 
 ### skill_miner_detail.py
@@ -54,20 +54,26 @@ python3 <plugin-root>/scripts/skill_miner_research_judge.py --candidate-file /tm
 最終 proposal 組み立て。
 
 ```bash
-python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json
+python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
 ```
+
+補足:
+
+- `skill_miner_prepare.py` と `skill_miner_proposal.py` は同じ `--decision-log-path` を共有する
+- handoff bundle は `--skill-creator-handoff-dir` に保存される
+- デモ時に副作用を隔離したい場合は `/tmp/daytrace-demo/...` を使ってよい
 
 ### 実コマンド例
 
 repo root をカレントディレクトリとした場合:
 
 ```bash
-python3 plugins/daytrace/scripts/skill_miner_prepare.py
-python3 plugins/daytrace/scripts/skill_miner_prepare.py --all-sessions
-python3 plugins/daytrace/scripts/skill_miner_prepare.py --all-sessions --days 3650 --dump-intents
+python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl
+python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions
+python3 plugins/daytrace/scripts/skill_miner_prepare.py --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --all-sessions --days 3650 --dump-intents
 python3 plugins/daytrace/scripts/skill_miner_detail.py --refs "codex:abc123:1710000000"
 python3 plugins/daytrace/scripts/skill_miner_research_judge.py --candidate-file /tmp/prepare.json --candidate-id "codex-abc123" --detail-file /tmp/detail.json
-python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json
+python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file /tmp/prepare.json --judge-file /tmp/judge.json --decision-log-path ~/.daytrace/skill-miner-decisions.jsonl --skill-creator-handoff-dir ~/.daytrace/skill-creator-handoffs
 ```
 
 ## Prepare Output Reading Guide

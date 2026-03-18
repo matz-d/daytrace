@@ -127,6 +127,125 @@ class SkillMinerContractTests(unittest.TestCase):
 
         return workspace, claude_root, codex_history, codex_sessions
 
+    def create_signal_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        recent_a = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        recent_b = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+        claude_root = root / "claude"
+        claude_file = claude_root / "repo" / "session-signal.jsonl"
+        write_jsonl(
+            claude_file,
+            [
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": recent_a,
+                    "message": {"role": "user", "content": f"Review {workspace}/src/app.py."},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_a) + timedelta(minutes=1)).isoformat(),
+                    "message": {"role": "user", "content": "Do not edit unrelated files."},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_a) + timedelta(minutes=2)).isoformat(),
+                    "message": {"role": "user", "content": "Include file and line references in the output."},
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_a) + timedelta(minutes=3)).isoformat(),
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "I will inspect the files and return findings first."}]},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": recent_b,
+                    "message": {"role": "user", "content": f"Review {workspace}/src/api.py and keep findings first."},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(minutes=1)).isoformat(),
+                    "message": {"role": "user", "content": "Do not edit unrelated files."},
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(minutes=2)).isoformat(),
+                    "message": {"role": "user", "content": "Include file and line references in the output."},
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-signal",
+                    "isSidechain": False,
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(minutes=3)).isoformat(),
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "I will keep the same review format with file references."}]},
+                },
+            ],
+        )
+
+        codex_history = root / "codex" / "history.jsonl"
+        codex_sessions = root / "codex" / "sessions"
+        write_jsonl(
+            codex_history,
+            [
+                {
+                    "session_id": "codex-signal",
+                    "ts": int(datetime.fromisoformat(recent_b).timestamp()),
+                    "text": f"Review {workspace}/server.py and keep findings first with line refs.",
+                }
+            ],
+        )
+        write_jsonl(
+            codex_sessions / "2026" / "03" / "11" / "signal-review.jsonl",
+            [
+                {
+                    "timestamp": recent_b,
+                    "type": "session_meta",
+                    "payload": {"id": "codex-signal", "timestamp": recent_b, "cwd": str(workspace)},
+                },
+                {
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(seconds=1)).isoformat(),
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": f"Review {workspace}/server.py and keep findings first."},
+                },
+                {
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(seconds=2)).isoformat(),
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "Do not edit unrelated files."},
+                },
+                {
+                    "timestamp": (datetime.fromisoformat(recent_b) + timedelta(seconds=3)).isoformat(),
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "Include file and line references."},
+                },
+            ],
+        )
+
+        return workspace, claude_root, codex_history, codex_sessions
+
     def create_old_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         workspace = root / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
@@ -430,6 +549,19 @@ class SkillMinerContractTests(unittest.TestCase):
                 self.assertTrue(item["timestamp"])
                 self.assertTrue(item["source"])
                 self.assertTrue(item["summary"])
+
+    def test_prepare_candidate_aggregates_proposal_signals_and_observation_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace, claude_root, codex_history, codex_sessions = self.create_signal_fixture(Path(temp_dir))
+            payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+
+            candidate = payload["candidates"][0]
+            self.assertGreaterEqual(len(candidate["intent_trace"]), 2)
+            self.assertIn("Do not edit unrelated files.", candidate["constraints"])
+            self.assertTrue(any("findings first" in item.lower() for item in candidate["acceptance_criteria"]))
+            self.assertTrue(any("line references" in item.lower() for item in candidate["acceptance_criteria"]))
+            self.assertEqual(payload["observation_contract"]["input_fidelity"], payload["config"]["input_fidelity"])
+            self.assertEqual(payload["observation_contract"]["adaptive_window_expanded"], payload["summary"]["adaptive_window_expanded"])
 
     def test_prepare_dump_intents_includes_summary_and_anonymized_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

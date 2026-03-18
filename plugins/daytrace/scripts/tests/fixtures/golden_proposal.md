@@ -15,6 +15,8 @@
    confidence: medium
    根拠:
    - 3 packets / recurring fake daily-brief draft flow
+   scaffold goal: prepare report (report, markdown) を再利用可能なスキルとして固定化する
+   公式 handoff: /skill-creator prepare-report-report-markdown をスキルにしてください
    期待効果: prepare report (report, markdown) の再利用フローを安定化できる
    → この作法を固定すれば、毎回の指示が不要になります
 
