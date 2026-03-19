@@ -99,19 +99,21 @@ score の current ルール:
 
 追加調査は 1 候補あたり最大 5 refs、1 回まで。
 
-### 2-4. immediate apply（`CLAUDE.md` 分類のみ）
+### 2-4. immediate apply と固定化委譲
 
-`CLAUDE.md` 分類の `ready` 候補だけ、以下の仕様で diff preview を返す:
+`提案（固定化を推奨）` のある候補について、`skill-applier` skill が `suggested_kind` に応じた固定化アクションを担う:
 
-1. 対象は `cwd/CLAUDE.md` のみ
-2. 追記先は `## DayTrace Suggested Rules` セクション末尾（セクションが無ければ新規作成）
-3. 既存文言の書き換え・並び替えはしない
-4. 重複候補は skip して理由を返す
-5. 衝突候補は diff preview のみ出して終了
-6. 実際に apply が成功した時だけ `adopt + completed` として writeback し、次回 suppress する
+- `CLAUDE.md` 分類: `cwd/CLAUDE.md` への diff preview → apply（immediate apply path）
+  1. 追記先は `## DayTrace Suggested Rules` セクション末尾（セクションが無ければ新規作成）
+  2. 既存文言の書き換え・並び替えはしない
+  3. 重複候補は skip して理由を返す
+  4. 衝突候補は diff preview のみ出して終了
+  5. 実際に apply が成功した時だけ `adopt + completed` として writeback し、次回 suppress する
 
-`skill` / `hook` / `agent` 分類の候補は次セッションの apply フローへ送る。
-成功未確認・中断時は `adopt` を確定させず、`defer` 相当の carry-forward として残す。
+- `skill` 分類: scaffold context（purpose / steps / output / references）を構造化提示し、skill-creator への handoff を行う
+- `hook` / `agent` 分類: 設計案（trigger / action / scope）を提示し、次セッションへ送る
+
+いずれの分類でも即時コード生成・自動デプロイは行わない。
 
 ### 2-5. store との連携
 
@@ -123,7 +125,7 @@ score の current ルール:
 
 ## 3. 現在できないこと
 
-- `skill` / `hook` / `agent` の自動生成（提案止まり）
+- `skill` / `hook` / `agent` の実際のコード生成・自動デプロイ（skill-applier は設計案・scaffold の提示のみ）
 - `SKILL.md` の自動修正
 - skill run 観測まで含めた self-improving loop（採用後の amend / evaluate）
 - store-backed adopted-state migration（現在は JSONL decision log を正とする）
@@ -265,13 +267,13 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 }
 ```
 
-- `ready`: 正式提案候補
+- `ready`: 正式提案候補（`skill_scaffold_context`, `skill_creator_handoff`, `next_step_stub` を含む。skill-applier が固定化アクションの入力として使う）
 - `needs_research`: 追加調査後もまだ保留の候補
 - `rejected`: 不成立候補と unclustered の参照
 - `decision_log_stub`: 次回判定に渡す機械用の persistence row
 - `user_decision_overlay`: `--user-decision-file` から何件 overlay できたかの結果
 - `persistence.decision_log`: decision log append の成否
-- `persistence.skill_creator_handoff`: skill handoff 永続化の成否
+- `persistence.skill_creator_handoff`: skill handoff の `~/.daytrace/skill-creator-handoffs/` への永続化成否
 - `markdown`: LLM/ユーザー向けの整形済み提案セクション（そのまま出力できる）
 
 **Triage 区分の対応**:
@@ -299,6 +301,5 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 ## 9. 関連ドキュメント
 
 - `plugins/daytrace/skills/skill-miner/SKILL.md`: skill の実行仕様・分類ルール・proposal format
-- `REPORT-skill-miner-primary-intent.md`: B0 観測結果（full-history での intent 分析と優先課題の特定）
-- `REPORT-skill-miner-benchmark.md`: ベンチマーク結果
+- `plugins/daytrace/skills/skill-applier/SKILL.md`: 固定化アクションの仕様・dispatch rules・decision writeback
 - `ISSUE-skill-miner-proposal-quality.md`: 提案品質に関する問題提起と対応策
