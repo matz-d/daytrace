@@ -57,6 +57,17 @@ user-invocable: true
 - 途中で source 欠損や low confidence が見えても追加 ask しない
 - 入口で取れなかった情報はデフォルト値で埋める
 
+## Auto-trigger Contract
+
+この節は `daytrace-session` のような orchestration が、この skill を自動起動する時の契約を定義する。
+個別実行時の UX を変えるものではなく、いつ自動で呼んでよいかだけを明文化する。
+
+- `mode` が明示されている場合は、その mode を最優先し、自動補完しない
+- `mode` が未指定の場合、orchestration はまず `自分用` を既定として生成してよい
+- `mode` が未指定かつ `summary.total_groups >= 5` の場合に限り、orchestration は `共有用` も追加生成してよい
+- `summary.total_groups < 5` の場合、orchestration は `自分用` のみを生成する
+- 共有用生成時も、この skill の `Escalation Conditions` は有効であり、機密境界の確認が必要ならその条件を優先する
+
 ### Escalation Conditions
 
 以下の例外条件でのみ、入口直後（データ収集前）の確認を入れてよい:

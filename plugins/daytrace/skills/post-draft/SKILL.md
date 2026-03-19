@@ -61,6 +61,17 @@ user-invocable: true
 - source 欠損や low confidence が見えても追加 ask しない
 - 抽出できなかった情報はデフォルト値で埋める
 
+## Auto-trigger Contract
+
+この節は `daytrace-session` のような orchestration が、この skill を自動起動する時の契約を定義する。
+個別実行時の UX を変えるものではなく、いつ自動で呼んでよいかだけを明文化する。
+
+- orchestration は、次の条件のいずれかを満たす場合にこの skill を自動起動してよい
+- 条件 1: `sources` に `git-history` と (`claude-history` または `codex-history`) が両方 `success` で含まれる
+- 条件 2: `summary.total_groups >= 4`
+- どちらの条件も満たさない場合、orchestration はこの skill の自動起動をスキップする
+- `topic` や `reader` の override が明示されている場合はそれを優先し、自動起動条件は呼び出し可否の判断にのみ使う
+
 ## Data Collection
 
 必ず最初に `post_draft_projection.py` を 1 回だけ実行し、中間 JSON を取得する。
