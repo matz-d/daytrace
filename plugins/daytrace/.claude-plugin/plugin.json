@@ -44,6 +44,16 @@
       ]
     },
     {
+      "name": "skill-applifier",
+      "path": "skills/skill-applifier/SKILL.md",
+      "description": "skill-miner が提案した候補を実際の成果物（CLAUDE.md ルール追記、skill scaffold、hook/agent 設計案）に 固定化する。「提案を適用して」「CLAUDE.md に追加して」「skill にして」「hook 化して」と言われた時に使う。 daytrace-session Phase 3 の固定化アクションも担う。",
+      "scripts": [
+        "scripts/skill_miner_detail.py",
+        "scripts/skill_miner_decision.py",
+        "scripts/skill_miner_proposal.py"
+      ]
+    },
+    {
       "name": "post-draft",
       "path": "skills/post-draft/SKILL.md",
       "description": "1日の活動ログから、その日全体の流れを読者向け narrative draft に再構成する。記事を書きたい、ブログにまとめたい、ふりかえりを書きたい、学びを共有したい時に使う。topic / reader は任意で上書きできる。",

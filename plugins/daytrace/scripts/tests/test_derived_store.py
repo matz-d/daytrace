@@ -291,7 +291,7 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(len(activities), 2)
             self.assertEqual(activities[0]["derivation_version"], ACTIVITY_DERIVATION_VERSION)
             self.assertEqual(activities[0]["confidence"], "high")
-            self.assertEqual(activities[0]["activity"]["summary"], "2 activities from ai-source, workspace-source")
+            self.assertEqual(activities[0]["activity"]["summary"], "Persist workspace event + 1 related activities")
             self.assertEqual(activities[1]["summary"], "Opened derived layer note")
 
             with sqlite3.connect(store_path) as connection:

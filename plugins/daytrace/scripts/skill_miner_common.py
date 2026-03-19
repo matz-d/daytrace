@@ -1280,6 +1280,17 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
             should_split = True
         if packet_records and last_cwd is not None and current_cwd != last_cwd:
             should_split = True
+        if packet_records and record_type == "user":
+            current_text = claude_message_text(record.get("message"))
+            if current_text:
+                current_signals = infer_workflow_signals(
+                    [current_text],
+                    [],
+                    [],
+                    str(current_cwd) if current_cwd else None,
+                )
+                if "pivot" in current_signals.get("flags", []):
+                    should_split = True
         if should_split:
             flush_packet()
         packet_records.append(record)

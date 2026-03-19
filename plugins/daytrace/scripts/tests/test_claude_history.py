@@ -148,6 +148,77 @@ class ClaudeHistoryTests(unittest.TestCase):
             commentary = next(item for item in payload["events"] if item["type"] == "commentary")
             self.assertIn("ai_observation", commentary["details"])
 
+    def test_pivot_message_produces_separate_logical_packets_without_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            base = datetime.now(timezone.utc)
+            claude_root = root / "claude"
+            write_jsonl(
+                claude_root / "repo" / "session-pivot.jsonl",
+                [
+                    {
+                        "type": "user",
+                        "cwd": str(workspace),
+                        "sessionId": "s2",
+                        "isSidechain": False,
+                        "timestamp": base.isoformat(),
+                        "message": {"role": "user", "content": "Review app.py and summarize findings."},
+                    },
+                    {
+                        "type": "assistant",
+                        "cwd": str(workspace),
+                        "sessionId": "s2",
+                        "isSidechain": False,
+                        "timestamp": (base + timedelta(minutes=1)).isoformat(),
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "I will inspect app.py and report findings first."}]},
+                    },
+                    {
+                        "type": "user",
+                        "cwd": str(workspace),
+                        "sessionId": "s2",
+                        "isSidechain": False,
+                        "timestamp": (base + timedelta(minutes=2)).isoformat(),
+                        "message": {"role": "user", "content": "Instead, switch to drafting release notes."},
+                    },
+                    {
+                        "type": "assistant",
+                        "cwd": str(workspace),
+                        "sessionId": "s2",
+                        "isSidechain": False,
+                        "timestamp": (base + timedelta(minutes=3)).isoformat(),
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "Switching to release note drafting."}]},
+                    },
+                ],
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--root",
+                    str(claude_root),
+                    "--workspace",
+                    str(workspace),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success")
+
+            event = next(item for item in payload["events"] if item["type"] == "session_summary")
+            logical_packets = event["details"]["logical_packets"]
+            self.assertEqual(len(logical_packets), 2)
+            self.assertIn("Review app.py", logical_packets[0]["user_highlights"][0])
+            self.assertIn("Instead, switch to drafting release notes.", logical_packets[1]["user_highlights"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

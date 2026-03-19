@@ -654,7 +654,11 @@ def build_groups(
         for event in events:
             event["group_id"] = group_id
 
-        summary = events[0]["summary"] if len(events) == 1 else f"{len(events)} activities from {', '.join(sorted(source_names))}"
+        if len(events) == 1:
+            summary = events[0]["summary"]
+        else:
+            lead = sorted_for_evidence[0]["summary"] if sorted_for_evidence else events[0]["summary"]
+            summary = f"{lead} + {len(events) - 1} related activities"
         normalized_groups.append(
             {
                 "id": group_id,

@@ -13,8 +13,9 @@ from typing import Any, Generator
 from common import isoformat_or_now
 from source_registry import normalize_confidence_categories
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_STORE_PATH = Path("~/.daytrace/daytrace.sqlite3").expanduser()
+AI_HISTORY_SOURCES = {"claude-history", "codex-history"}
 
 
 def resolve_store_path(store_path: str | Path | None) -> Path:
@@ -139,6 +140,7 @@ def _create_base_schema(connection: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_run_id INTEGER NOT NULL,
             event_fingerprint TEXT NOT NULL,
+            observation_kind TEXT NOT NULL DEFAULT 'event',
             source_name TEXT NOT NULL,
             scope_mode TEXT NOT NULL,
             occurred_at TEXT NOT NULL,
@@ -219,16 +221,88 @@ def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
     _create_base_schema(connection)
 
 
+def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+    observation_columns = _table_columns(connection, "observations")
+    if "observation_kind" not in observation_columns:
+        connection.execute(
+            "ALTER TABLE observations ADD COLUMN observation_kind TEXT NOT NULL DEFAULT 'event'"
+        )
+    _create_base_schema(connection)
+
+
 def bootstrap_store(path: Path) -> None:
     with connect_store(path) as connection:
         current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if current_version not in {0, 1, SCHEMA_VERSION}:
+        if current_version not in {0, 1, 2, SCHEMA_VERSION}:
             raise ValueError(f"Unsupported store schema version: {current_version}")
         if current_version == 1:
             _migrate_v1_to_v2(connection)
+            _migrate_v2_to_v3(connection)
+        elif current_version == 2:
+            _migrate_v2_to_v3(connection)
         else:
             _create_base_schema(connection)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _packet_summary(packet: dict[str, Any]) -> str:
+    for key in ("primary_intent", "full_user_intent", "packet_id", "session_ref"):
+        value = str(packet.get(key) or "").strip()
+        if value:
+            return value
+    return "AI packet"
+
+
+def _packet_observation_events(event: dict[str, Any]) -> list[dict[str, Any]]:
+    source_name = str(event.get("source") or "").strip()
+    if source_name not in AI_HISTORY_SOURCES:
+        return []
+    details = event.get("details")
+    if not isinstance(details, dict):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+
+    def append_packet(value: Any) -> None:
+        if isinstance(value, dict):
+            candidates.append(value)
+
+    ai_observation_packets = details.get("ai_observation_packets")
+    if isinstance(ai_observation_packets, list):
+        for item in ai_observation_packets:
+            append_packet(item)
+
+    if source_name == "claude-history":
+        logical_packets = details.get("logical_packets")
+        if isinstance(logical_packets, list):
+            for logical_packet in logical_packets:
+                if not isinstance(logical_packet, dict):
+                    continue
+                append_packet(logical_packet.get("skill_miner_packet"))
+                append_packet(logical_packet.get("ai_observation"))
+    else:
+        append_packet(details.get("skill_miner_packet"))
+        append_packet(details.get("ai_observation"))
+
+    packet_events: list[dict[str, Any]] = []
+    seen_packet_ids: set[str] = set()
+    for packet in candidates:
+        timestamp = str(packet.get("timestamp") or "").strip()
+        packet_id = str(packet.get("packet_id") or stable_hash(packet))
+        if not timestamp or packet_id in seen_packet_ids:
+            continue
+        seen_packet_ids.add(packet_id)
+        packet_events.append(
+            {
+                "source": source_name,
+                "timestamp": timestamp,
+                "type": "skill_miner_packet",
+                "summary": _packet_summary(packet),
+                "details": dict(packet),
+                "confidence": "medium",
+            }
+        )
+    return packet_events
 
 
 def _upsert_source_run(
@@ -341,7 +415,13 @@ def _replace_observations(
     collected_at: str,
 ) -> None:
     connection.execute("DELETE FROM observations WHERE source_run_id = ?", (source_run_id,))
-    for event in result.get("events", []):
+    inserted_fingerprints: set[str] = set()
+
+    def insert_event(event: dict[str, Any], *, observation_kind: str) -> None:
+        event_fingerprint = compute_observation_fingerprint(event)
+        if event_fingerprint in inserted_fingerprints:
+            return
+        inserted_fingerprints.add(event_fingerprint)
         event_json_str = canonical_json(event)
         details_json_str = canonical_json(event["details"])
         connection.execute(
@@ -349,6 +429,7 @@ def _replace_observations(
             INSERT INTO observations (
                 source_run_id,
                 event_fingerprint,
+                observation_kind,
                 source_name,
                 scope_mode,
                 occurred_at,
@@ -358,11 +439,12 @@ def _replace_observations(
                 details_json,
                 event_json,
                 collected_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_run_id,
-                compute_observation_fingerprint(event),
+                event_fingerprint,
+                observation_kind,
                 event["source"],
                 scope_mode,
                 event["timestamp"],
@@ -374,6 +456,11 @@ def _replace_observations(
                 collected_at,
             ),
         )
+
+    for event in result.get("events", []):
+        insert_event(event, observation_kind="event")
+        for packet_event in _packet_observation_events(event):
+            insert_event(packet_event, observation_kind="packet")
 
 
 def _persist_source_result(

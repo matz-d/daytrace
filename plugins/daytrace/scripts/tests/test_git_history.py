@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = REPO_ROOT / "plugins" / "daytrace" / "scripts" / "git_history.py"
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import git_history
 
 
 def run_checked(command: list[str], *, cwd: Path) -> None:
@@ -26,6 +35,21 @@ def run_checked(command: list[str], *, cwd: Path) -> None:
 
 
 class GitHistoryTests(unittest.TestCase):
+    def test_timeout_returns_error_payload(self) -> None:
+        stdout = io.StringIO()
+        workspace = Path("/tmp/daytrace-timeout-workspace")
+        timeout = subprocess.TimeoutExpired(cmd=["git", "log"], timeout=git_history.GIT_TIMEOUT_SEC)
+
+        with patch("git_history.run_command", side_effect=timeout):
+            with patch.object(sys, "argv", ["git_history.py", "--workspace", str(workspace)]):
+                with contextlib.redirect_stdout(stdout):
+                    git_history.main()
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("timed out after", payload["message"])
+        self.assertEqual(payload["workspace"], str(workspace.resolve()))
+
     def test_workspace_commit_is_emitted_with_numstat_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir) / "repo"

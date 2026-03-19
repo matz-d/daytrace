@@ -34,6 +34,7 @@ from skill_miner_common import (
     extract_referenced_files,
     judge_research_candidate,
 )
+from derived_store import get_observations
 import skill_miner_prepare
 from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, filter_packets_by_days, read_claude_packets, read_codex_packets, read_store_packets
 
@@ -627,6 +628,8 @@ class SkillMinerTests(unittest.TestCase):
         for observation_id, source_name, details_json in rows:
             details = json.loads(str(details_json))
             if source_name == "claude-history":
+                if str(details.get("packet_id") or "").strip():
+                    details.pop(drop_key, None)
                 summary_packet = details.get("ai_observation")
                 if isinstance(summary_packet, dict):
                     summary_packet.pop(drop_key, None)
@@ -647,6 +650,8 @@ class SkillMinerTests(unittest.TestCase):
                         if isinstance(packet, dict):
                             packet.pop(drop_key, None)
             else:
+                if str(details.get("packet_id") or "").strip():
+                    details.pop(drop_key, None)
                 packet = details.get("ai_observation")
                 if isinstance(packet, dict):
                     packet.pop(drop_key, None)
@@ -939,6 +944,17 @@ class SkillMinerTests(unittest.TestCase):
             self.assertIsNotNone(claude_row)
             self.assertIsNotNone(codex_row)
 
+            connection = sqlite3.connect(store_path)
+            packet_counts = connection.execute(
+                """
+                SELECT source_name, COUNT(*)
+                FROM observations
+                WHERE observation_kind = 'packet'
+                GROUP BY source_name
+                """
+            ).fetchall()
+            connection.close()
+
             claude_details = json.loads(str(claude_row[0]))
             self.assertEqual(claude_details["logical_packet_count"], 2)
             self.assertEqual(
@@ -955,6 +971,35 @@ class SkillMinerTests(unittest.TestCase):
             )
             self.assertIn("skill_miner_packet", claude_details["logical_packets"][0])
             self.assertEqual(codex_details["skill_miner_packet"]["packet_id"], "codex:codex-review")
+            self.assertEqual(dict(packet_counts), {"claude-history": 2, "codex-history": 2})
+
+    def test_get_observations_defaults_to_event_rows_when_packet_rows_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            event_observations = get_observations(
+                store_path,
+                workspace=workspace,
+                since="2026-03-09",
+                until="2026-03-09T23:59:59+09:00",
+                source_names=["claude-history", "codex-history"],
+            )
+            packet_observations = get_observations(
+                store_path,
+                workspace=workspace,
+                since="2026-03-09",
+                until="2026-03-09T23:59:59+09:00",
+                source_names=["claude-history", "codex-history"],
+                observation_kinds=["packet"],
+            )
+
+            self.assertTrue(event_observations)
+            self.assertTrue(packet_observations)
+            self.assertTrue(all(item["observation_kind"] == "event" for item in event_observations))
+            self.assertTrue(all(item["observation_kind"] == "packet" for item in packet_observations))
 
     def test_prepare_store_matches_raw_candidate_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

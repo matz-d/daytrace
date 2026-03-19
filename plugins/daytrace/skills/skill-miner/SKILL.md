@@ -112,8 +112,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_T
 - `candidates` を 3 区分にトリアージする
 - 正式提案に進める候補だけを 4 分類へ仮分類する
 - `なぜこの候補か` と `なぜその分類か` を説明する
-- `CLAUDE.md` 候補だけ immediate apply の仕様説明を返してよい
-- `skill` / `hook` / `agent` は次セッションの apply フローへ送る
+- 固定化アクション（CLAUDE.md apply / skill scaffold / hook・agent 設計案）は `skill-applifier` skill に委ねる
 
 やってはいけないこと:
 
@@ -215,7 +214,30 @@ B0 観測の方法と優先順位ルールは `references/b0-observation.md` を
 - `0 件` でも失敗扱いにせず、理由と次回への示唆を返す
 - `needs_research` 候補は必要な場合だけ detail を取る
 
-## Proposal Format
+## Proposal Output Contract
+
+`skill_miner_proposal.py` の stdout は machine-actionable な JSON object であり、`markdown` はその 1 フィールドに過ぎない。
+下流の skill-applifier や decision writeback はこの JSON を直接消費する。
+
+主要フィールド:
+
+| フィールド | 型 | 消費者 |
+|-----------|-----|--------|
+| `ready[]` | candidate objects | skill-applifier が固定化アクションに使う |
+| `ready[].skill_scaffold_context` | object | skill scaffold draft の構造化入力 |
+| `ready[].skill_creator_handoff` | object | skill-creator への handoff prompt + context_file |
+| `ready[].next_step_stub` | object | hook/agent 設計案の構造化入力 |
+| `markdown` | string | ユーザー向け提案表示（人間可読ビュー） |
+| `selection_prompt` | string\|null | 候補選択プロンプト（ready > 0 の時のみ） |
+| `decision_log_stub[]` | objects | decision writeback + carry-forward |
+| `observation_contract` | object | 観測条件メタデータ |
+| `learning_feedback` | object | 0 件時の成長シグナル |
+| `summary` | object | `ready_count`, `needs_research_count`, `rejected_count` |
+| `persistence` | object | decision_log / handoff の書き込み結果 |
+
+フィールド定義の詳細は `references/proposal-json-contract.md` を参照する。
+
+## Proposal Format (Markdown View)
 
 proposal の冒頭には観測範囲を明示し、3 区分で返す。
 内部 triage key（`ready` / `needs_research` / `rejected`）はそのままで、ユーザー向け見出しだけを変更する。
@@ -343,30 +365,10 @@ proposal の冒頭には観測範囲を明示し、3 区分で返す。
 - `reject_candidate`
   - `観測ノート` に移す
 
-## CLAUDE.md Immediate Apply Spec
+## Fixation Actions
 
-`CLAUDE.md` 分類だけは low-risk immediate apply path を仕様として持つ。
-この skill ではコード実装を前提にしないが、次の contract を守る。
-
-1. 対象は `cwd/CLAUDE.md` だけ
-2. `cwd/CLAUDE.md` が無い場合は、新規作成として diff preview を作る
-3. 追記先は `## DayTrace Suggested Rules` セクション末尾
-4. セクションが無ければ新規作成する
-5. 既存文言の書き換えや並び替えはしない
-6. 重複候補は skip して理由を返す
-7. 衝突候補は diff preview だけ出して終了する
-8. `skill` / `hook` / `agent` は immediate apply しない
-
-diff preview 例:
-
-```diff
---- /dev/null
-+++ cwd/CLAUDE.md
-@@
-+## DayTrace Suggested Rules
-+
-+- Use pytest for verification.
-```
+候補選択後の固定化アクション（CLAUDE.md apply / skill scaffold / hook・agent 設計案）は `skill-applifier` skill が担う。
+詳細は `skills/skill-applifier/SKILL.md` を参照する。
 
 ## Pre-Classification Contract
 
@@ -402,90 +404,6 @@ LLM が override する条件:
 - proposal markdown には `研究で解消: ...` を出し、何を解消して ready にしたかを残す
 - oversized が解消されたことを claim するのは「cluster 全体が縮んだ」という意味ではなく、「sampled refs では 1 つの再利用可能パターンとして説明できた」という意味に限る
 
-## Skill Scaffold Draft Spec
-
-`suggested_kind=skill` の candidate が選択された場合、DayTrace は skill scaffold context を構造化して提示する。
-実際の skill 生成は `skill-creator` skill に委ねる。
-
-DayTrace 側の責務:
-
-1. candidate から `skill_scaffold_context` を構造化する（`build_skill_scaffold_context()` が返す）
-2. context には `skill_name`, `goal`, `task_shapes`, `artifact_hints`, `rule_hints`, `execution_hints`, `representative_examples`, `evidence_summaries` を含む
-3. scaffold context を `skill-creator` への引き継ぎプロンプトとして出力する
-
-出力テンプレート:
-
-```markdown
-### Skill Scaffold Draft: {skill_name}
-
-この候補は {observation_count}回の反復パターンから抽出されました。
-
-**Goal:** {goal}
-**成果物:** {artifact_hints}
-**適用ルール:** {rule_hints}
-
-**代表的な使用例:**
-- {example_1}
-- {example_2}
-
-→ `/skill-creator` で本格的な SKILL.md を生成できます。
-  上記の context を skill-creator に渡してください。
-```
-
-skill-creator への Handoff:
-
-- DayTrace は scaffold context を proposal markdown では構造化テキストとして提示し、skill-creator を自動起動しない
-- `skill_miner_proposal.py --skill-creator-handoff-dir <dir>` を付けた場合は、ready な `skill` candidate ごとに JSON handoff bundle を 1 ファイル保存する
-- 保存される bundle には少なくとも `record_type`, `recorded_at`, `candidate_id`, `label`, `suggested_kind`, `context`, `handoff` が入る
-- persisted handoff path は `skill_creator_handoff.context_file` として返り、監査や手渡し再利用に使える
-- ユーザーが `/skill-creator` を呼ぶ際に context を参照して渡す
-- proposal markdown の末尾に以下のガイドを表示する:
-
-```markdown
-→ この候補を skill 化するには:
-  `/skill-creator {skill_name} をスキルにしてください` と伝えてください。
-  上記の Goal / 成果物 / 適用ルール / 代表例が引き継がれます。
-```
-
-- skill-creator は自然言語入力を受け付けるため、構造化 JSON の受け渡しは不要
-- DayTrace の scaffold_draft / persisted handoff bundle は skill-creator にとっての参考情報であり、binding ではない
-
-DayTrace がやらないこと:
-
-- SKILL.md ファイルの直接生成
-- skill-creator の自動起動
-- skill のデプロイや有効化
-- scaffold context の skill-creator 側フォーマットへの変換
-
-## Detail / Draft Rules
-
-- `提案（固定化を推奨）` に候補がある場合だけ、次セッションで 1 件選んでもらう
-- 選択候補の `session_refs` だけを `skill_miner_detail.py --refs ...` で取得する
-- `CLAUDE.md` は immediate apply path で対応する
-- `skill` は Skill Scaffold Draft Spec に従い scaffold context を出す
-- `hook` / `agent` は以下の Next Step Contract に従う
-- detail phase でも raw history 全量には戻らない
-
-### Hook / Agent Next Step Contract
-
-`hook` または `agent` の候補が選択された場合、設計案を提示して次セッションへ送る。
-DayTrace は設計案の提示のみを担い、settings.json 書き込みや agent 定義ファイル生成は行わない。
-
-hook 設計案（`tool_signature` + `rule_hints` から抽出）:
-
-- **トリガーイベント:** PreToolUse | PostToolUse | Stop | ...
-- **対象ツール:** tool_name リスト
-- **アクション:** 実行内容の 1 文説明
-- **ガード条件:** 実行しない条件の 1 文説明
-- ガイド: `「{candidate_label} を hook にしてください」と次セッションで指示`
-
-agent 設計案（`representative_examples` + `rule_hints` から抽出）:
-
-- **役割:** 1 文での役割定義
-- **行動原則:** rule_hints ベースの振る舞いルール
-- **想定トリガー:** いつこの agent を使うか
-- **参考パターン:** representative_examples から 1-2 件
-- ガイド: `「{candidate_label} を agent にしてください」と次セッションで指示`
 
 ## Completion Check
 

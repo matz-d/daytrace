@@ -103,6 +103,7 @@ def _row_to_observation(row: sqlite3.Row) -> dict[str, Any]:
         "source_run_id": int(row["source_run_id"]),
         "run_fingerprint": str(row["run_fingerprint"]),
         "event_fingerprint": str(row["event_fingerprint"]),
+        "observation_kind": str(row["observation_kind"]),
         "source_name": str(row["source_name"]),
         "scope_mode": str(row["scope_mode"]),
         "workspace": str(row["workspace"]),
@@ -516,6 +517,7 @@ def get_observations(
     all_sessions: bool | None = None,
     source_names: list[str] | None = None,
     source_run_ids: list[int] | None = None,
+    observation_kinds: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_store_path = resolve_store_path(store_path)
     bootstrap_store(normalized_store_path)
@@ -523,9 +525,15 @@ def get_observations(
     selected_source_run_ids = list(source_run_ids) if source_run_ids is not None else None
     if selected_source_run_ids is not None and not selected_source_run_ids:
         return []
+    selected_observation_kinds = ["event"] if observation_kinds is None else list(observation_kinds)
+    if not selected_observation_kinds:
+        return []
 
     clauses = []
     parameters: list[Any] = []
+    placeholders = ", ".join("?" for _ in selected_observation_kinds)
+    clauses.append(f"o.observation_kind IN ({placeholders})")
+    parameters.extend(selected_observation_kinds)
     if normalized_workspace is not None:
         clauses.append("sr.workspace = ?")
         parameters.append(normalized_workspace)
@@ -553,20 +561,31 @@ def get_observations(
         parameters.extend(selected_source_run_ids)
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    # Use a window function to deduplicate observations that share the same
+    # event_fingerprint across different source_runs.  For each duplicate group
+    # we keep only the row from the most recent source_run (highest collected_at,
+    # then highest observation id as tie-breaker).
     sql = f"""
-        SELECT
-            o.*,
-            sr.run_fingerprint,
-            sr.workspace,
-            sr.requested_date,
-            sr.since_value,
-            sr.until_value,
-            sr.all_sessions,
-            sr.confidence_categories_json
-        FROM observations o
-        JOIN source_runs sr ON sr.id = o.source_run_id
-        {where_sql}
-        ORDER BY o.occurred_at ASC, o.source_name ASC, o.event_fingerprint ASC
+        SELECT * FROM (
+            SELECT
+                o.*,
+                sr.run_fingerprint,
+                sr.workspace,
+                sr.requested_date,
+                sr.since_value,
+                sr.until_value,
+                sr.all_sessions,
+                sr.confidence_categories_json,
+                ROW_NUMBER() OVER (
+                    PARTITION BY o.event_fingerprint
+                    ORDER BY sr.collected_at DESC, o.id DESC
+                ) AS _dedup_rank
+            FROM observations o
+            JOIN source_runs sr ON sr.id = o.source_run_id
+            {where_sql}
+        )
+        WHERE _dedup_rank = 1
+        ORDER BY occurred_at ASC, source_name ASC, event_fingerprint ASC
     """
     with connect_store(normalized_store_path) as connection:
         rows = connection.execute(sql, parameters).fetchall()

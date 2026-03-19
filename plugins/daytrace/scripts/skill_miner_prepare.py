@@ -528,9 +528,13 @@ def _dedupe_observations(observations: list[dict[str, Any]]) -> list[dict[str, A
     def observation_key(observation: dict[str, Any]) -> tuple[str, ...]:
         source_name = str(observation.get("source_name") or "")
         event_type = str(observation.get("event_type") or "")
+        observation_kind = str(observation.get("observation_kind") or "event")
         details = observation.get("details", {})
         if not isinstance(details, dict):
             details = {}
+        if observation_kind == "packet":
+            packet_id = str(details.get("packet_id") or details.get("session_ref") or observation.get("event_fingerprint") or "")
+            return (source_name, observation_kind, packet_id)
         occurred_at = str(observation.get("occurred_at") or "")
         if source_name == CLAUDE_SOURCE:
             file_path = str(details.get("file_path") or details.get("session_id") or observation.get("event_fingerprint") or "")
@@ -613,6 +617,19 @@ def _store_packets_fidelity(packets: list[dict[str, Any]]) -> str:
     if not packets:
         return FIDELITY_APPROXIMATE
     return FIDELITY_APPROXIMATE if any(str(packet.get("_fidelity") or "") != FIDELITY_CANONICAL for packet in packets) else FIDELITY_CANONICAL
+
+
+def _packet_from_packet_observation(observation: dict[str, Any]) -> dict[str, Any] | None:
+    details = observation.get("details", {})
+    if not isinstance(details, dict):
+        details = {}
+    source_name = str(observation.get("source_name") or "")
+    fallback_workspace = str(details.get("workspace") or observation.get("workspace") or "").strip() or None
+    return _stored_skill_miner_packet(
+        details.get("skill_miner_packet") or details,
+        source_name=source_name,
+        fallback_workspace=fallback_workspace,
+    )
 
 
 def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -848,57 +865,99 @@ def read_store_packets(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     effective_now = reference_now or datetime.now(timezone.utc).astimezone()
     since_date, _until_date = _store_slice_bounds(reference_now=effective_now, days=max_days)
-    observations = get_observations(
+    packet_observations = get_observations(
         store_path,
         workspace=workspace,
         since=since_date,
         all_sessions=all_sessions,
         source_names=[CLAUDE_SOURCE, CODEX_SOURCE],
+        observation_kinds=["packet"],
     )
-    deduped_observations = _dedupe_observations(observations)
-    claude_observations = [observation for observation in deduped_observations if observation["source_name"] == CLAUDE_SOURCE]
-    codex_observations = [observation for observation in deduped_observations if observation["source_name"] == CODEX_SOURCE]
-
     packets: list[dict[str, Any]] = []
     claude_packet_count = 0
-    claude_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for observation in claude_observations:
-        details = observation.get("details", {})
-        file_key = None
-        if isinstance(details, dict):
-            file_key = str(details.get("file_path") or details.get("session_id") or "").strip() or None
-        claude_groups[file_key or str(observation["event_fingerprint"])].append(observation)
-    for group in claude_groups.values():
-        preferred_observation = next(
-            (item for item in group if str(item.get("event_type") or "") == "session_summary"),
-            group[-1],
+    codex_packet_count = 0
+    deduped_packet_observations = _dedupe_observations(packet_observations)
+    packet_observations_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for observation in deduped_packet_observations:
+        source_name = str(observation.get("source_name") or "")
+        if source_name in {CLAUDE_SOURCE, CODEX_SOURCE}:
+            packet_observations_by_source[source_name].append(observation)
+
+    fallback_sources = {CLAUDE_SOURCE, CODEX_SOURCE}
+    for source_name in (CLAUDE_SOURCE, CODEX_SOURCE):
+        source_observations = packet_observations_by_source.get(source_name, [])
+        if not source_observations:
+            continue
+        source_packets: list[dict[str, Any]] = []
+        invalid_packet_found = False
+        for observation in source_observations:
+            stored_packet = _packet_from_packet_observation(observation)
+            if stored_packet is None:
+                invalid_packet_found = True
+                break
+            source_packets.append(stored_packet)
+        if invalid_packet_found or not source_packets:
+            continue
+        packets.extend(source_packets)
+        fallback_sources.discard(source_name)
+        if source_name == CLAUDE_SOURCE:
+            claude_packet_count += len(source_packets)
+        else:
+            codex_packet_count += len(source_packets)
+
+    if fallback_sources:
+        observations = get_observations(
+            store_path,
+            workspace=workspace,
+            since=since_date,
+            all_sessions=all_sessions,
+            source_names=sorted(fallback_sources),
+            observation_kinds=["event"],
         )
-        claude_packets = _packet_from_claude_observation(preferred_observation)
-        packets.extend(claude_packets)
-        claude_packet_count += len(claude_packets)
-    codex_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for observation in codex_observations:
-        details = observation.get("details", {})
-        session_id = None
-        if isinstance(details, dict):
-            raw_session_id = str(details.get("session_id") or "").strip()
-            session_id = raw_session_id or None
-        codex_groups[session_id or str(observation["event_fingerprint"])].append(observation)
-    for group in codex_groups.values():
-        packets.append(_packet_from_codex_observations(group))
+        deduped_observations = _dedupe_observations(observations)
+        claude_observations = [observation for observation in deduped_observations if observation["source_name"] == CLAUDE_SOURCE]
+        codex_observations = [observation for observation in deduped_observations if observation["source_name"] == CODEX_SOURCE]
+
+        claude_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for observation in claude_observations:
+            details = observation.get("details", {})
+            file_key = None
+            if isinstance(details, dict):
+                file_key = str(details.get("file_path") or details.get("session_id") or "").strip() or None
+            claude_groups[file_key or str(observation["event_fingerprint"])].append(observation)
+        for group in claude_groups.values():
+            preferred_observation = next(
+                (item for item in group if str(item.get("event_type") or "") == "session_summary"),
+                group[-1],
+            )
+            claude_packets = _packet_from_claude_observation(preferred_observation)
+            packets.extend(claude_packets)
+            claude_packet_count += len(claude_packets)
+
+        codex_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for observation in codex_observations:
+            details = observation.get("details", {})
+            session_id = None
+            if isinstance(details, dict):
+                raw_session_id = str(details.get("session_id") or "").strip()
+                session_id = raw_session_id or None
+            codex_groups[session_id or str(observation["event_fingerprint"])].append(observation)
+        for group in codex_groups.values():
+            packets.append(_packet_from_codex_observations(group))
+            codex_packet_count += 1
 
     statuses = [
         source_status(
             CLAUDE_SOURCE,
-            "success" if claude_observations else "skipped",
+            "success" if claude_packet_count else "skipped",
             packets_count=claude_packet_count,
-            reason=None if claude_observations else "store_empty",
+            reason=None if claude_packet_count else "store_empty",
         ),
         source_status(
             CODEX_SOURCE,
-            "success" if codex_observations else "skipped",
-            packets_count=len(codex_groups),
-            reason=None if codex_observations else "store_empty",
+            "success" if codex_packet_count else "skipped",
+            packets_count=codex_packet_count,
+            reason=None if codex_packet_count else "store_empty",
         ),
     ]
     return packets, statuses

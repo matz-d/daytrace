@@ -446,7 +446,7 @@ class AggregateContractTests(unittest.TestCase):
             self.assertEqual(first_group["confidence_categories"], ["ai_history", "git"])
             self.assertEqual(first_group["source_count"], 2)
             self.assertEqual(first_group["event_count"], 2)
-            self.assertEqual(first_group["summary"], "2 activities from ai-source, workspace-source")
+            self.assertEqual(first_group["summary"], "Refactor aggregate entrypoint + 1 related activities")
 
             second_group = groups[1]
             self.assertEqual(second_group["id"], "group-002")

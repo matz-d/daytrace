@@ -49,7 +49,7 @@ class PluginManifestTests(unittest.TestCase):
         self.assertIsInstance(skills, list)
 
         by_name = {skill["name"]: skill for skill in skills}
-        self.assertEqual(set(by_name), {"daytrace-session", "daily-report", "skill-miner", "post-draft"})
+        self.assertEqual(set(by_name), {"daytrace-session", "daily-report", "skill-miner", "skill-applifier", "post-draft"})
 
         for skill_name, skill_entry in by_name.items():
             skill_dir = SKILLS_ROOT / skill_name

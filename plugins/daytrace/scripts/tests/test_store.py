@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(SCRIPT_DIR))
 
-from store import persist_source_result
+from store import bootstrap_store, persist_source_result
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -228,7 +228,7 @@ class StoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 connection.row_factory = sqlite3.Row
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
@@ -255,6 +255,125 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(event_json["source"], "workspace-source")
                 self.assertEqual(event_json["type"], "commit")
                 self.assertRegex(observation_row["event_fingerprint"], r"^[0-9a-f]{64}$")
+                self.assertEqual(observation_row["observation_kind"], "event")
+
+    def test_bootstrap_store_migrates_v2_observations_with_observation_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "daytrace.sqlite3"
+            with sqlite3.connect(store_path) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE source_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_fingerprint TEXT NOT NULL UNIQUE,
+                        source_name TEXT NOT NULL,
+                        source_id TEXT NOT NULL,
+                        identity_version TEXT NOT NULL,
+                        manifest_fingerprint TEXT NOT NULL,
+                        confidence_categories_json TEXT NOT NULL DEFAULT '[]',
+                        command_fingerprint TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        scope_mode TEXT NOT NULL,
+                        workspace TEXT NOT NULL,
+                        requested_date TEXT,
+                        since_value TEXT,
+                        until_value TEXT,
+                        all_sessions INTEGER NOT NULL,
+                        filters_json TEXT NOT NULL,
+                        command_json TEXT NOT NULL,
+                        reason TEXT,
+                        message TEXT,
+                        duration_sec REAL NOT NULL,
+                        events_count INTEGER NOT NULL,
+                        collected_at TEXT NOT NULL
+                    );
+
+                    CREATE TABLE observations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_run_id INTEGER NOT NULL,
+                        event_fingerprint TEXT NOT NULL,
+                        source_name TEXT NOT NULL,
+                        scope_mode TEXT NOT NULL,
+                        occurred_at TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        confidence TEXT NOT NULL,
+                        details_json TEXT NOT NULL,
+                        event_json TEXT NOT NULL,
+                        collected_at TEXT NOT NULL,
+                        FOREIGN KEY(source_run_id) REFERENCES source_runs(id) ON DELETE CASCADE,
+                        UNIQUE(source_run_id, event_fingerprint)
+                    );
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_runs (
+                        run_fingerprint, source_name, source_id, identity_version, manifest_fingerprint,
+                        confidence_categories_json, command_fingerprint, status, scope_mode, workspace,
+                        requested_date, since_value, until_value, all_sessions, filters_json, command_json,
+                        reason, message, duration_sec, events_count, collected_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "r" * 64,
+                        "workspace-source",
+                        "workspace-source-v1",
+                        "1",
+                        "m" * 64,
+                        "[]",
+                        "c" * 64,
+                        "success",
+                        "workspace",
+                        "/tmp/workspace",
+                        None,
+                        "2026-03-12",
+                        "2026-03-12",
+                        0,
+                        "{}",
+                        "[]",
+                        None,
+                        None,
+                        0.1,
+                        1,
+                        "2026-03-12T10:00:00+09:00",
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO observations (
+                        source_run_id, event_fingerprint, source_name, scope_mode, occurred_at,
+                        event_type, summary, confidence, details_json, event_json, collected_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        "e" * 64,
+                        "workspace-source",
+                        "workspace",
+                        "2026-03-12T09:00:00+09:00",
+                        "commit",
+                        "Persist workspace event",
+                        "high",
+                        "{}",
+                        '{"source":"workspace-source","timestamp":"2026-03-12T09:00:00+09:00","type":"commit","summary":"Persist workspace event","details":{},"confidence":"high"}',
+                        "2026-03-12T10:00:00+09:00",
+                    ),
+                )
+                connection.execute("PRAGMA user_version = 2")
+                connection.commit()
+
+            bootstrap_store(store_path)
+
+            with sqlite3.connect(store_path) as connection:
+                connection.row_factory = sqlite3.Row
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                observation_columns = {
+                    str(row["name"]): str(row["type"]) for row in connection.execute("PRAGMA table_info(observations)").fetchall()
+                }
+                self.assertIn("observation_kind", observation_columns)
+                row = connection.execute("SELECT observation_kind FROM observations").fetchone()
+                self.assertEqual(row["observation_kind"], "event")
 
     def test_rerun_reuses_same_source_runs_without_duplicate_observations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
