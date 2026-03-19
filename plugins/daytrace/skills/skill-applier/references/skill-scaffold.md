@@ -6,7 +6,7 @@
 ## DayTrace 側の責務
 
 1. candidate から `skill_scaffold_context` を構造化する（`build_skill_scaffold_context()` が返す）
-2. context には `skill_name`, `goal`, `task_shapes`, `artifact_hints`, `rule_hints`, `execution_hints`, `representative_examples`, `evidence_summaries` を含む
+2. context には `skill_name`, `goal`, `task_shapes`, `artifact_hints`, `rule_hints`, `execution_hints`, `representative_examples`, `evidence_summaries`, `observation_count` を含む
 3. scaffold context を `skill-creator` への引き継ぎプロンプトとして出力する
 
 ## Output Template
@@ -57,3 +57,18 @@
 
 - scaffold context を提示し、`done` が確認できた時だけ `--completion-state completed` を使う
 - 確認できない場合は `pending` のまま session を閉じる
+
+### `done` 確認フロー（`skill` 固定化）
+
+`--completion-state completed` の使用条件は以下で固定する。
+
+1. **確認主体（誰が）**
+   - daytrace-session を実行しているオーケストレーター（assistant）が確認を実施する。
+2. **確認タイミング（どこで）**
+   - scaffold context と skill-creator handoff ガイドを提示し終えた直後に、1 回だけ確認する。
+3. **確認方法（どうやって）**
+   - ユーザーからの明示的な完了意思（例: `done`, `完了`, `これでOK`, `この内容で進めてよい`）を受け取る。
+   - 自動推定（出力済みだから完了とみなす等）は禁止する。
+4. **確定条件（何をもって confirmed とするか）**
+   - 上記の明示応答がある場合のみ `confirmed` とし、`--decision adopt --completion-state completed` を記録する。
+   - 明示応答がない、離脱した、保留を示した場合は `confirmed` にしない。`--completion-state pending`（または `defer` / `reject`）を記録する。

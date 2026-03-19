@@ -63,7 +63,7 @@
 
 ### `skill_scaffold_context` (suggested_kind=skill)
 
-skill-creator への引き継ぎ context。`skill-applifier` が Scaffold Draft として提示する。
+skill-creator への引き継ぎ context。`skill-applier` が Scaffold Draft として提示する。
 
 ```json
 {
@@ -98,7 +98,7 @@ skill-creator に渡すプロンプトと metadata。`--skill-creator-handoff-di
 
 ### `next_step_stub` (suggested_kind=hook|agent)
 
-hook/agent 候補の設計案。`skill-applifier` が Design Proposal として提示する。
+hook/agent 候補の設計案。`skill-applier` が Design Proposal として提示する。
 
 hook:
 ```json
@@ -176,6 +176,12 @@ agent:
 }
 ```
 
+補足（整合ルール）:
+
+- `input_fidelity` が主フィールド。`approximate` は派生フィールドで、`input_fidelity == "approximate"` のときのみ `true`。それ以外は `false`。
+- `adaptive_window.expanded` が主フィールド。`adaptive_window_expanded` は top-level の利便性ミラーで、常に `adaptive_window.expanded` と同値。
+- 互換性のために両方を残す。下流が簡易判定だけ必要な場合は top-level を参照してよいが、詳細理由や日数は `adaptive_window` を参照する。
+
 ## Learning Feedback
 
 `learning_feedback` は 0 件時の成長シグナル。daytrace-session の enriched output に使う。
@@ -223,9 +229,9 @@ agent:
 | 消費者 | 使用フィールド | 目的 |
 |--------|---------------|------|
 | LLM (proposal 表示) | `markdown`, `selection_prompt` | ユーザーへの提案表示 |
-| skill-applifier | `ready[].skill_scaffold_context` | skill scaffold draft 提示 |
-| skill-applifier | `ready[].skill_creator_handoff` | skill-creator への handoff |
-| skill-applifier | `ready[].next_step_stub` | hook/agent 設計案提示 |
+| skill-applier | `ready[].skill_scaffold_context` | skill scaffold draft 提示 |
+| skill-applier | `ready[].skill_creator_handoff` | skill-creator への handoff |
+| skill-applier | `ready[].next_step_stub` | hook/agent 設計案提示 |
 | skill_miner_decision.py | `decision_log_stub[]` | user decision の writeback |
 | 次回 prepare | `decision_log_stub[]` via JSONL | carry-forward state machine |
 | daytrace-session | `summary`, `observation_contract` | structured judgment log |

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,7 +43,7 @@ class WorkspaceFileActivityTests(unittest.TestCase):
             run_checked(["git", "commit", "-m", "Add tracked file"], cwd=repo_root)
 
             completed = subprocess.run(
-                ["python3", str(SCRIPT), "--workspace", str(workspace)],
+                [sys.executable, str(SCRIPT), "--workspace", str(workspace)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,
@@ -68,7 +69,7 @@ class WorkspaceFileActivityTests(unittest.TestCase):
             untracked_file.write_text("draft\n", encoding="utf-8")
 
             completed = subprocess.run(
-                ["python3", str(SCRIPT), "--workspace", str(workspace)],
+                [sys.executable, str(SCRIPT), "--workspace", str(workspace)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,
@@ -88,7 +89,7 @@ class WorkspaceFileActivityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             completed = subprocess.run(
-                ["python3", str(SCRIPT), "--workspace", str(workspace)],
+                [sys.executable, str(SCRIPT), "--workspace", str(workspace)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,

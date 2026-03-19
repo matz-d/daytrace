@@ -44,8 +44,8 @@
       ]
     },
     {
-      "name": "skill-applifier",
-      "path": "skills/skill-applifier/SKILL.md",
+      "name": "skill-applier",
+      "path": "skills/skill-applier/SKILL.md",
       "description": "skill-miner が提案した候補を実際の成果物（CLAUDE.md ルール追記、skill scaffold、hook/agent 設計案）に 固定化する。「提案を適用して」「CLAUDE.md に追加して」「skill にして」「hook 化して」と言われた時に使う。 daytrace-session Phase 3 の固定化アクションも担う。",
       "scripts": [
         "scripts/skill_miner_detail.py",

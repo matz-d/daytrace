@@ -83,6 +83,8 @@ Error shape:
 
 `details` is required but source-specific.
 
+`git_history.py` may also emit a `worktree_status` event for windows that include the local current day. Its `details` can include `branch`, tracked `staged_files` / `unstaged_files`, counts, and lightweight path summaries such as `path_kinds`, `dominant_kind`, `languages`, and `top_dirs`.
+
 AI history sources (`claude_history.py`, `codex_history.py`) additionally use these conventions in `details` when canonical skill-miner packets are available:
 
 - `ai_observation`: canonical packet payload for the event or summarized logical session

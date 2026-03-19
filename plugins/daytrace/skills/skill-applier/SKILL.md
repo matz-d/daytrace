@@ -1,5 +1,5 @@
 ---
-name: skill-applifier
+name: skill-applier
 description: >
   skill-miner が提案した候補を実際の成果物（CLAUDE.md ルール追記、skill scaffold、hook/agent 設計案）に
   固定化する。「提案を適用して」「CLAUDE.md に追加して」「skill にして」「hook 化して」と言われた時に使う。
@@ -7,7 +7,7 @@ description: >
 user-invocable: true
 ---
 
-# Skill Applifier
+# Skill Applier
 
 skill-miner の proposal を concrete artifact に固定化する skill。
 
@@ -94,7 +94,7 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_T
 完了状態の記録:
 
 - `CLAUDE.md` apply 成功 → `--decision adopt --completion-state completed`
-- `skill` scaffold 提示完了 → `--completion-state completed` は `done` 確認時のみ
+- `skill` scaffold 提示完了 → `--completion-state completed` は `done` 明示確認時のみ（確認手順は `references/skill-scaffold.md` の「done 確認フロー」に従う）
 - `hook` / `agent` 設計案提示 → 成功未確認のまま session を閉じる場合は `adopt` を確定させず、`pending` 経由で `defer` 扱い
 - ユーザーが「あとで」「今回は見送る」→ `defer` / `reject` を記録
 

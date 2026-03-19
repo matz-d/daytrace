@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -37,7 +38,7 @@ class ClaudeHistoryTests(unittest.TestCase):
             os.chmod(blocked, 0)
             try:
                 completed = subprocess.run(
-                    ["python3", str(SCRIPT), "--root", str(root)],
+                    [sys.executable, str(SCRIPT), "--root", str(root)],
                     cwd=str(REPO_ROOT),
                     capture_output=True,
                     text=True,
@@ -118,7 +119,7 @@ class ClaudeHistoryTests(unittest.TestCase):
 
             completed = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     "--root",
                     str(claude_root),
@@ -196,7 +197,7 @@ class ClaudeHistoryTests(unittest.TestCase):
 
             completed = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     "--root",
                     str(claude_root),

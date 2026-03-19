@@ -89,7 +89,7 @@ class ChromeHistoryTests(unittest.TestCase):
 
             completed = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     "--root",
                     str(root),
