@@ -497,7 +497,7 @@ class SkillMinerContractTests(unittest.TestCase):
             self.assertIsNotNone(payload["config"]["date_window_start"])
             self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
             self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
-            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertNotIn("adaptive_window_expanded", payload["summary"])
             self.assertGreaterEqual(payload["summary"]["total_packets"], 3)
 
     def test_prepare_workspace_mode_expands_to_thirty_days_when_sparse(self) -> None:
@@ -513,7 +513,7 @@ class SkillMinerContractTests(unittest.TestCase):
             self.assertEqual(payload["config"]["adaptive_window"]["reason"], "insufficient_packets")
             self.assertEqual(payload["config"]["adaptive_window"]["initial_packet_count"], 0)
             self.assertEqual(payload["config"]["adaptive_window"]["initial_candidate_count"], 0)
-            self.assertTrue(payload["summary"]["adaptive_window_expanded"])
+            self.assertNotIn("adaptive_window_expanded", payload["summary"])
             self.assertEqual(payload["summary"]["total_packets"], 2)
             self.assertEqual(len(payload["candidates"]), 1)
             self.assertIsNotNone(payload["config"]["date_window_start"])
@@ -529,7 +529,7 @@ class SkillMinerContractTests(unittest.TestCase):
             self.assertEqual(payload["config"]["observation_mode"], "all-sessions")
             self.assertFalse(payload["config"]["adaptive_window"]["enabled"])
             self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
-            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertNotIn("adaptive_window_expanded", payload["summary"])
             self.assertIsNotNone(payload["config"]["date_window_start"])
             self.assertEqual(payload["summary"]["total_packets"], 1)
             self.assertEqual(payload["candidates"], [])
@@ -561,7 +561,12 @@ class SkillMinerContractTests(unittest.TestCase):
             self.assertTrue(any("findings first" in item.lower() for item in candidate["acceptance_criteria"]))
             self.assertTrue(any("line references" in item.lower() for item in candidate["acceptance_criteria"]))
             self.assertEqual(payload["observation_contract"]["input_fidelity"], payload["config"]["input_fidelity"])
-            self.assertEqual(payload["observation_contract"]["adaptive_window_expanded"], payload["summary"]["adaptive_window_expanded"])
+            self.assertEqual(
+                payload["observation_contract"]["adaptive_window"]["expanded"],
+                payload["config"]["adaptive_window"]["expanded"],
+            )
+            self.assertNotIn("approximate", payload["observation_contract"])
+            self.assertNotIn("adaptive_window_expanded", payload["observation_contract"])
 
     def test_prepare_dump_intents_includes_summary_and_anonymized_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

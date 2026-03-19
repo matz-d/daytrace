@@ -172,7 +172,8 @@ Phase 1 完了直後、Phase 2 に入る前に「今日の DayTrace ダイジェ
     - prepare 出力と judge 出力（あれば）を `skill_miner_proposal.py` に渡し、stdout を shell redirect で `$SESSION_TMP/proposal.json` に保存する
     - `proposal.json` は machine-actionable JSON（contract 詳細は `skill-miner/references/proposal-json-contract.md`）
     - ユーザー向けには `markdown` フィールドを出力する
-    - `summary` と `observation_contract` は structured judgment log に使う
+    - structured judgment log では `observation_contract` を正として使う
+    - 近似入力判定は `observation_contract.input_fidelity == "approximate"`、adaptive window 判定は `observation_contract.adaptive_window.expanded` を参照する
     - `ready[]` の `skill_scaffold_context` / `skill_creator_handoff` / `next_step_stub` は Step 7 の固定化アクションの構造化入力になる
     - `ready` が 0 件の場合: `learning_feedback` を含む enriched output が自動生成され、そのまま Phase 4 へ進む
  6. ready proposal が 1 件以上ある場合だけ、proposal の `selection_prompt` を使って 1 回だけ候補選択を受け付けてよい（optional commit step — 応答がなければ pending のまま Phase 4 へ進む）

@@ -389,9 +389,11 @@ class TestObservationContract(unittest.TestCase):
         contract = build_observation_contract(metadata)
 
         self.assertEqual(contract["mode"], "workspace")
-        self.assertTrue(contract["approximate"])
+        self.assertEqual(contract["input_fidelity"], "approximate")
         self.assertTrue(contract["degraded"])
-        self.assertTrue(contract["adaptive_window_expanded"])
+        self.assertNotIn("approximate", contract)
+        self.assertNotIn("adaptive_window_expanded", contract)
+        self.assertTrue(contract["adaptive_window"]["expanded"])
         self.assertEqual(contract["adaptive_window"]["initial_days"], 7)
         self.assertEqual(contract["adaptive_window"]["effective_days"], 30)
         self.assertEqual(contract["degraded_sources"][0]["name"], "codex-history")

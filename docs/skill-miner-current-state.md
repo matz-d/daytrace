@@ -199,7 +199,8 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 - `config.effective_days`: 実際に使われた観測窓（adaptive window で 30 になる場合あり）
 - `config.all_sessions`: workspace 制限解除フラグ
 - `config.adaptive_window`: workspace モードの自動拡張メタデータ
-- `summary.adaptive_window_expanded`: adaptive window が発火したかどうか
+- `config.adaptive_window.expanded`: adaptive window が発火したかどうかの canonical key
+- `summary`: packet 数、candidate 数、blocking の規模。adaptive window 判定は含めない
 - `candidates[].support`: 出現回数・source 多様性・直近性
 - `candidates[].confidence`, `proposal_ready`, `triage_status`: 候補の強さと triage 結果
 - `candidates[].evidence_items`: proposal 用の根拠チェーン（最大 3 件）

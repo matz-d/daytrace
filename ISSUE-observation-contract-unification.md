@@ -2,6 +2,15 @@
 
 Date: 2026-03-19
 
+## Status Update
+
+- `observation_contract.approximate` は削除済み
+- `observation_contract.adaptive_window_expanded` は削除済み
+- `summary.adaptive_window_expanded` も削除済み
+- canonical 参照は以下に統一済み:
+  - 近似入力判定: `observation_contract.input_fidelity == "approximate"`
+  - adaptive window 判定: `config.adaptive_window.expanded` または `observation_contract.adaptive_window.expanded`
+
 ## Trigger
 
 CodeRabbit 指摘:
@@ -12,7 +21,7 @@ CodeRabbit 指摘:
 ## 結論（監査結果）
 
 - 指摘は妥当。現状は「主フィールド + 便宜ミラー」が混在しており、契約としては冗長。
-- ただし現時点で即削除すると互換性を壊す。テスト・下流参照が残っているため、段階移行が必要。
+- 監査時点では段階移行が必要だったが、このブランチでは repo 内 consumer を更新して完全削除まで実施した。
 - 最終形は以下に統一するのが妥当:
   - 残す: `input_fidelity`, `adaptive_window.expanded`
   - 廃止: `approximate`, `adaptive_window_expanded`（top-level）
