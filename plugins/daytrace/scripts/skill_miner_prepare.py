@@ -15,6 +15,7 @@ from aggregate_core import load_expected_sources, resolve_sources_file_path
 from common import LOCAL_TZ, current_platform, emit, ensure_datetime, error_response, resolve_workspace
 from derived_store import (
     SLICE_COMPLETE,
+    SLICE_STALE,
     evaluate_slice_completeness,
     get_observations,
     persist_patterns_from_prepare,
@@ -1001,6 +1002,10 @@ def _hydrate_store_slice(
     # We intentionally allow overlapping hydrate windows here.
     # `evaluate_slice_completeness()` already reuses broader covering slices before hydration,
     # and `read_store_packets()` collapses overlapping observations across source_run boundaries.
+    source_names = _resolve_skill_miner_source_names(
+        sources_file=sources_file,
+        workspace=workspace,
+    )
     command = [
         "python3",
         str(SCRIPT_DIR / "aggregate.py"),
@@ -1012,11 +1017,9 @@ def _hydrate_store_slice(
         until,
         "--store-path",
         str(store_path),
-        "--source",
-        CLAUDE_SOURCE,
-        "--source",
-        CODEX_SOURCE,
     ]
+    for source_name in source_names:
+        command.extend(["--source", source_name])
     if sources_file:
         command.extend(["--sources-file", str(resolve_sources_file_path(sources_file, default_sources_file=DEFAULT_SOURCES_FILE))])
     if all_sessions:
@@ -1050,21 +1053,13 @@ def _evaluate_store_slice_completeness(
     sources_file: str | None,
 ) -> dict[str, Any] | None:
     """Return completeness metadata for the current store slice."""
-    resolved_sources_file = resolve_sources_file_path(
-        sources_file,
-        default_sources_file=DEFAULT_SOURCES_FILE,
+    expected_source_metadata = _load_skill_miner_expected_source_metadata(
+        sources_file=sources_file,
+        workspace=expected_sources_workspace,
     )
-    try:
-        expected_names, expected_fingerprints = load_expected_sources(
-            resolved_sources_file,
-            platform_name=current_platform(),
-            workspace=expected_sources_workspace,
-            script_dir=SCRIPT_DIR,
-            restrict_to_names=SKILL_MINER_EXPECTED_SOURCES,
-        )
-    except Exception as exc:
-        print(f"[warn] failed to load sources from {resolved_sources_file}: {exc}", file=sys.stderr)
+    if expected_source_metadata is None:
         return None
+    expected_names, expected_fingerprints = expected_source_metadata
     return evaluate_slice_completeness(
         store_path,
         workspace=workspace,
@@ -1074,6 +1069,43 @@ def _evaluate_store_slice_completeness(
         expected_source_names=expected_names,
         expected_fingerprints=expected_fingerprints or None,
     )
+
+
+def _load_skill_miner_expected_source_metadata(
+    *,
+    sources_file: str | None,
+    workspace: Path,
+) -> tuple[set[str], dict[str, str]] | None:
+    resolved_sources_file = resolve_sources_file_path(
+        sources_file,
+        default_sources_file=DEFAULT_SOURCES_FILE,
+    )
+    try:
+        return load_expected_sources(
+            resolved_sources_file,
+            platform_name=current_platform(),
+            workspace=workspace,
+            script_dir=SCRIPT_DIR,
+            restrict_to_names=SKILL_MINER_EXPECTED_SOURCES,
+        )
+    except Exception as exc:
+        print(f"[warn] failed to load sources from {resolved_sources_file}: {exc}", file=sys.stderr)
+        return None
+
+
+def _resolve_skill_miner_source_names(
+    *,
+    sources_file: str | None,
+    workspace: Path,
+) -> list[str]:
+    expected_source_metadata = _load_skill_miner_expected_source_metadata(
+        sources_file=sources_file,
+        workspace=workspace,
+    )
+    if expected_source_metadata is None:
+        return sorted(SKILL_MINER_EXPECTED_SOURCES)
+    expected_names, _expected_fingerprints = expected_source_metadata
+    return sorted(expected_names) or sorted(SKILL_MINER_EXPECTED_SOURCES)
 
 
 def _should_persist_patterns(
@@ -1094,10 +1126,8 @@ def _should_persist_patterns(
         return False, f"source_status_not_success:{','.join(sorted(unsafe_sources))}"
     if input_fidelity == FIDELITY_APPROXIMATE:
         return False, "input_fidelity_approximate"
-    if selected_input_source == "store":
-        if store_slice_completeness is None:
-            return False, "store_slice_unvalidated"
-        if store_slice_completeness.get("status") != SLICE_COMPLETE:
+    if selected_input_source == "store" and store_slice_completeness is not None:
+        if store_slice_completeness.get("status") == SLICE_STALE:
             return False, f"store_slice_{store_slice_completeness.get('status', 'unknown')}"
     return True, None
 
@@ -1769,10 +1799,13 @@ def main() -> None:
             )
             store_packets_are_approximate = bool(store_packets) and _store_packets_fidelity(store_packets) == FIDELITY_APPROXIMATE
             store_slice_sufficient = _is_store_slice_sufficient(store_packets, store_slice_completeness)
+            store_slice_complete = (
+                store_slice_completeness is not None
+                and store_slice_completeness.get("status") == SLICE_COMPLETE
+            )
             skip_hydration_for_stale_store = (
                 store_packets_are_approximate
-                and store_slice_completeness is not None
-                and store_slice_completeness.get("status") == SLICE_COMPLETE
+                and store_slice_complete
             )
             before_hydration_status = store_slice_completeness.get("status") if store_slice_completeness else None
             store_hydration = {
@@ -1818,6 +1851,10 @@ def main() -> None:
                         sources_file=args.sources_file,
                     )
                     store_slice_sufficient = _is_store_slice_sufficient(store_packets, store_slice_completeness)
+                    store_slice_complete = (
+                        store_slice_completeness is not None
+                        and store_slice_completeness.get("status") == SLICE_COMPLETE
+                    )
                     store_hydration = {
                         "attempted": True,
                         "status": "hydrated",
@@ -1834,14 +1871,21 @@ def main() -> None:
                 source_statuses = store_statuses
                 selected_input_source = "store"
             else:
-                all_packets, source_statuses = collect_raw_packets(
+                raw_packets, raw_source_statuses = collect_raw_packets(
                     workspace=workspace,
                     claude_root=claude_root,
                     codex_history_file=codex_history_file,
                     codex_sessions_root=codex_sessions_root,
                     gap_hours=args.gap_hours,
                 )
-                selected_input_source = "raw"
+                if not raw_packets and store_packets and store_slice_complete:
+                    all_packets = store_packets
+                    source_statuses = store_statuses
+                    selected_input_source = "store"
+                else:
+                    all_packets = raw_packets
+                    source_statuses = raw_source_statuses
+                    selected_input_source = "raw"
         else:
             all_packets, source_statuses = collect_raw_packets(
                 workspace=workspace,
