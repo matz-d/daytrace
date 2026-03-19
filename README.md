@@ -1,176 +1,108 @@
 # DayTrace
 
-> A local-first, zero-config Claude Code plugin that turns your daily traces into structured outputs — daily reports, narrative drafts, and skill proposals — all from one observation pipeline.
+ローカル証跡から **観測 → 抽出 → 適用** を自律的に回す Claude Code plugin。
 
-ローカルログを集約して、日報・スキル提案・投稿下書きを自動生成する Claude Code plugin。
-外部通信なし・追加パッケージなし・設定なしで動作します。
-
-Git コミット、Claude / Codex の会話履歴、Chrome 閲覧履歴、ファイル変更を自動収集し、
-同じ観測結果から用途に応じた 3 つの成果物を自律的に生成します。
-AI 履歴では logical packet と failure/retry 関連の explicit execution metadata を扱える場合に付与し、
-pattern extraction の精度を高めます。利用できない環境では従来どおり heuristic にフォールバックします。
-source が足りない環境でも、利用可能なログだけで縮退動作します（graceful degrade）。
-
-## できること
-
-| スキル | 役割 | 主軸 | 概要 |
-|--------|------|------|------|
-| `/daily-report` | **Fact & Open Loops** | date-first | その日全体の活動を「自分用」または「共有用」の日報ドラフトに再構成する。workspace は主軸ではなく補助フィルタ |
-| `/post-draft` | **Context & Narrative** | date-first | その日の一次情報から、外部に出せる narrative draft を 1 本組み立てる。reader に合わせてトーンと粒度を自動調整する |
-| `/skill-miner` | **Pattern Extraction** | scope-first | Claude / Codex 履歴から反復パターンを抽出し、`CLAUDE.md` / `skill` / `hook` / `agent` への固定化を提案する。Codex も logical packet 抽出と execution metadata 付きで扱い、workspace か all-sessions かの観測スコープが UX 上の主要な選択肢 |
-
-### 3 skill の関係
-
-```
-daily-report  ── Fact & Open Loops ── その日に何をしたか・未完了の手がかりを整理する
-post-draft    ── Context & Narrative ── その日の一次情報を外に出せる文章に変換する
-skill-miner   ── Pattern Extraction  ── 蓄積履歴から反復パターンを読み出し、作法として固定化を提案する
-```
-
-`daily-report` と `post-draft` は **date-first**（対象日が主軸）、`skill-miner` は **scope-first**（どの範囲の履歴を読むかが主軸）。
-
-### workspace の意味はスキルごとに異なる
-
-| スキル | workspace の意味 |
-|--------|-----------------|
-| `daily-report` | 補助フィルタ。未指定でも date-first で動く。指定すると git / ファイル変更を絞り込む |
-| `post-draft` | 補助フィルタ。未指定でも date-first で動く。指定すると git / ファイル変更を絞り込む |
-| `skill-miner` | 観測スコープ。デフォルトは current workspace の 7 日窓。`--all-sessions` で workspace 制限を外す |
-
-補足:
-
-- `workspace` を省略した場合は、そのコマンドを実行した時点の **current working directory (`cwd`)** を使う
-- `git-history` は `cwd` から repo root を見つけた上で、workspace 配下の pathspec に絞って commit を読み、ローカル当日を含む窓では tracked な staged / unstaged の worktree snapshot も返す
-- `daily-report` / `post-draft` で workspace を指定しても、`claude-history` / `codex-history` / `chrome-history` まで repo 限定にはならない
-
-### mixed-scope について
-
-`daily-report` / `post-draft` は source によってスコープが異なる。
-
-- **all-day source**（`claude-history`, `codex-history`, `chrome-history`）: その日全体のログ
-- **workspace source**（`git-history`, `workspace-file-activity`）: current workspace に限定されたログ
-
-workspace を指定しない場合でも、この 2 種類が混在した mixed-scope 出力になりえる。
-workspace を指定した場合も、主に `git-history` / `workspace-file-activity` の根拠が絞られるだけで、AI 履歴や Chrome 履歴はその日全体のログとして残りうる。
-出力の冒頭に mixed-scope 注記が入る場合があるが、これは coverage の誤認を防ぐための事実説明であり、日報や narrative の価値を弱めるものではない。
+5 つのスキルが連携するパイプラインで、
+**Date-first / Scope-first の直交射影** によりデータの潰れを防ぎつつ、
+**Carry-Forward State Machine** がユーザーの reject すら次回の学習に変える。
+外部通信ゼロ・Python stdlib のみで完結する自己改善エージェントアーキテクチャ。
 
 ## インストール
 
 ```bash
-# Claude Code 内で実行
-/plugin marketplace add KaishuShito/agi-lab-skills-marketplace
-/plugin install daytrace@daytrace
+claude plugin add github:matz-d/daytrace-plugin
 ```
 
-## 依存関係
+設定不要。ソースが足りない環境でも利用可能なログだけで縮退動作します。
 
-- Python 3.x（sqlite3, json は標準ライブラリ）
-- Bash
-- Git
+## パイプライン
 
-外部パッケージのインストールは不要です。
+```
+observe ──→ project ──→ extract ──→ propose ──→ apply
+  │            │            │           │          │
+  │        date-first   scope-first  carry-     CLAUDE.md
+  │        ┌─────┐     ┌─────┐     forward    skill / hook
+  │        │daily │     │skill│     state      agent
+  │        │report│     │miner│     machine
+  │        │post  │     └─────┘
+  │        │draft │
+  │        └─────┘
+  │
+5 local sources
+(git, claude, codex, chrome, file-activity)
+```
+
+### スキル
+
+| スキル | 射影 | 役割 |
+|--------|------|------|
+| `/daytrace-session` | — | 一言で全フェーズを自律完走する統合オーケストレーター |
+| `/daily-report` | date-first | その日の活動を自分用/共有用の日報ドラフトに再構成 |
+| `/post-draft` | date-first | 一次情報から読者向け narrative draft を生成 |
+| `/skill-miner` | scope-first | AI 履歴から反復パターンを抽出し固定化を提案 |
+| `/skill-applier` | — | 提案を CLAUDE.md / skill / hook / agent に固定化 |
+
+**date-first** は「いつ」が主軸。対象日の全ソースを横断し、workspace は補助フィルタ。
+**scope-first** は「どこまで見るか」が主軸。workspace 7 日窓 → all-sessions へ段階拡張。
+
+### Carry-Forward State Machine
+
+```
+new_packet → clustered → ready → user_decision?
+                                   ├─ adopt  → adopted (suppress)
+                                   ├─ defer  → deferred (re-surface with more evidence)
+                                   └─ reject → user_rejected (re-surface only on pattern change)
+```
+
+reject された候補もパターン変化で再浮上する。defer は観測が増えるたびに confidence が上昇する。
+ユーザーの判断すべてが次回 prepare の入力になる閉ループ。
 
 ## データソース
 
-DayTrace は以下のローカルデータを読み取ります。**外部へのデータ送信は一切行いません。**
+ローカルデータのみ。**外部へのデータ送信は一切行いません。**
 
-| ソース | 対象 |
-|--------|------|
-| git-history | カレントリポジトリの Git コミット + 当日の tracked worktree snapshot |
-| claude-history | `~/.claude/projects/**/*.jsonl` |
-| codex-history | `~/.codex/history.jsonl`, `~/.codex/sessions/` |
-| chrome-history | Chrome の History DB（読み取り専用コピー、Default / Profile * を探索） |
-| workspace-file-activity | ワークスペース内の untracked ファイル変更 |
+| ソース | 対象 | スコープ |
+|--------|------|----------|
+| git-history | Git コミット + worktree snapshot | workspace |
+| claude-history | `~/.claude/projects/**/*.jsonl` | all-day |
+| codex-history | `~/.codex/history.jsonl` | all-day |
+| chrome-history | Chrome History DB（読み取り専用コピー） | all-day |
+| workspace-file-activity | untracked ファイル変更 | workspace |
 
-ソースが存在しない環境でも、利用可能なソースだけで動作します（graceful degrade）。
-全ソースが無い場合でも空の結果で正常終了します。
+workspace / all-day が混在する mixed-scope 出力では、冒頭に coverage 注記が入ります。
 
-## 審査員向け: 最短検証手順
+## 開発
 
-このリポジトリには固定の `demo/` fixture や canned output は含めません。
-検証はその場のローカルログを使って行い、source が足りない場合も graceful degrade で完走すること自体を確認対象とします。
-
-### 1. インストール直後の source 確認
+このリポジトリは開発環境です。配布用プラグインは [daytrace-plugin](https://github.com/matz-d/daytrace-plugin) に分離し、git submodule として参照しています。
 
 ```bash
-python3 plugins/daytrace/scripts/aggregate.py --date today --all-sessions >/tmp/daytrace-aggregate.json
+git clone --recurse-submodules https://github.com/matz-d/daytrace.git
 ```
 
-- `stderr` の `Source preflight:` に `available=` / `unavailable=` / `skipped=` が出る
-- `/tmp/daytrace-aggregate.json` の `sources[]` に source ごとの `status` / `scope` が入る
-- source が 0 本でも空結果で正常終了する（graceful degrade）
-
-### 2. daily-report の確認（Fact & Open Loops / date-first）
+### リポジトリ構成
 
 ```
-/daily-report
+plugins/daytrace/      → submodule (daytrace-plugin)
+  .claude-plugin/plugin.json
+  skills/              5 skill (SKILL.md + references/)
+  scripts/             18 CLI scripts + sources.json
+tests/                 テストスイート (293 tests)
+design-notes/          設計メモ
+docs/                  アーキテクチャドキュメント
 ```
 
-- 今日全体の活動が日報ドラフトとして生成されること
-- 引数なしの場合は「自分用ですか？共有用ですか？」の 1 問だけ確認して完走する
-- mixed-scope 注記（all-day source / workspace source の区別）が冒頭に入ることがある
-- source が欠けていても空日報または簡易日報で完走すること
+### テスト
 
-### 3. post-draft の確認（Context & Narrative / date-first）
-
-```
-/post-draft
+```bash
+python3 -m pytest tests/ -v
 ```
 
-- 今日の一次情報から narrative draft が 1 本生成されること
-- ask 0 回で自動完走すること
+外部パッケージ依存なし（Python 3 stdlib のみ）。
 
-### 4. skill-miner の確認（Pattern Extraction / scope-first）
+## 動作要件
 
-```
-/skill-miner
-```
-
-- 候補が「提案（固定化を推奨） / 有望候補（もう少し観測が必要） / 観測ノート」の 3 区分で返ること
-- 0 件でも失敗扱いにならないこと
-- `--all-sessions` で workspace 制限を外した広域観測ができること
-
-## リポジトリ構成
-
-```text
-.claude-plugin/
-  marketplace.json
-
-plugins/
-  daytrace/
-    .claude-plugin/
-      plugin.json
-    skills/
-      daily-report/
-        SKILL.md
-      skill-miner/
-        SKILL.md
-      post-draft/
-        SKILL.md
-    scripts/
-      sources.json
-      aggregate.py
-      git_history.py
-      claude_history.py
-      codex_history.py
-      skill_miner_prepare.py
-      skill_miner_detail.py
-      chrome_history.py
-      workspace_file_activity.py
-```
-
-## 制限事項
-
-- macOS / Linux のみ対応（Windows は未検証）
-- AI 会話履歴が大量の場合、サマリーに圧縮して処理します
-- `skill-miner` は提案時に compressed candidate view を使い、選択後だけ detail を再取得します
-- browser URL は query string / fragment を落とした正規化済み URL として扱います
-- 利用できない source や権限不足の source は graceful degrade の対象として skip / 短縮出力になります
-- install 直後の source 検出サマリーは `aggregate.py` の `stderr` に `Source preflight:` として表示され、machine-readable な詳細は `stdout` JSON の `sources[]` に出ます
-- `skill-miner` など対話で候補選択するフローの最終確認は、現状手動確認ベースです
-- `sources.json` の欠損や破損は設定エラーとして扱い、明示的に失敗させます
-- 個別 source script が欠損している場合は preflight で `command_missing` を表示し、aggregate 全体は他 source の処理を継続します
-- shell history は MVP では未収集です
+- Python 3.x（標準ライブラリのみ。外部パッケージ不要）
+- Git / macOS or Linux
 
 ## License
 
