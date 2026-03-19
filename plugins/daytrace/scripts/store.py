@@ -268,19 +268,24 @@ def _packet_observation_events(event: dict[str, Any]) -> list[dict[str, Any]]:
             candidates.append(value)
 
     ai_observation_packets = details.get("ai_observation_packets")
+    has_packet_list = False
     if isinstance(ai_observation_packets, list):
+        has_packet_list = True
         for item in ai_observation_packets:
             append_packet(item)
 
+    logical_packets = details.get("logical_packets")
+    if isinstance(logical_packets, list):
+        has_packet_list = True
+        for logical_packet in logical_packets:
+            if not isinstance(logical_packet, dict):
+                continue
+            append_packet(logical_packet.get("skill_miner_packet"))
+            append_packet(logical_packet.get("ai_observation"))
+
     if source_name == "claude-history":
-        logical_packets = details.get("logical_packets")
-        if isinstance(logical_packets, list):
-            for logical_packet in logical_packets:
-                if not isinstance(logical_packet, dict):
-                    continue
-                append_packet(logical_packet.get("skill_miner_packet"))
-                append_packet(logical_packet.get("ai_observation"))
-    else:
+        pass
+    elif not has_packet_list:
         append_packet(details.get("skill_miner_packet"))
         append_packet(details.get("ai_observation"))
 

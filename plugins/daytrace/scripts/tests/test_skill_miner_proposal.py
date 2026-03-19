@@ -280,6 +280,95 @@ class ProposalSectionsTests(unittest.TestCase):
         )
         self.assertIn("次に育てやすい候補", result["markdown"])
 
+    def test_split_judgment_materializes_ready_and_needs_research_children(self) -> None:
+        parent = _needs_research_candidate(
+            candidate_id="parent-1",
+            label="Mixed workflow cluster",
+            quality_flags=["oversized_cluster", "split_recommended"],
+            session_refs=["codex:a:1", "codex:b:2", "codex:c:3"],
+            evidence_items=[
+                {"session_ref": "codex:a:1", "source": "codex-history", "summary": "Review PR and list findings"},
+                {"session_ref": "codex:b:2", "source": "codex-history", "summary": "Review another PR with findings-first output"},
+                {"session_ref": "codex:c:3", "source": "codex-history", "summary": "Prepare a weekly report draft"},
+            ],
+        )
+        judgments = {
+            "parent-1": {
+                "judgment": {
+                    "recommendation": "split_candidate",
+                    "proposed_triage_status": "needs_research",
+                    "proposed_confidence": "weak",
+                    "summary": "recommendation=split_candidate / sampled_refs=3 / primary_shapes=review_changes, prepare_report / avg_overlap=0.11",
+                    "split_suggestions": ["review_changes", "prepare_report"],
+                    "subcluster_triage": [
+                        {
+                            "split_label": "review_changes",
+                            "triage_status": "ready",
+                            "confidence": "medium",
+                            "session_refs": ["codex:a:1", "codex:b:2"],
+                            "artifact_hint": "code",
+                            "average_overlap": 0.24,
+                        },
+                        {
+                            "split_label": "prepare_report",
+                            "triage_status": "needs_research",
+                            "confidence": "weak",
+                            "session_refs": ["codex:c:3"],
+                            "artifact_hint": "markdown",
+                            "average_overlap": 0.0,
+                        },
+                    ],
+                    "detail_signals": [
+                        {
+                            "session_ref": "codex:a:1",
+                            "task_shapes": ["review_changes"],
+                            "artifact_hints": ["code"],
+                            "user_rule_hints": ["findings-first"],
+                            "repeated_rules": ["findings-first"],
+                            "constraints": ["Do not edit unrelated files."],
+                            "acceptance_criteria": ["Include file and line references."],
+                            "tool_names": ["rg", "git"],
+                            "primary_intent": "Review PR and return findings by severity.",
+                        },
+                        {
+                            "session_ref": "codex:b:2",
+                            "task_shapes": ["review_changes"],
+                            "artifact_hints": ["code"],
+                            "user_rule_hints": ["findings-first"],
+                            "repeated_rules": ["findings-first"],
+                            "constraints": ["Do not edit unrelated files."],
+                            "acceptance_criteria": ["Include file and line references."],
+                            "tool_names": ["rg", "git"],
+                            "primary_intent": "Review another PR and keep the findings-first format.",
+                        },
+                        {
+                            "session_ref": "codex:c:3",
+                            "task_shapes": ["prepare_report"],
+                            "artifact_hints": ["markdown"],
+                            "user_rule_hints": [],
+                            "repeated_rules": [],
+                            "constraints": [],
+                            "acceptance_criteria": ["Summarize the weekly status clearly."],
+                            "tool_names": ["python3"],
+                            "primary_intent": "Prepare a weekly report draft in markdown.",
+                        },
+                    ],
+                }
+            }
+        }
+
+        result = build_proposal_sections(_prepare_payload(candidates=[parent]), judgments_by_candidate_id=judgments)
+
+        self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(result["summary"]["needs_research_count"], 1)
+        self.assertEqual(result["summary"]["rejected_count"], 0)
+        self.assertEqual(result["ready"][0]["split_origin"]["parent_candidate_id"], "parent-1")
+        self.assertEqual(result["ready"][0]["common_task_shapes"], ["review_changes"])
+        self.assertEqual(result["needs_research"][0]["common_task_shapes"], ["prepare_report"])
+        self.assertTrue(result["ready"][0]["candidate_id"].startswith("parent-1--split-"))
+        self.assertTrue(all(item["candidate_id"] != "parent-1" for item in result["decision_log_stub"]))
+        self.assertIn("split from Mixed workflow cluster", result["ready"][0]["evidence_summary"])
+
     def test_markdown_contains_section_headers(self) -> None:
         payload = _prepare_payload(candidates=[_ready_candidate()])
         result = build_proposal_sections(payload)

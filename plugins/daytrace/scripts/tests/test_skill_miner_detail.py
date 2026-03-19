@@ -162,6 +162,99 @@ class SkillMinerDetailCLITests(unittest.TestCase):
             self.assertEqual(payload["details"][0]["source"], "codex-history")
             self.assertTrue(any(tool["name"] == "rg" for tool in payload["details"][0]["tool_calls"]))
 
+    def test_cli_resolves_later_codex_logical_packet_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sessions_root = root / "codex" / "sessions"
+            history_file = root / "codex" / "history.jsonl"
+            workspace = root / "workspace"
+            session_id = "codex-split"
+            workspace.mkdir()
+
+            write_jsonl(
+                history_file,
+                [
+                    {
+                        "session_id": session_id,
+                        "ts": "2026-03-09T11:00:00+09:00",
+                        "text": "Review this PR and keep findings first.",
+                    }
+                ],
+            )
+            write_jsonl(
+                sessions_root / "2026" / "03" / "09" / "rollout-review.jsonl",
+                [
+                    {
+                        "timestamp": "2026-03-09T11:00:00+09:00",
+                        "type": "session_meta",
+                        "payload": {"id": session_id, "timestamp": "2026-03-09T11:00:00+09:00", "cwd": str(workspace)},
+                    },
+                    {
+                        "timestamp": "2026-03-09T11:00:01+09:00",
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "Review the diff and summarize issues."},
+                    },
+                    {
+                        "timestamp": "2026-03-09T11:00:02+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "id": "call-1",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "rg -n TODO src && git diff -- src/server.py"}),
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T11:00:03+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "status": "error",
+                            "exit_code": 1,
+                            "stderr": "rg failed",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T11:00:04+09:00",
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "Instead, draft release notes."},
+                    },
+                    {
+                        "timestamp": "2026-03-09T11:00:05+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Switching to release note drafting."}],
+                        },
+                    },
+                ],
+            )
+            session_ref = build_codex_session_ref(session_id, "2026-03-09T11:00:04+09:00")
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(DETAIL),
+                    "--refs",
+                    session_ref,
+                    "--codex-history-file",
+                    str(history_file),
+                    "--codex-sessions-root",
+                    str(sessions_root),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["details"][0]["messages"][0]["text"], "Instead, draft release notes.")
+
 
 if __name__ == "__main__":
     unittest.main()

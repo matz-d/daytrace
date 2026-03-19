@@ -12,9 +12,9 @@ from skill_miner_common import (
     DETAIL_SOURCE,
     DEFAULT_GAP_HOURS,
     build_claude_session_ref,
+    build_codex_logical_packets,
     build_codex_session_ref,
     claude_message_text,
-    codex_command_names,
     codex_message_text,
     compact_snippet,
     earliest_iso_timestamp,
@@ -151,7 +151,7 @@ def resolve_claude_detail(file_path: Path, epoch: int, gap_hours: int) -> dict[s
     raise ValueError(f"Claude session_ref not found: claude:{file_path}:{epoch}")
 
 
-def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, history_file: Path) -> dict[str, Any]:
+def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, history_file: Path, gap_hours: int) -> dict[str, Any]:
     rollout = None
     for path in sorted(sessions_root.glob("**/rollout-*.jsonl")):
         for record in load_jsonl(path):
@@ -177,9 +177,6 @@ def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, histo
         or earliest_iso_timestamp(history_timestamps)
         or earliest_iso_timestamp(rollout_timestamps)
     )
-    ref = build_codex_session_ref(session_id, start_timestamp)
-    if ref != f"codex:{session_id}:{epoch}":
-        raise ValueError(f"Codex session_ref not found: codex:{session_id}:{epoch}")
 
     history_messages: list[str] = []
     if history_file.exists():
@@ -189,31 +186,45 @@ def resolve_codex_detail(session_id: str, epoch: int, sessions_root: Path, histo
                 if text:
                     history_messages.append(text)
 
-    messages: list[dict[str, str]] = []
-    for text in history_messages:
-        messages.append({"role": "user", "text": text})
+    logical_packets = build_codex_logical_packets(
+        records,
+        session_id=session_id,
+        workspace=str(meta.get("cwd") or "") or None,
+        history_user_messages=history_messages,
+        history_timestamps=history_timestamps,
+        session_started_at=meta.get("timestamp"),
+        gap_hours=gap_hours,
+    )
+    target_packet = next(
+        (
+            packet
+            for packet in logical_packets
+            if build_codex_session_ref(session_id, packet.get("started_at")) == f"codex:{session_id}:{epoch}"
+        ),
+        None,
+    )
+    if target_packet is None:
+        raise ValueError(f"Codex session_ref not found: codex:{session_id}:{epoch}")
 
-    tool_counter: Counter[str] = Counter()
-    for record in records:
-        if record.get("type") == "event_msg" and record.get("payload", {}).get("type") == "user_message":
-            text = str(record.get("payload", {}).get("message") or "")
-            if text:
-                messages.append({"role": "user", "text": text})
-        elif record.get("type") == "response_item":
-            payload = record.get("payload", {})
-            payload_type = payload.get("type")
-            if payload_type == "message" and payload.get("role") == "assistant":
-                text = codex_visible_text(payload)
-                if text:
-                    messages.append({"role": "assistant", "text": text})
-            elif payload_type == "function_call":
-                tool_counter.update(codex_command_names(payload))
+    messages: list[dict[str, str]] = []
+    for text in target_packet.get("user_messages", []):
+        if str(text or "").strip():
+            messages.append({"role": "user", "text": str(text)})
+    for text in target_packet.get("assistant_messages", []):
+        if str(text or "").strip():
+            messages.append({"role": "assistant", "text": str(text)})
+
+    tool_counter: Counter[str] = Counter(
+        str(detail.get("name") or "").strip().lower()
+        for detail in target_packet.get("tool_calls", [])
+        if isinstance(detail, dict) and str(detail.get("name") or "").strip()
+    )
 
     return {
-        "session_ref": ref,
+        "session_ref": f"codex:{session_id}:{epoch}",
         "source": "codex-history",
         "workspace": meta.get("cwd"),
-        "timestamp": start_timestamp,
+        "timestamp": target_packet.get("started_at") or start_timestamp,
         "messages": messages,
         "tool_calls": [{"name": name, "count": count} for name, count in tool_counter.most_common()],
     }
@@ -235,7 +246,7 @@ def main() -> None:
                 if source_type == "claude":
                     details.append(resolve_claude_detail(Path(identifier), epoch, args.gap_hours))
                 else:
-                    details.append(resolve_codex_detail(identifier, epoch, sessions_root, history_file))
+                    details.append(resolve_codex_detail(identifier, epoch, sessions_root, history_file, args.gap_hours))
             except Exception as exc:
                 errors.append({"session_ref": session_ref, "message": str(exc)})
 

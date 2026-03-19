@@ -39,6 +39,7 @@ from skill_miner_common import (
     build_candidate_quality,
     build_candidate_decision_key,
     build_claude_logical_packets,
+    build_codex_logical_packets,
     build_tool_call_detail,
     build_observation_contract,
     build_research_brief,
@@ -387,7 +388,12 @@ def read_claude_packets(root: Path, workspace: Path | None, gap_hours: int) -> t
         return [], source_status(CLAUDE_SOURCE, "error", message=str(exc), root=str(root))
 
 
-def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def read_codex_packets(
+    history_file: Path,
+    sessions_root: Path,
+    workspace: Path | None,
+    gap_hours: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not history_file.exists() or not sessions_root.exists():
         return [], source_status(
             CODEX_SOURCE,
@@ -426,76 +432,36 @@ def read_codex_packets(history_file: Path, sessions_root: Path, workspace: Path 
                 continue
 
             session_id = str(meta.get("id"))
-            user_messages: list[str] = []
-            assistant_messages: list[str] = []
-            tools: list[str] = []
-            tool_call_details: list[dict[str, Any]] = []
-            timestamps: list[str] = []
-            for record in records:
-                record_type = record.get("type")
-                timestamp = record.get("timestamp")
-                if record_type == "event_msg" and record.get("payload", {}).get("type") == "user_message":
-                    message = str(record.get("payload", {}).get("message") or "")
-                    if message:
-                        user_messages.append(message)
-                        if timestamp:
-                            timestamps.append(str(timestamp))
-                elif record_type == "response_item":
-                    payload = record.get("payload", {})
-                    payload_type = payload.get("type")
-                    if payload_type == "message" and payload.get("role") == "assistant":
-                        text = codex_message_text(payload)
-                        if text:
-                            assistant_messages.append(text)
-                            if timestamp:
-                                timestamps.append(str(timestamp))
-                    elif payload_type == "function_call":
-                        tool_names = codex_command_names(payload)
-                        tools.extend(tool_names)
-                        raw_arguments = payload.get("arguments")
-                        try:
-                            parsed_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                        except json.JSONDecodeError:
-                            parsed_arguments = {"raw_arguments": raw_arguments}
-                        if not isinstance(parsed_arguments, dict):
-                            parsed_arguments = {"raw_arguments": parsed_arguments}
-                        for tool_name in tool_names or [str(payload.get("name") or "unknown")]:
-                            tool_call_details.append(
-                                build_tool_call_detail(
-                                    tool_name,
-                                    parsed_arguments,
-                                    timestamp=str(timestamp or ""),
-                                    workspace=str(cwd) if cwd else None,
-                                    invocation_kind=str(payload.get("name") or "function_call"),
-                                )
-                            )
-
             history_entry = history_by_session.get(session_id, {})
-            user_messages = history_entry.get("user_messages", []) + user_messages
-            start_timestamp = (
-                earliest_iso_timestamp([meta.get("timestamp")])
-                or earliest_iso_timestamp(history_entry.get("timestamps", []))
-                or earliest_iso_timestamp(timestamps)
-                or ""
+            logical_packets = build_codex_logical_packets(
+                records,
+                session_id=session_id,
+                workspace=str(cwd) if cwd else None,
+                history_user_messages=list(history_entry.get("user_messages", [])),
+                history_timestamps=list(history_entry.get("timestamps", [])),
+                session_started_at=meta.get("timestamp"),
+                gap_hours=gap_hours,
             )
-            if not user_messages and not assistant_messages:
-                continue
-            packet = _tag_fidelity(
-                build_packet(
-                    packet_id=f"codex:{session_id}",
-                    source=CODEX_SOURCE,
-                    session_ref=build_codex_session_ref(session_id, start_timestamp),
-                    session_id=session_id,
-                    workspace=str(cwd) if cwd else None,
-                    timestamp=start_timestamp or None,
-                    user_messages=user_messages,
-                    assistant_messages=assistant_messages,
-                    tools=tools,
-                    tool_call_details=tool_call_details,
-                ),
-                FIDELITY_ORIGINAL,
-            )
-            packets.append(packet)
+            for packet_index, logical_packet in enumerate(logical_packets):
+                if not logical_packet.get("user_messages") and not logical_packet.get("assistant_messages"):
+                    continue
+                packet = _tag_fidelity(
+                    build_packet(
+                        packet_id=f"codex:{session_id}:{packet_index:03d}",
+                        source=CODEX_SOURCE,
+                        session_ref=build_codex_session_ref(session_id, logical_packet.get("started_at")),
+                        session_id=session_id,
+                        workspace=str(cwd) if cwd else None,
+                        timestamp=str(logical_packet.get("started_at") or "") or None,
+                        user_messages=[str(message) for message in logical_packet.get("user_messages", [])],
+                        assistant_messages=[str(message) for message in logical_packet.get("assistant_messages", [])],
+                        tools=[str(tool) for tool in logical_packet.get("tools", [])],
+                        tool_call_details=[detail for detail in logical_packet.get("tool_calls", []) if isinstance(detail, dict)],
+                        referenced_files=list(logical_packet.get("referenced_files", [])),
+                    ),
+                    FIDELITY_ORIGINAL,
+                )
+                packets.append(packet)
         return packets, source_status(CODEX_SOURCE, "success", packets_count=len(packets))
     except PermissionError as exc:
         return [], source_status(
@@ -519,7 +485,7 @@ def collect_raw_packets(
     gap_hours: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     claude_packets, claude_status = read_claude_packets(claude_root, workspace, gap_hours)
-    codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace)
+    codex_packets, codex_status = read_codex_packets(codex_history_file, codex_sessions_root, workspace, gap_hours)
     return claude_packets + codex_packets, [claude_status, codex_status]
 
 
@@ -770,20 +736,55 @@ def _packet_from_claude_observation(observation: dict[str, Any]) -> list[dict[st
     ]
 
 
-def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
+def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ordered = sorted(observations, key=lambda item: compare_iso_timestamps(item.get("occurred_at")))
     anchor = ordered[-1]
+    rebuilt_packets: list[dict[str, Any]] = []
     for observation in ordered:
         details = observation.get("details", {})
         if not isinstance(details, dict):
             continue
+        ai_observation_packets = details.get("ai_observation_packets")
+        if isinstance(ai_observation_packets, list) and ai_observation_packets:
+            packets = [
+                stored_packet
+                for stored_packet in (
+                    _stored_skill_miner_packet(
+                        packet,
+                        source_name=CODEX_SOURCE,
+                        fallback_workspace=str(details.get("cwd") or "").strip() or None,
+                    )
+                    for packet in ai_observation_packets
+                    if isinstance(packet, dict)
+                )
+                if stored_packet is not None
+            ]
+            if packets:
+                return packets
+        logical_packets = details.get("logical_packets")
+        if isinstance(logical_packets, list) and logical_packets:
+            packets = [
+                stored_packet
+                for stored_packet in (
+                    _stored_skill_miner_packet(
+                        logical_packet.get("ai_observation") or logical_packet.get("skill_miner_packet"),
+                        source_name=CODEX_SOURCE,
+                        fallback_workspace=str(logical_packet.get("cwd") or details.get("cwd") or "").strip() or None,
+                    )
+                    for logical_packet in logical_packets
+                    if isinstance(logical_packet, dict)
+                )
+                if stored_packet is not None
+            ]
+            if packets:
+                return packets
         stored_packet = _stored_skill_miner_packet(
             details.get("ai_observation") or details.get("skill_miner_packet"),
             source_name=CODEX_SOURCE,
             fallback_workspace=str(details.get("cwd") or "").strip() or None,
         )
         if stored_packet is not None:
-            return stored_packet
+            return [stored_packet]
 
     session_id = None
     workspace = None
@@ -838,22 +839,25 @@ def _packet_from_codex_observations(observations: list[dict[str, Any]]) -> dict[
 
     timestamp = earliest_iso_timestamp(timestamps) or str(anchor["occurred_at"])
     session_ref = build_codex_session_ref(session_id or f"store-{anchor['event_fingerprint']}", timestamp)
-    return _tag_fidelity(
-        build_packet(
-            packet_id=f"codex-store:{session_id or anchor['event_fingerprint']}",
-            source=CODEX_SOURCE,
-            session_ref=session_ref,
-            session_id=session_id,
-            workspace=workspace,
-            timestamp=timestamp,
-            user_messages=user_messages,
-            assistant_messages=assistant_messages,
-            tools=tools,
-            tool_call_details=tool_call_details,
-            user_message_source=user_message_source,
-        ),
-        FIDELITY_APPROXIMATE,
+    rebuilt_packets.append(
+        _tag_fidelity(
+            build_packet(
+                packet_id=f"codex-store:{session_id or anchor['event_fingerprint']}",
+                source=CODEX_SOURCE,
+                session_ref=session_ref,
+                session_id=session_id,
+                workspace=workspace,
+                timestamp=timestamp,
+                user_messages=user_messages,
+                assistant_messages=assistant_messages,
+                tools=tools,
+                tool_call_details=tool_call_details,
+                user_message_source=user_message_source,
+            ),
+            FIDELITY_APPROXIMATE,
+        )
     )
+    return rebuilt_packets
 
 
 def read_store_packets(
@@ -944,8 +948,9 @@ def read_store_packets(
                 session_id = raw_session_id or None
             codex_groups[session_id or str(observation["event_fingerprint"])].append(observation)
         for group in codex_groups.values():
-            packets.append(_packet_from_codex_observations(group))
-            codex_packet_count += 1
+            codex_packets = _packet_from_codex_observations(group)
+            packets.extend(codex_packets)
+            codex_packet_count += len(codex_packets)
 
     statuses = [
         source_status(

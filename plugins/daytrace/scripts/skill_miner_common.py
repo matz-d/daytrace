@@ -46,6 +46,7 @@ MAX_TOOL_TRACE_ITEMS = 20
 MAX_TOOL_CALL_EXAMPLES = 8
 MAX_TOOL_ARGUMENT_PATTERNS = 8
 MAX_WORKFLOW_SIGNAL_ITEMS = 4
+TOOL_ERROR_EXCERPT_LIMIT = 160
 
 OVERSIZED_CLUSTER_MIN_PACKETS = 8
 OVERSIZED_CLUSTER_MIN_SHARE = 0.5
@@ -122,6 +123,8 @@ PIVOT_SIGNAL_PATTERNS = (
     "代わりに",
     "やっぱり",
 )
+
+CODEX_TOOL_RESULT_TYPES = {"function_call_output", "function_result", "tool_result"}
 
 def head_tail_excerpts(
     messages: list[str],
@@ -1014,6 +1017,9 @@ def build_tool_call_detail(
     timestamp: str | None = None,
     workspace: str | None = None,
     invocation_kind: str | None = None,
+    result_status: str | None = None,
+    exit_code: Any = None,
+    error_excerpt: str | None = None,
 ) -> dict[str, Any]:
     normalized_name = str(name or "").strip().lower() or "unknown"
     detail: dict[str, Any] = {"name": normalized_name}
@@ -1031,6 +1037,18 @@ def build_tool_call_detail(
     argument_pattern = _tool_argument_pattern(normalized_name, raw_input, workspace)
     if argument_pattern:
         detail["argument_pattern"] = argument_pattern
+    normalized_result_status = str(result_status or "").strip().lower()
+    if normalized_result_status in {"success", "error", "unknown"}:
+        detail["result_status"] = normalized_result_status
+    try:
+        normalized_exit_code = int(exit_code) if exit_code not in (None, "") else None
+    except (TypeError, ValueError):
+        normalized_exit_code = None
+    if normalized_exit_code is not None:
+        detail["exit_code"] = normalized_exit_code
+    normalized_error_excerpt = compact_snippet(str(error_excerpt or "").strip(), workspace, limit=TOOL_ERROR_EXCERPT_LIMIT)
+    if normalized_error_excerpt:
+        detail["error_excerpt"] = normalized_error_excerpt
     return detail
 
 
@@ -1059,7 +1077,16 @@ def _tool_call_examples(tool_call_details: list[dict[str, Any]]) -> list[dict[st
         example = {
             key: value
             for key, value in detail.items()
-            if key in {"name", "invocation_kind", "argument_keys", "argument_pattern", "referenced_files"}
+            if key in {
+                "name",
+                "invocation_kind",
+                "argument_keys",
+                "argument_pattern",
+                "referenced_files",
+                "result_status",
+                "exit_code",
+                "error_excerpt",
+            }
             and value not in (None, [], "")
         }
         if not example:
@@ -1072,6 +1099,118 @@ def _tool_call_examples(tool_call_details: list[dict[str, Any]]) -> list[dict[st
         if len(examples) >= MAX_TOOL_CALL_EXAMPLES:
             break
     return examples
+
+
+def _result_status_from_payload(payload: dict[str, Any]) -> str | None:
+    explicit_status = str(payload.get("result_status") or "").strip().lower()
+    if explicit_status in {"success", "error", "unknown"}:
+        return explicit_status
+
+    if payload.get("is_error") is True:
+        return "error"
+    if payload.get("ok") is True or payload.get("success") is True:
+        return "success"
+
+    for key in ("exit_code", "returncode", "return_code"):
+        value = payload.get(key)
+        try:
+            exit_code = int(value)
+        except (TypeError, ValueError):
+            continue
+        return "success" if exit_code == 0 else "error"
+
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"ok", "success", "completed"}:
+        return "success"
+    if status in {"error", "failed", "failure"}:
+        return "error"
+    return None
+
+
+def _exit_code_from_payload(payload: dict[str, Any]) -> int | None:
+    for key in ("exit_code", "returncode", "return_code"):
+        value = payload.get(key)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _error_excerpt_from_payload(payload: dict[str, Any], workspace: str | None) -> str | None:
+    for key in ("stderr", "error"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            value = value.get("message") or value.get("stderr") or value.get("error")
+        if str(value or "").strip():
+            return compact_snippet(str(value), workspace, limit=TOOL_ERROR_EXCERPT_LIMIT)
+    if _result_status_from_payload(payload) == "error":
+        value = payload.get("message")
+        if isinstance(value, dict):
+            value = value.get("message") or value.get("stderr") or value.get("error")
+        if str(value or "").strip():
+            return compact_snippet(str(value), workspace, limit=TOOL_ERROR_EXCERPT_LIMIT)
+    return None
+
+
+def codex_tool_result_metadata(payload: dict[str, Any], workspace: str | None) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for candidate in (
+        payload,
+        payload.get("payload"),
+        payload.get("output"),
+        payload.get("result"),
+        payload.get("response"),
+    ):
+        if isinstance(candidate, dict):
+            candidates.append(candidate)
+
+    metadata: dict[str, Any] = {}
+    for candidate in candidates:
+        result_status = _result_status_from_payload(candidate)
+        if result_status and "result_status" not in metadata:
+            metadata["result_status"] = result_status
+        exit_code = _exit_code_from_payload(candidate)
+        if exit_code is not None and "exit_code" not in metadata:
+            metadata["exit_code"] = exit_code
+        error_excerpt = _error_excerpt_from_payload(candidate, workspace)
+        if error_excerpt and "error_excerpt" not in metadata:
+            metadata["error_excerpt"] = error_excerpt
+
+    return metadata
+
+
+def apply_tool_result_metadata(detail: dict[str, Any], metadata: dict[str, Any], workspace: str | None) -> dict[str, Any]:
+    if not isinstance(detail, dict):
+        return {}
+    updated = dict(detail)
+    result_status = str(metadata.get("result_status") or "").strip().lower()
+    if result_status in {"success", "error", "unknown"}:
+        updated["result_status"] = result_status
+    try:
+        exit_code = int(metadata.get("exit_code"))
+    except (TypeError, ValueError):
+        exit_code = None
+    if exit_code is not None:
+        updated["exit_code"] = exit_code
+    error_excerpt = compact_snippet(str(metadata.get("error_excerpt") or "").strip(), workspace, limit=TOOL_ERROR_EXCERPT_LIMIT)
+    if error_excerpt:
+        updated["error_excerpt"] = error_excerpt
+    return updated
+
+
+def codex_tool_result_call_id(payload: dict[str, Any]) -> str | None:
+    for key in ("call_id", "tool_call_id", "function_call_id", "id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    nested_payload = payload.get("payload")
+    if isinstance(nested_payload, dict):
+        for key in ("call_id", "tool_call_id", "function_call_id", "id"):
+            value = str(nested_payload.get(key) or "").strip()
+            if value:
+                return value
+    return None
 
 
 def infer_intent_tool_alignment(task_shapes: list[str], tool_signature: list[str]) -> dict[str, Any]:
@@ -1136,6 +1275,80 @@ def _message_signal_evidence(
     return evidence
 
 
+def _explicit_failure_hints(tool_call_details: list[dict[str, Any]], workspace: str | None) -> list[dict[str, str]]:
+    hints: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for detail in tool_call_details:
+        if not isinstance(detail, dict):
+            continue
+        if str(detail.get("result_status") or "").strip().lower() != "error":
+            continue
+        name = str(detail.get("name") or "tool").strip().lower() or "tool"
+        exit_code = detail.get("exit_code")
+        error_excerpt = str(detail.get("error_excerpt") or "").strip()
+        parts = [f"Explicit tool failure: {name}"]
+        if exit_code not in (None, ""):
+            parts.append(f"exit={exit_code}")
+        if error_excerpt:
+            parts.append(error_excerpt)
+        snippet = compact_snippet(" / ".join(parts), workspace, limit=PRIMARY_INTENT_LIMIT)
+        if not snippet or snippet.lower() in seen:
+            continue
+        seen.add(snippet.lower())
+        hints.append({"snippet": snippet})
+        if len(hints) >= MAX_WORKFLOW_SIGNAL_ITEMS:
+            break
+    return hints
+
+
+def _explicit_retry_hints(tool_call_details: list[dict[str, Any]], workspace: str | None) -> list[dict[str, str]]:
+    hints: list[dict[str, str]] = []
+    seen: set[str] = set()
+    failed_tools: set[str] = set()
+    failed_patterns: set[str] = set()
+    for detail in tool_call_details:
+        if not isinstance(detail, dict):
+            continue
+        name = str(detail.get("name") or "").strip().lower()
+        argument_pattern = str(detail.get("argument_pattern") or "").strip().lower()
+        result_status = str(detail.get("result_status") or "").strip().lower()
+        if result_status == "error":
+            if name:
+                failed_tools.add(name)
+            if argument_pattern:
+                failed_patterns.add(argument_pattern)
+            continue
+        retry_label = ""
+        if argument_pattern and argument_pattern in failed_patterns:
+            retry_label = argument_pattern
+        elif name and name in failed_tools:
+            retry_label = name
+        if not retry_label:
+            continue
+        snippet = compact_snippet(f"Retry after explicit failure: {retry_label}", workspace, limit=PRIMARY_INTENT_LIMIT)
+        if not snippet or snippet.lower() in seen:
+            continue
+        seen.add(snippet.lower())
+        hints.append({"snippet": snippet})
+        if len(hints) >= MAX_WORKFLOW_SIGNAL_ITEMS:
+            break
+    return hints
+
+
+def _has_meaningful_explicit_results(tool_call_details: list[dict[str, Any]]) -> bool:
+    for detail in tool_call_details:
+        if not isinstance(detail, dict):
+            continue
+        result_status = str(detail.get("result_status") or "").strip().lower()
+        if result_status in {"success", "error"}:
+            return True
+        if detail.get("exit_code") not in (None, ""):
+            return True
+        if str(detail.get("error_excerpt") or "").strip():
+            return True
+    return False
+
+
 def infer_workflow_signals(
     user_messages: list[str],
     assistant_messages: list[str],
@@ -1143,12 +1356,17 @@ def infer_workflow_signals(
     workspace: str | None,
 ) -> dict[str, Any]:
     combined_messages = list(user_messages) + list(assistant_messages)
-    failure_hints = _message_signal_evidence(combined_messages, workspace, patterns=FAILURE_SIGNAL_PATTERNS)
-    retry_hints = _message_signal_evidence(combined_messages, workspace, patterns=RETRY_SIGNAL_PATTERNS)
     pivot_hints = _message_signal_evidence(user_messages, workspace, patterns=PIVOT_SIGNAL_PATTERNS)
+    has_explicit_results = _has_meaningful_explicit_results(tool_call_details)
+    if has_explicit_results:
+        failure_hints = _explicit_failure_hints(tool_call_details, workspace)
+        retry_hints = _explicit_retry_hints(tool_call_details, workspace)
+    else:
+        failure_hints = _message_signal_evidence(combined_messages, workspace, patterns=FAILURE_SIGNAL_PATTERNS)
+        retry_hints = _message_signal_evidence(combined_messages, workspace, patterns=RETRY_SIGNAL_PATTERNS)
 
     trace = [str(detail.get("name") or "").strip().lower() for detail in tool_call_details if str(detail.get("name") or "").strip()]
-    if trace:
+    if trace and not has_explicit_results:
         repeated_tools: list[str] = []
         last_name = ""
         streak = 0
@@ -1297,6 +1515,193 @@ def build_claude_logical_packets(records: list[dict[str, Any]], gap_hours: int) 
         last_timestamp = current_timestamp
         last_sidechain = current_sidechain
         last_cwd = current_cwd
+
+    flush_packet()
+    return logical_packets
+
+
+def build_codex_logical_packets(
+    records: list[dict[str, Any]],
+    *,
+    session_id: str,
+    workspace: str | None,
+    history_user_messages: list[str] | None = None,
+    history_timestamps: list[Any] | None = None,
+    session_started_at: Any = None,
+    gap_hours: int = DEFAULT_GAP_HOURS,
+) -> list[dict[str, Any]]:
+    logical_packets: list[dict[str, Any]] = []
+    packet: dict[str, Any] = {
+        "timestamps": [],
+        "user_messages": [],
+        "assistant_messages": [],
+        "tools": [],
+        "tool_calls": [],
+        "pending_tool_calls": [],
+        "has_non_user_activity": False,
+    }
+    history_messages = [str(message) for message in (history_user_messages or []) if str(message or "").strip()]
+    history_timestamps_list = [timestamp for timestamp in (history_timestamps or []) if timestamp not in (None, "")]
+    history_used = False
+    last_timestamp = None
+
+    def flush_packet() -> None:
+        nonlocal packet, history_used
+        user_messages = list(packet["user_messages"])
+        if not history_used and history_messages:
+            merged_user_messages: list[str] = []
+            for message in history_messages + user_messages:
+                if message and message not in merged_user_messages:
+                    merged_user_messages.append(message)
+            user_messages = merged_user_messages
+            history_used = True
+        if not packet["timestamps"] and not user_messages and not packet["assistant_messages"] and not packet["tool_calls"]:
+            packet = {
+                "timestamps": [],
+                "user_messages": [],
+                "assistant_messages": [],
+                "tools": [],
+                "tool_calls": [],
+                "pending_tool_calls": [],
+                "has_non_user_activity": False,
+            }
+            return
+        referenced_files = _dedupe_texts(
+            [
+                referenced_file
+                for detail in packet["tool_calls"]
+                if isinstance(detail, dict)
+                for referenced_file in detail.get("referenced_files", [])
+                if str(referenced_file or "").strip()
+            ],
+            limit=20,
+        )
+        started_at_values = list(packet["timestamps"])
+        if logical_packets == []:
+            if session_started_at not in (None, ""):
+                started_at_values.append(session_started_at)
+            started_at_values.extend(history_timestamps_list)
+        logical_packets.append(
+            {
+                "started_at": earliest_iso_timestamp(started_at_values),
+                "ended_at": max(packet["timestamps"], key=compare_iso_timestamps, default=None),
+                "timestamps": list(packet["timestamps"]),
+                "cwd": workspace,
+                "session_id": session_id,
+                "user_messages": user_messages,
+                "assistant_messages": list(packet["assistant_messages"]),
+                "tools": list(packet["tools"]),
+                "tool_calls": [dict(detail) for detail in packet["tool_calls"] if isinstance(detail, dict)],
+                "referenced_files": referenced_files,
+                "message_count": len(user_messages) + len(packet["assistant_messages"]),
+                "user_message_count": len(user_messages),
+                "assistant_message_count": len(packet["assistant_messages"]),
+            }
+        )
+        packet = {
+            "timestamps": [],
+            "user_messages": [],
+            "assistant_messages": [],
+            "tools": [],
+            "tool_calls": [],
+            "pending_tool_calls": [],
+            "has_non_user_activity": False,
+        }
+
+    def ensure_packet_boundary(current_timestamp: Any) -> None:
+        nonlocal last_timestamp
+        if packet["timestamps"] and last_timestamp is not None and current_timestamp is not None:
+            gap_seconds = current_timestamp.timestamp() - last_timestamp.timestamp()
+            if gap_seconds >= gap_hours * 60 * 60:
+                flush_packet()
+        if current_timestamp is not None:
+            last_timestamp = current_timestamp
+
+    def attach_result_metadata(payload: dict[str, Any]) -> None:
+        metadata = codex_tool_result_metadata(payload, workspace)
+        call_id = codex_tool_result_call_id(payload)
+        if call_id:
+            for pending_call_id, detail in reversed(packet["pending_tool_calls"]):
+                if pending_call_id == call_id:
+                    updated = apply_tool_result_metadata(detail, metadata, workspace)
+                    detail.clear()
+                    detail.update(updated)
+                    return
+        for _pending_call_id, detail in reversed(packet["pending_tool_calls"]):
+            if str(detail.get("result_status") or "").strip():
+                continue
+            updated = apply_tool_result_metadata(detail, metadata, workspace)
+            detail.clear()
+            detail.update(updated)
+            return
+
+    for record in records:
+        record_type = record.get("type")
+        timestamp_value = record.get("timestamp")
+        current_timestamp = ensure_datetime(timestamp_value)
+        payload = record.get("payload", {})
+        payload_type = payload.get("type") if isinstance(payload, dict) else None
+
+        if record_type == "event_msg" and isinstance(payload, dict) and payload.get("type") == "user_message":
+            ensure_packet_boundary(current_timestamp)
+            message = str(payload.get("message") or "")
+            if not message:
+                continue
+            if packet["timestamps"] and packet["has_non_user_activity"]:
+                flush_packet()
+            else:
+                pivot_signals = infer_workflow_signals([message], [], [], workspace)
+                if packet["timestamps"] and "pivot" in pivot_signals.get("flags", []):
+                    flush_packet()
+            packet["timestamps"].append(str(timestamp_value or ""))
+            packet["user_messages"].append(message)
+            continue
+
+        if record_type != "response_item" or not isinstance(payload, dict):
+            continue
+
+        if payload_type in CODEX_TOOL_RESULT_TYPES:
+            ensure_packet_boundary(current_timestamp)
+            if timestamp_value:
+                packet["timestamps"].append(str(timestamp_value))
+            packet["has_non_user_activity"] = True
+            attach_result_metadata(payload)
+            continue
+
+        if payload_type == "message" and payload.get("role") == "assistant":
+            ensure_packet_boundary(current_timestamp)
+            assistant_text = codex_message_text(payload)
+            if assistant_text:
+                packet["timestamps"].append(str(timestamp_value or ""))
+                packet["assistant_messages"].append(assistant_text)
+                packet["has_non_user_activity"] = True
+            continue
+
+        if payload_type == "function_call":
+            ensure_packet_boundary(current_timestamp)
+            raw_arguments = payload.get("arguments")
+            try:
+                parsed_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+            except json.JSONDecodeError:
+                parsed_arguments = {"raw_arguments": raw_arguments}
+            if not isinstance(parsed_arguments, dict):
+                parsed_arguments = {"raw_arguments": parsed_arguments}
+            tool_names = codex_command_names(payload)
+            timestamp_str = str(timestamp_value or "")
+            for tool_name in tool_names or [str(payload.get("name") or "unknown")]:
+                detail = build_tool_call_detail(
+                    tool_name,
+                    parsed_arguments,
+                    timestamp=timestamp_str,
+                    workspace=workspace,
+                    invocation_kind=str(payload.get("name") or "function_call"),
+                )
+                packet["tool_calls"].append(detail)
+                packet["pending_tool_calls"].append((codex_tool_result_call_id(payload), detail))
+            packet["tools"].extend(tool_names or [str(payload.get("name") or "unknown")])
+            if timestamp_str:
+                packet["timestamps"].append(timestamp_str)
+            packet["has_non_user_activity"] = True
 
     flush_packet()
     return logical_packets
@@ -2445,6 +2850,217 @@ def candidate_split_suggestions(candidate: dict[str, Any]) -> list[str]:
     return []
 
 
+def _top_signal_values(values: list[str], limit: int) -> list[str]:
+    counts: Counter[str] = Counter()
+    ordered: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        counts[value] += 1
+        if value not in ordered:
+            ordered.append(value)
+    ordered.sort(key=lambda item: (counts[item], item), reverse=True)
+    return ordered[:limit]
+
+
+def _split_child_candidate_id(parent_candidate_id: str, split_label: str, index: int) -> str:
+    base_parent = str(parent_candidate_id or "candidate").strip() or "candidate"
+    slug = _skill_slug(split_label or f"split-{index}")
+    return f"{base_parent}--split-{index:02d}-{slug}"
+
+
+def _source_name_from_session_ref(session_ref: str) -> str:
+    ref = str(session_ref or "").strip()
+    if ref.startswith("claude:"):
+        return CLAUDE_SOURCE
+    if ref.startswith("codex:"):
+        return CODEX_SOURCE
+    return "detail-research"
+
+
+def _build_split_child_evidence_items(
+    parent: dict[str, Any],
+    *,
+    session_refs: list[str],
+    relevant_signals: list[dict[str, Any]],
+    split_label: str,
+) -> list[dict[str, str]]:
+    evidence_items = parent.get("evidence_items")
+    filtered_items: list[dict[str, str]] = []
+    if isinstance(evidence_items, list):
+        allowed_refs = {ref for ref in session_refs if ref}
+        for item in evidence_items:
+            if not isinstance(item, dict):
+                continue
+            if allowed_refs and str(item.get("session_ref") or "").strip() not in allowed_refs:
+                continue
+            summary = str(item.get("summary") or "").strip()
+            if not summary:
+                continue
+            filtered_items.append(dict(item))
+    if filtered_items:
+        return filtered_items[:3]
+
+    synthesized: list[dict[str, str]] = []
+    for signal in relevant_signals[:3]:
+        session_ref = str(signal.get("session_ref") or "").strip()
+        summary = str(signal.get("primary_intent") or "").strip() or split_label.replace("_", " ")
+        if not summary:
+            continue
+        synthesized.append(
+            {
+                "session_ref": session_ref,
+                "source": _source_name_from_session_ref(session_ref),
+                "summary": summary,
+            }
+        )
+    return synthesized
+
+
+def _materialize_split_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
+    judgment = parent.get("research_judgment")
+    if not isinstance(judgment, dict) or str(judgment.get("recommendation") or "") != "split_candidate":
+        return []
+
+    subcluster_triage = judgment.get("subcluster_triage")
+    if not isinstance(subcluster_triage, list) or not subcluster_triage:
+        return []
+
+    detail_signals = judgment.get("detail_signals")
+    if not isinstance(detail_signals, list):
+        detail_signals = []
+
+    split_children: list[dict[str, Any]] = []
+    parent_candidate_id = str(parent.get("candidate_id") or "candidate").strip() or "candidate"
+    parent_label = str(parent.get("label") or "candidate").strip() or "candidate"
+
+    for index, item in enumerate(subcluster_triage, start=1):
+        if not isinstance(item, dict):
+            continue
+
+        split_label = str(item.get("split_label") or "").strip()
+        triage_status = str(item.get("triage_status") or "").strip() or "needs_research"
+        confidence = str(item.get("confidence") or parent.get("confidence") or "weak").strip() or "weak"
+        session_refs = [
+            str(session_ref).strip()
+            for session_ref in item.get("session_refs", [])
+            if str(session_ref or "").strip()
+        ]
+        relevant_signals = [
+            signal
+            for signal in detail_signals
+            if isinstance(signal, dict) and str(signal.get("session_ref") or "").strip() in set(session_refs)
+        ]
+
+        task_shapes = _top_signal_values(
+            [shape for signal in relevant_signals for shape in signal.get("task_shapes", [])],
+            3,
+        )
+        if not task_shapes and split_label:
+            task_shapes = [split_label]
+        artifact_hints = _top_signal_values(
+            [hint for signal in relevant_signals for hint in signal.get("artifact_hints", [])],
+            3,
+        )
+        rule_hints = _top_signal_values(
+            [
+                hint
+                for signal in relevant_signals
+                for hint in [*signal.get("user_rule_hints", []), *signal.get("repeated_rules", [])]
+            ],
+            3,
+        )
+        tool_signatures = _top_signal_values(
+            [tool for signal in relevant_signals for tool in signal.get("tool_names", [])],
+            5,
+        )
+        representative_examples = _top_signal_values(
+            [str(signal.get("primary_intent") or "").strip() for signal in relevant_signals],
+            2,
+        )
+        intent_trace = _dedupe_texts(
+            [str(signal.get("primary_intent") or "").strip() for signal in relevant_signals],
+            limit=MAX_INTENT_TRACE_ITEMS,
+        )
+        constraints = _dedupe_texts(
+            [value for signal in relevant_signals for value in signal.get("constraints", [])],
+            limit=MAX_CONSTRAINT_ITEMS,
+        )
+        acceptance_criteria = _dedupe_texts(
+            [value for signal in relevant_signals for value in signal.get("acceptance_criteria", [])],
+            limit=MAX_ACCEPTANCE_CRITERIA_ITEMS,
+        )
+
+        evidence_items = _build_split_child_evidence_items(
+            parent,
+            session_refs=session_refs,
+            relevant_signals=relevant_signals,
+            split_label=split_label,
+        )
+        source_names = [_source_name_from_session_ref(ref) for ref in session_refs]
+        support = {
+            "total_packets": len(session_refs) or len(relevant_signals),
+            "claude_packets": sum(1 for name in source_names if name == CLAUDE_SOURCE),
+            "codex_packets": sum(1 for name in source_names if name == CODEX_SOURCE),
+            "total_tool_calls": sum(len(signal.get("tool_names", [])) for signal in relevant_signals),
+            "unique_workspaces": 0,
+            "recent_packets_7d": len(session_refs) or len(relevant_signals),
+        }
+        overlap = item.get("average_overlap")
+        overlap_suffix = f" / avg_overlap={overlap}" if isinstance(overlap, (int, float)) else ""
+        label = candidate_label(
+            {
+                "common_task_shapes": task_shapes,
+                "artifact_hints": artifact_hints,
+                "rule_hints": rule_hints,
+                "primary_intent": representative_examples[0] if representative_examples else split_label.replace("_", " "),
+            }
+        )
+
+        split_children.append(
+            {
+                "candidate_id": _split_child_candidate_id(parent_candidate_id, split_label, index),
+                "label": label,
+                "triage_status": triage_status,
+                "proposal_ready": triage_status == "ready",
+                "confidence": confidence,
+                "suggested_kind": "",
+                "support": support,
+                "common_task_shapes": task_shapes,
+                "common_tool_signatures": tool_signatures,
+                "artifact_hints": artifact_hints,
+                "rule_hints": rule_hints,
+                "representative_examples": representative_examples,
+                "session_refs": session_refs,
+                "near_matches": [],
+                "research_targets": [],
+                "evidence_items": evidence_items,
+                "split_suggestions": [],
+                "intent_trace": intent_trace,
+                "constraints": constraints,
+                "acceptance_criteria": acceptance_criteria,
+                "score": float(parent.get("score", 0.0)),
+                "quality_flags": [],
+                "evidence_summary": (
+                    f"split from {parent_label}: {split_label or 'subcluster'} / sampled_refs={len(session_refs) or len(relevant_signals)}"
+                    f"{overlap_suffix}"
+                ),
+                "confidence_reason": (
+                    f"親候補 {parent_label} を {split_label or 'subcluster'} に分割して再評価"
+                    f"{overlap_suffix}"
+                ),
+                "split_origin": {
+                    "parent_candidate_id": parent_candidate_id,
+                    "parent_label": parent_label,
+                    "split_label": split_label,
+                },
+            }
+        )
+
+    return split_children
+
+
 def build_next_step_stub(candidate: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(candidate.get("suggested_kind") or "").strip()
     if kind not in {"hook", "agent"}:
@@ -2787,6 +3403,26 @@ def build_proposal_sections(prepare_payload: dict[str, Any], judgments_by_candid
             continue
         candidate_id = str(raw_candidate.get("candidate_id") or "")
         candidate = merge_judgment_into_candidate(raw_candidate, judgments_by_candidate_id.get(candidate_id))
+        split_children = _materialize_split_candidates(candidate)
+        if split_children:
+            for child in split_children:
+                child_triage = str(child.get("triage_status") or "")
+                if child_triage == "ready" and child.get("proposal_ready"):
+                    child = _normalize_candidate_kind(child)
+                    if str(child.get("suggested_kind") or "") == "skill":
+                        scaffold_context = build_skill_scaffold_context(child)
+                        child["skill_scaffold_context"] = scaffold_context
+                        child["skill_creator_handoff"] = build_skill_creator_handoff(scaffold_context)
+                    elif str(child.get("suggested_kind") or "") in {"hook", "agent"}:
+                        next_step_stub = build_next_step_stub(child)
+                        if next_step_stub is not None:
+                            child["next_step_stub"] = next_step_stub
+                    ready.append(child)
+                elif child_triage == "needs_research":
+                    needs_research.append(child)
+                else:
+                    rejected.append(child)
+            continue
 
         triage_status = str(candidate.get("triage_status") or "")
 

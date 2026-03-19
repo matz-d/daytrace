@@ -89,7 +89,9 @@ AI history sources (`claude_history.py`, `codex_history.py`) additionally use th
 
 - `ai_observation`: canonical packet payload for the event or summarized logical session
 - `ai_observation_packets`: list form of the same canonical packets when one event summarizes multiple logical packets
+- `logical_packets`: source-native logical packet breakdown used to reconstruct the summarized event
 - canonical packets may include richer telemetry such as `tool_trace`, `tool_argument_patterns`, `tool_call_examples`, `intent_tool_alignment`, and `workflow_signals`
+- tool call detail objects may include explicit execution metadata such as `result_status`, `exit_code`, and `error_excerpt` when rollout-native result data is available; otherwise the field set stays minimal and higher-level logic falls back to heuristic inference
 
 ## Source registry fields
 

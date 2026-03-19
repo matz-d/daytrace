@@ -601,7 +601,7 @@ class SkillMinerContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace, _claude_root, codex_history, codex_sessions = self.create_invalid_meta_timestamp_fixture(Path(temp_dir))
 
-            packets, source = read_codex_packets(codex_history, codex_sessions, workspace)
+            packets, source = read_codex_packets(codex_history, codex_sessions, workspace, 8)
 
             self.assertEqual(source["status"], "success")
             self.assertEqual(len(packets), 1)

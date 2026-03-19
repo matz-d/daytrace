@@ -25,13 +25,17 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from skill_miner_common import (
+    apply_tool_result_metadata,
     annotate_unclustered_packet,
     build_candidate_decision_key,
     build_candidate_quality,
+    build_tool_call_detail,
     build_proposal_sections,
     candidate_label,
     compact_snippet,
+    codex_tool_result_metadata,
     extract_referenced_files,
+    infer_workflow_signals,
     judge_research_candidate,
 )
 from derived_store import get_observations
@@ -72,6 +76,153 @@ class SkillMinerTests(unittest.TestCase):
         self.assertIn("src/app.py", files)
         self.assertIn("/home/user/project-other/file.py", files)
         self.assertNotIn("-other/file.py", files)
+
+    def test_infer_workflow_signals_prefers_explicit_failure_and_retry_metadata(self) -> None:
+        workspace = "/tmp/daytrace-workspace"
+        failed_call = build_tool_call_detail(
+            "pytest",
+            {"cmd": "pytest plugins/daytrace/scripts/tests -q"},
+            workspace=workspace,
+            invocation_kind="exec_command",
+            result_status="error",
+            exit_code=1,
+            error_excerpt="pytest failed",
+        )
+        retried_call = build_tool_call_detail(
+            "pytest",
+            {"cmd": "pytest plugins/daytrace/scripts/tests -q"},
+            workspace=workspace,
+            invocation_kind="exec_command",
+            result_status="success",
+            exit_code=0,
+        )
+
+        signals = infer_workflow_signals([], [], [failed_call, retried_call], workspace)
+
+        self.assertEqual(set(signals["flags"]), {"failure", "retry"})
+        self.assertTrue(any("Explicit tool failure" in item["snippet"] for item in signals["failure_hints"]))
+        self.assertTrue(any("Retry after explicit failure" in item["snippet"] for item in signals["retry_hints"]))
+
+    def test_missing_codex_result_metadata_preserves_heuristic_signal_fallback(self) -> None:
+        workspace = "/tmp/daytrace-workspace"
+        detail = build_tool_call_detail(
+            "pytest",
+            {"cmd": "pytest plugins/daytrace/scripts/tests -q"},
+            workspace=workspace,
+            invocation_kind="exec_command",
+        )
+        metadata = codex_tool_result_metadata({"type": "function_call_output", "call_id": "call-1"}, workspace)
+
+        self.assertEqual(metadata, {})
+        updated = apply_tool_result_metadata(detail, metadata, workspace)
+        self.assertNotIn("result_status", updated)
+
+        signals = infer_workflow_signals(["The previous run failed. Please retry it."], [], [updated], workspace)
+
+        self.assertEqual(set(signals["flags"]), {"failure", "retry"})
+        self.assertTrue(signals["failure_hints"])
+        self.assertTrue(signals["retry_hints"])
+
+    def test_success_result_metadata_does_not_promote_message_to_error_excerpt(self) -> None:
+        workspace = "/tmp/daytrace-workspace"
+        metadata = codex_tool_result_metadata(
+            {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "status": "success",
+                "message": f"stdout-like text from {workspace}/result.txt",
+            },
+            workspace,
+        )
+
+        self.assertEqual(metadata, {"result_status": "success"})
+        detail = build_tool_call_detail(
+            "python3",
+            {"cmd": "python3 script.py"},
+            workspace=workspace,
+            invocation_kind="exec_command",
+        )
+        updated = apply_tool_result_metadata(detail, metadata, workspace)
+        self.assertEqual(updated["result_status"], "success")
+        self.assertNotIn("error_excerpt", updated)
+
+    def test_read_codex_packets_splits_failed_tool_phase_from_followup_pivot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            history_file = root / "codex" / "history.jsonl"
+            sessions_root = root / "codex" / "sessions"
+            session_id = "codex-split"
+
+            write_jsonl(
+                history_file,
+                [
+                    {
+                        "session_id": session_id,
+                        "ts": "2026-03-12T09:00:00+09:00",
+                        "text": "Review the diff and summarize findings.",
+                    }
+                ],
+            )
+            write_jsonl(
+                sessions_root / "2026" / "03" / "12" / "rollout-split.jsonl",
+                [
+                    {
+                        "timestamp": "2026-03-12T09:00:00+09:00",
+                        "type": "session_meta",
+                        "payload": {"id": session_id, "timestamp": "2026-03-12T09:00:00+09:00", "cwd": str(workspace)},
+                    },
+                    {
+                        "timestamp": "2026-03-12T09:00:01+09:00",
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "Review the diff and summarize findings."},
+                    },
+                    {
+                        "timestamp": "2026-03-12T09:00:02+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "id": "call-1",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "pytest plugins/daytrace/scripts/tests -q"}),
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-12T09:00:03+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "status": "error",
+                            "exit_code": 1,
+                            "stderr": "pytest failed",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-12T09:00:04+09:00",
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "Instead, draft release notes."},
+                    },
+                    {
+                        "timestamp": "2026-03-12T09:00:05+09:00",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Switching to release note drafting."}],
+                        },
+                    },
+                ],
+            )
+
+            packets, source = read_codex_packets(history_file, sessions_root, workspace, 8)
+
+            self.assertEqual(source["status"], "success")
+            self.assertEqual(len(packets), 2)
+            self.assertEqual(packets[0]["workflow_signals"]["counts"]["failure"], 1)
+            self.assertEqual(packets[0]["workflow_signals"]["flags"], ["failure"])
+            self.assertIn("Instead, draft release notes.", packets[1]["full_user_intent"])
 
     def create_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         workspace = root / "workspace"
@@ -970,7 +1121,7 @@ class SkillMinerTests(unittest.TestCase):
                 ["rg", "git"],
             )
             self.assertIn("skill_miner_packet", claude_details["logical_packets"][0])
-            self.assertEqual(codex_details["skill_miner_packet"]["packet_id"], "codex:codex-review")
+            self.assertEqual(codex_details["skill_miner_packet"]["packet_id"], "codex:codex-review:summary")
             self.assertEqual(dict(packet_counts), {"claude-history": 2, "codex-history": 2})
 
     def test_get_observations_defaults_to_event_rows_when_packet_rows_exist(self) -> None:
@@ -1052,7 +1203,7 @@ class SkillMinerTests(unittest.TestCase):
             self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
 
             raw_claude_packets, _ = read_claude_packets(claude_root, workspace, 8)
-            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace)
+            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace, 8)
             raw_packets = raw_claude_packets + raw_codex_packets
             store_packets, _store_statuses = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
 
@@ -1213,7 +1364,7 @@ class SkillMinerTests(unittest.TestCase):
             self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
 
             raw_claude_packets, _ = read_claude_packets(claude_root, workspace, 8)
-            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace)
+            raw_codex_packets, _ = read_codex_packets(codex_history, codex_sessions, workspace, 8)
             store_packets, _ = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
 
             self.assertEqual(len(store_packets), len(raw_claude_packets) + len(raw_codex_packets))
@@ -1264,7 +1415,7 @@ class SkillMinerTests(unittest.TestCase):
             self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
             store_packets, _ = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
 
-            self.assertIn("codex:codex-rollout-only", {packet["packet_id"] for packet in store_packets})
+            self.assertIn("codex:codex-rollout-only:000", {packet["packet_id"] for packet in store_packets})
 
     def test_prepare_auto_falls_back_to_raw_when_store_slice_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

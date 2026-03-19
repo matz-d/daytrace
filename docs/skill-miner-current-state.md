@@ -16,9 +16,11 @@
 
 ### 2-1. 抽出（`skill_miner_prepare.py`）
 
-- Claude / Codex の生 JSONL を直接読み込み、logical session に分割する
-  - Claude: 時間 gap と `isSidechain` フラグで session 境界を検出する
+- Claude / Codex の生 JSONL を直接読み込み、logical packet に分割する
+  - Claude: 時間 gap と `isSidechain` フラグで境界を検出する
+  - Codex: user turn cluster + 後続 assistant/tool activity を 1 packet とし、時間 gap・pivot・failed tool phase 後の新しい user instruction で分割する
 - セッションを **packet** 単位に圧縮し、`task_shape`, `tool_signature`, `artifact_hints`, `repeated_rules` を特徴量として抽出する
+- tool activity に rollout-native な結果メタデータがある場合は `result_status`, `exit_code`, `error_excerpt` などの explicit execution metadata を保持し、failure/retry 関連の signal 精度を高める
 - packet を類似度ベースで **cluster** 化し、ranked `candidates` を生成する
 - 各 candidate に `session_refs`（後続フェーズで使う安定参照）を発行する
 - 観測窓: デフォルト 7 日。`--all-sessions` で workspace 制限解除（7 日窓は維持）
@@ -160,6 +162,7 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 ### 何を「できる」と言ってよいか
 
 - Claude / Codex 会話履歴から反復パターンを自動抽出し、`提案成立 / 追加調査待ち / 今回は見送り` の 3 区分で返すことができる
+- failure / retry 関連の tool activity は、利用可能な場合に explicit execution metadata として保持し、pattern extraction の精度を高められる
 - `提案成立` がある時は、根拠チェーン（どのセッションで何を繰り返したか）付きで提案内容を説明できる
 - `CLAUDE.md` 候補だけ、diff preview による immediate apply path を持つ
 - user decision が返れば、同じ decision log に writeback され、次回 prepare で suppress / resurface に反映される
@@ -174,7 +177,7 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 
 - clustering 精度改善（split-aware candidate reconstruction、similarity rebalance）
 - classification 安定化（分類前の `提案不成立` 判定の強化）
-- `skill_run` 観測（skill を使った履歴を学習データにするループ）
+- `skill_run` 観測（skill を使った履歴を改善用の追加証跡として扱うループ）
 - amend / evaluate loop（採用 → フィードバック → 改善）
 
 ## 6. 出力の読み方
