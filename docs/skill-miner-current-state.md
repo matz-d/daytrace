@@ -159,6 +159,26 @@ oversized cluster は `quality_flags` に `weak_semantic_cohesion` / `generic_to
 代表スニペットが短いため、異なる目的の作業が同じ block に乗りやすく、「具体的に何を自動化すべきか」を 1 本に定義しにくい。
 clustering / similarity 側の改善（block key / similarity rebalance, split-first 表示）が優先課題として認識されている。
 
+### 4-5. internal scaffolding contamination
+
+Claude では raw session に以下が混在しうる:
+
+- subagent へ渡した sidechain prompt
+- assistant の tool 実行結果が `type=user` として保存された `tool_result`
+- user wrapper が弱く、assistant summary に依存して primary intent を復元した packet
+
+現在の対策:
+
+- `is_sidechain=true` の Claude packet は `skill-miner` 入力から除外
+- `user(tool_result)` は user intent に入れない
+- `primary_intent_source=summary_fallback` しか持たない Claude packet は除外
+- packet / candidate に `origin_hint`, `user_signal_strength`, `contamination_signals` を付与し、`low_user_signal` / `origin_uncertain` / `contaminated_candidate` は internal-signal guard として `ready` を止める
+
+制約:
+
+- legacy store packet には contamination metadata が無い場合があるため、metadata 欠落だけで downgrade しない
+- assistant を完全に捨てるのではなく、曖昧候補の signal として見える化し、LLM / 人間判断で弾けるようにしている
+
 ## 5. 期待値として正しい説明
 
 ### 何を「できる」と言ってよいか
@@ -169,6 +189,7 @@ clustering / similarity 側の改善（block key / similarity rebalance, split-f
 - `CLAUDE.md` 候補だけ、diff preview による immediate apply path を持つ
 - user decision が返れば、同じ decision log に writeback され、次回 prepare で suppress / resurface に反映される
 - 0 件でも正常系として動作し、理由を返す
+- internal scaffolding 汚染が疑われる候補は signal を可視化し、`ready` に上げる前に guard できる
 
 ### 何は「提案止まり」か
 

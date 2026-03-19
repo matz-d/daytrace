@@ -675,6 +675,130 @@ class SkillMinerTests(unittest.TestCase):
 
         return workspace, claude_root, codex_history, codex_sessions
 
+    def create_claude_contamination_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        claude_root = root / "claude"
+        codex_history = root / "codex" / "history.jsonl"
+        codex_sessions = root / "codex" / "sessions"
+        write_jsonl(codex_history, [])
+
+        main_file = claude_root / "repo" / "session-main.jsonl"
+        write_jsonl(
+            main_file,
+            [
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:00:00+09:00",
+                    "message": {"role": "user", "content": "Review src/app.py and return findings first."},
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:00:10+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_read",
+                                "name": "Read",
+                                "input": {"file_path": str(workspace / "src" / "app.py")},
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:00:11+09:00",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "tool_use_id": "toolu_read",
+                                "type": "tool_result",
+                                "content": "1→from __future__ import annotations\n2→def helper():\n3→    pass",
+                                "is_error": False,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:00:30+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "I will inspect the file and report findings by severity."}],
+                    },
+                },
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:30:00+09:00",
+                    "message": {
+                        "role": "user",
+                        "content": "<command-name>/clear</command-name> <command-message>clear</command-message>",
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-main",
+                    "isSidechain": False,
+                    "timestamp": "2026-03-09T09:30:15+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "I will inspect unrelated files and summarize the structure."}],
+                    },
+                },
+            ],
+        )
+
+        sidechain_file = claude_root / "repo" / "subagents" / "agent-side.jsonl"
+        write_jsonl(
+            sidechain_file,
+            [
+                {
+                    "type": "user",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-side",
+                    "isSidechain": True,
+                    "timestamp": "2026-03-09T10:00:00+09:00",
+                    "message": {
+                        "role": "user",
+                        "content": "Explore the skill structure and return the full content of each SKILL.md file.",
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "cwd": str(workspace),
+                    "sessionId": "claude-side",
+                    "isSidechain": True,
+                    "timestamp": "2026-03-09T10:00:20+09:00",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "I will inspect the skill files and summarize the structure."}],
+                    },
+                },
+            ],
+        )
+
+        return workspace, claude_root, codex_history, codex_sessions
+
     def run_prepare(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, *extra_args: str) -> dict:
         completed = subprocess.run(
             [
@@ -815,6 +939,51 @@ class SkillMinerTests(unittest.TestCase):
                 "UPDATE observations SET details_json = ? WHERE id = ?",
                 (json.dumps(details, ensure_ascii=False), int(observation_id)),
             )
+        connection.commit()
+        connection.close()
+
+    def override_claude_packet_observations(self, store_path: Path, **updates: object) -> None:
+        connection = sqlite3.connect(store_path)
+        rows = connection.execute(
+            """
+            SELECT id, details_json
+            FROM observations
+            WHERE source_name = 'claude-history' AND observation_kind = 'packet'
+            """
+        ).fetchall()
+        for observation_id, details_json in rows:
+            details = json.loads(str(details_json))
+            if isinstance(details, dict):
+                details.update(updates)
+            connection.execute(
+                "UPDATE observations SET details_json = ? WHERE id = ?",
+                (json.dumps(details, ensure_ascii=False), int(observation_id)),
+            )
+        connection.commit()
+        connection.close()
+
+    def override_claude_packet_observation(self, store_path: Path, packet_id: str, **updates: object) -> None:
+        connection = sqlite3.connect(store_path)
+        row = connection.execute(
+            """
+            SELECT id, details_json
+            FROM observations
+            WHERE source_name = 'claude-history'
+              AND observation_kind = 'packet'
+              AND json_extract(details_json, '$.packet_id') = ?
+            LIMIT 1
+            """,
+            (packet_id,),
+        ).fetchone()
+        self.assertIsNotNone(row, msg=f"missing Claude packet observation for {packet_id}")
+        observation_id, details_json = row
+        details = json.loads(str(details_json))
+        self.assertIsInstance(details, dict)
+        details.update(updates)
+        connection.execute(
+            "UPDATE observations SET details_json = ? WHERE id = ?",
+            (json.dumps(details, ensure_ascii=False), int(observation_id)),
+        )
         connection.commit()
         connection.close()
 
@@ -1370,6 +1539,36 @@ class SkillMinerTests(unittest.TestCase):
                 {packet["packet_id"] for packet in raw_claude_packets + raw_codex_packets},
             )
 
+    def test_prepare_store_preserves_ready_candidate_when_legacy_origin_metadata_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            for key in ("origin_hint", "user_signal_strength", "contamination_signals"):
+                self.invalidate_store_skill_miner_packets(store_path, drop_key=key)
+
+            raw_payload = self.run_prepare(workspace, claude_root, codex_history, codex_sessions)
+            store_payload = self.run_prepare(
+                workspace,
+                claude_root,
+                codex_history,
+                codex_sessions,
+                "--input-source",
+                "store",
+                "--store-path",
+                str(store_path),
+            )
+
+            raw_candidate = raw_payload["candidates"][0]
+            store_candidate = store_payload["candidates"][0]
+            self.assertEqual(store_candidate["label"], raw_candidate["label"])
+            self.assertTrue(store_candidate["proposal_ready"])
+            self.assertEqual(store_candidate["triage_status"], "ready")
+            self.assertNotIn("origin_uncertain", store_candidate["quality_flags"])
+            self.assertNotIn("low_user_signal", store_candidate["quality_flags"])
+
     def test_store_seed_includes_rollout_only_codex_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1413,6 +1612,71 @@ class SkillMinerTests(unittest.TestCase):
             store_packets, _ = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
 
             self.assertIn("codex:codex-rollout-only:000", {packet["packet_id"] for packet in store_packets})
+
+    def test_read_claude_packets_skips_sidechain_and_tool_result_user_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, _codex_history, _codex_sessions = self.create_claude_contamination_fixture(root)
+
+            packets, source = read_claude_packets(claude_root, workspace, 8)
+
+            self.assertEqual(source["status"], "success")
+            self.assertEqual(len(packets), 1)
+            packet = packets[0]
+            self.assertFalse(packet.get("is_sidechain", False))
+            self.assertIn("Review src/app.py", packet["primary_intent"])
+            self.assertNotIn("from __future__", packet["full_user_intent"])
+            self.assertNotIn("Explore the skill structure", packet["full_user_intent"])
+            self.assertNotIn("summarize the structure", packet["full_user_intent"])
+            self.assertEqual(packet["origin_hint"], "human")
+            self.assertEqual(packet["user_signal_strength"], "high")
+            self.assertEqual(packet["contamination_signals"], [])
+
+    def test_read_store_packets_skips_claude_sidechain_and_tool_result_contamination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_claude_contamination_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            packets, statuses = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            claude_packets = [packet for packet in packets if packet["source"] == "claude-history"]
+            self.assertEqual(len(claude_packets), 1)
+            packet = claude_packets[0]
+            self.assertFalse(packet.get("is_sidechain", False))
+            self.assertIn("Review src/app.py", packet["primary_intent"])
+            self.assertNotIn("from __future__", packet["full_user_intent"])
+            self.assertNotIn("summarize the structure", packet["full_user_intent"])
+            self.assertEqual(packet["origin_hint"], "human")
+            self.assertEqual(packet["user_signal_strength"], "high")
+            self.assertEqual(packet["contamination_signals"], [])
+            self.assertTrue(any(status["name"] == "claude-history" and status["status"] == "success" for status in statuses))
+
+    def test_read_store_packets_rebuilds_filtered_claude_packet_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace, claude_root, codex_history, codex_sessions = self.create_fixture(root)
+            store_path = root / "daytrace.sqlite3"
+            self.seed_store(workspace, claude_root, codex_history, codex_sessions, store_path)
+
+            raw_claude_packets, _ = read_claude_packets(claude_root, workspace, 8)
+            self.assertEqual(len(raw_claude_packets), 2)
+
+            self.override_claude_packet_observation(
+                store_path,
+                raw_claude_packets[0]["packet_id"],
+                primary_intent_source="summary_fallback",
+            )
+
+            packets, statuses = read_store_packets(store_path, workspace=workspace, all_sessions=False, max_days=30)
+
+            claude_packets = [packet for packet in packets if packet["source"] == "claude-history"]
+            self.assertEqual(
+                {packet["packet_id"] for packet in claude_packets},
+                {packet["packet_id"] for packet in raw_claude_packets},
+            )
+            self.assertTrue(any(status["name"] == "claude-history" and status["packets_count"] == 2 for status in statuses))
 
     def test_prepare_auto_falls_back_to_raw_when_store_slice_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1826,6 +2090,36 @@ class SkillMinerTests(unittest.TestCase):
         self.assertIn("oversized_cluster", quality["quality_flags"])
         self.assertIn("generic_task_shape", quality["quality_flags"])
         self.assertIn("generic_tools", quality["quality_flags"])
+
+    def test_candidate_quality_holds_low_user_signal_candidate_for_research(self) -> None:
+        candidate = {
+            "support": {
+                "total_packets": 5,
+                "claude_packets": 5,
+                "codex_packets": 0,
+                "recent_packets_7d": 5,
+                "contaminated_packets": 2,
+            },
+            "common_task_shapes": ["implement_feature"],
+            "common_tool_signatures": ["python3", "pytest"],
+            "artifact_hints": ["code"],
+            "rule_hints": [],
+            "representative_examples": [
+                "Implement the feature and run tests.",
+                "Implement the feature and run tests.",
+            ],
+            "origin_hint": "unknown",
+            "user_signal_strength": "low",
+            "contamination_signals": ["assistant_fallback", "summary_fallback"],
+        }
+
+        quality = build_candidate_quality(candidate, total_packets_all=12)
+
+        self.assertEqual(quality["triage_status"], "needs_research")
+        self.assertFalse(quality["proposal_ready"])
+        self.assertIn("low_user_signal", quality["quality_flags"])
+        self.assertIn("origin_uncertain", quality["quality_flags"])
+        self.assertIn("contaminated_candidate", quality["quality_flags"])
 
     def test_prepare_includes_research_targets_for_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

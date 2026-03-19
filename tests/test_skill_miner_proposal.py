@@ -12,7 +12,7 @@ from typing import Any
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT, FIXTURES_DIR
 
-from skill_miner_common import DEFAULT_TOP_N, build_candidate_decision_key, build_proposal_sections, merge_judgment_into_candidate
+from skill_miner_common import DEFAULT_TOP_N, build_candidate_decision_key, build_proposal_sections, build_research_brief, merge_judgment_into_candidate
 from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
@@ -581,6 +581,36 @@ class MarkdownFormatTests(unittest.TestCase):
 
         self.assertIn("次ステップ", text)
         self.assertIn("trigger=Stop", text)
+
+    def test_proposal_item_lines_show_contamination_note(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="skill",
+            origin_hint="unknown",
+            user_signal_strength="low",
+            contamination_signals=["assistant_fallback", "summary_fallback"],
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("注記:", text)
+        self.assertIn("origin=unknown", text)
+        self.assertIn("user_signal=low", text)
+        self.assertIn("assistant_fallback", text)
+
+    def test_research_brief_includes_internal_scaffolding_question_for_contaminated_candidate(self) -> None:
+        candidate = _needs_research_candidate(
+            origin_hint="unknown",
+            user_signal_strength="low",
+            contamination_signals=["assistant_fallback"],
+            quality_flags=["low_user_signal", "origin_uncertain"],
+            research_targets=[{"session_ref": "claude:test:1", "reason": "representative"}],
+        )
+
+        brief = build_research_brief(candidate)
+
+        self.assertTrue(any("real human request" in question for question in brief["questions"]))
+        self.assertTrue(any("assistant fallback" in rule for rule in brief["decision_rules"]))
 
     def test_rejected_item_lines_format(self) -> None:
         candidate = {"label": "One-off task", "confidence_reason": "single occurrence"}

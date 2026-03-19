@@ -250,6 +250,26 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         self.assertEqual(assistant_source, "assistant_fallback")
         self.assertEqual(assistant_feature_texts, ["I will write the markdown summary and list research targets."])
 
+    def test_build_packet_exposes_origin_and_contamination_signals(self) -> None:
+        packet = build_packet(
+            packet_id="claude:test:000",
+            source="claude-history",
+            session_ref="claude:test:123",
+            session_id="test",
+            workspace="/tmp/workspace",
+            timestamp="2026-03-09T00:00:00+09:00",
+            user_messages=["<command-name>/clear</command-name>"],
+            assistant_messages=["I will inspect the files and summarize findings by severity."],
+            tools=[],
+            user_message_source="raw_user_message",
+            is_sidechain=False,
+        )
+
+        self.assertEqual(packet["origin_hint"], "unknown")
+        self.assertEqual(packet["user_signal_strength"], "low")
+        self.assertIn("assistant_fallback", packet["contamination_signals"])
+        self.assertIn("summary_fallback", packet["contamination_signals"])
+
     def test_is_directive_like_user_message_rejects_explanatory_mentions(self) -> None:
         self.assertTrue(is_directive_like_user_message("Please keep findings-first output and include file-line refs."))
         self.assertFalse(is_directive_like_user_message("This note explains the difference between findings-first and file-line-refs."))
@@ -1112,8 +1132,8 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         current_metrics = build_quality_metrics(current_candidates, current_unclustered)
 
         self.assertGreater(legacy_metrics["oversized_cluster_rate"], current_metrics["oversized_cluster_rate"])
-        self.assertLess(legacy_metrics["proposal_ready_count"], current_metrics["proposal_ready_count"])
-        self.assertGreater(legacy_metrics["zero_rate"], current_metrics["zero_rate"])
+        self.assertLessEqual(legacy_metrics["proposal_ready_count"], current_metrics["proposal_ready_count"])
+        self.assertGreaterEqual(legacy_metrics["zero_rate"], current_metrics["zero_rate"])
 
 
 if __name__ == "__main__":
