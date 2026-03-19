@@ -1105,7 +1105,7 @@ def _resolve_skill_miner_source_names(
     if expected_source_metadata is None:
         return sorted(SKILL_MINER_EXPECTED_SOURCES)
     expected_names, _expected_fingerprints = expected_source_metadata
-    return sorted(expected_names) or sorted(SKILL_MINER_EXPECTED_SOURCES)
+    return sorted(expected_names) if expected_names else sorted(SKILL_MINER_EXPECTED_SOURCES)
 
 
 def _should_persist_patterns(
@@ -1126,9 +1126,12 @@ def _should_persist_patterns(
         return False, f"source_status_not_success:{','.join(sorted(unsafe_sources))}"
     if input_fidelity == FIDELITY_APPROXIMATE:
         return False, "input_fidelity_approximate"
-    if selected_input_source == "store" and store_slice_completeness is not None:
-        if store_slice_completeness.get("status") == SLICE_STALE:
-            return False, f"store_slice_{store_slice_completeness.get('status', 'unknown')}"
+    if (
+        selected_input_source == "store"
+        and store_slice_completeness is not None
+        and store_slice_completeness.get("status") == SLICE_STALE
+    ):
+        return False, f"store_slice_{store_slice_completeness.get('status', 'unknown')}"
     return True, None
 
 
