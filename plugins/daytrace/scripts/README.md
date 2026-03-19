@@ -242,7 +242,8 @@ Important fields:
 - `config.observation_mode`: `workspace` or `all-sessions`
 - `config.date_window_start`: ISO 8601 threshold used for the effective window
 - `config.adaptive_window`: workspace-only expansion metadata, including thresholds, initial counts, and whether 30-day fallback was used
-- `summary.adaptive_window_expanded`: whether workspace mode expanded from the initial window to 30 days
+- `config.adaptive_window.expanded`: canonical flag for whether workspace mode expanded from the initial window to 30 days
+- `summary`: packet counts, candidate counts, and blocking stats only
 - `candidates[].session_refs`: stable references for detail lookup
 - `candidates[].support`: packet counts and ranking evidence
 - `candidates[].confidence`, `proposal_ready`, `triage_status`: proposal quality and triage outcome

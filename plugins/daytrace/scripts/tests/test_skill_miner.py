@@ -1649,7 +1649,7 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(payload["config"]["observation_mode"], "workspace")
             self.assertTrue(payload["config"]["adaptive_window"]["enabled"])
             self.assertFalse(payload["config"]["adaptive_window"]["expanded"])
-            self.assertFalse(payload["summary"]["adaptive_window_expanded"])
+            self.assertNotIn("adaptive_window_expanded", payload["summary"])
             self.assertIsNotNone(payload["config"]["date_window_start"])
 
     def test_candidate_quality_flags_oversized_generic_cluster_for_research(self) -> None:

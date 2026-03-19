@@ -2936,7 +2936,6 @@ def build_observation_contract(metadata: dict[str, Any] | None) -> dict[str, Any
 
     adaptive_window = config.get("adaptive_window") if isinstance(config.get("adaptive_window"), dict) else {}
     input_fidelity = str(config.get("input_fidelity") or "original")
-    approximate = input_fidelity == "approximate"
     adaptive_expanded = bool(adaptive_window.get("expanded"))
     return {
         "mode": str(config.get("observation_mode") or ("all-sessions" if config.get("all_sessions") else "workspace")),
@@ -2944,8 +2943,7 @@ def build_observation_contract(metadata: dict[str, Any] | None) -> dict[str, Any
         "days": config.get("effective_days") or config.get("days"),
         "successful_sources": successful_sources,
         "input_fidelity": input_fidelity,
-        "approximate": approximate,
-        "degraded": approximate or bool(degraded_sources),
+        "degraded": input_fidelity == "approximate" or bool(degraded_sources),
         "degraded_sources": degraded_sources,
         "adaptive_window": {
             "enabled": bool(adaptive_window.get("enabled")),
@@ -2955,7 +2953,6 @@ def build_observation_contract(metadata: dict[str, Any] | None) -> dict[str, Any
             "effective_days": config.get("effective_days") or config.get("days"),
             "fallback_days": adaptive_window.get("fallback_days"),
         },
-        "adaptive_window_expanded": adaptive_expanded,
     }
 
 
@@ -3007,7 +3004,7 @@ def _degraded_mode_lines(metadata: dict[str, Any] | None) -> list[str]:
             f"注記: 観測窓を {initial_days}日 -> {fallback_days}日に自動拡張しました（reason: {reason}）"
         )
 
-    if contract.get("approximate"):
+    if contract.get("input_fidelity") == "approximate":
         lines.append("注記: 入力の一部が近似復元データです。候補の確信度は保守的に扱ってください。")
 
     degraded_sources = [

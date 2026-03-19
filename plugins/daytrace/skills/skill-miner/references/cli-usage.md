@@ -121,12 +121,11 @@ python3 plugins/daytrace/scripts/skill_miner_proposal.py --prepare-file "$SESSIO
   - cluster に乗らなかった孤立 packet。原則として提案しない
 - `summary`
   - packet 数、candidate 数、blocking の規模
-- `summary.adaptive_window_expanded`
-  - workspace モード（`--all-sessions` なし）で 30 日 fallback が発火したか
 - `config.effective_days`
   - 実際に使われた観測窓
 - `config.adaptive_window`
   - しきい値、初期 packet / candidate 数、拡張理由
+  - `config.adaptive_window.expanded` を adaptive window 判定の canonical key として読む
 - `skill_miner_proposal.py` の出力
   - triage 済み candidate を人間向け proposal section に整形したもの
 

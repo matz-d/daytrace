@@ -1891,7 +1891,6 @@ def main() -> None:
                 "block_count": stats["block_count"],
                 "block_comparisons": stats["block_comparisons"],
                 "no_sources_available": len(all_packets) == 0,
-                "adaptive_window_expanded": adaptive_expanded,
                 "decision_log_matched_candidates": decision_log_application["matched_candidates"],
                 "decision_log_suppressed_candidates": decision_log_application["suppressed_candidates"],
             },

@@ -161,7 +161,6 @@ agent:
   "days": 7,
   "successful_sources": ["git-history", "claude-history"],
   "input_fidelity": "original | approximate",
-  "approximate": false,
   "degraded": false,
   "degraded_sources": [],
   "adaptive_window": {
@@ -171,16 +170,14 @@ agent:
     "initial_days": 7,
     "effective_days": 7,
     "fallback_days": 30
-  },
-  "adaptive_window_expanded": false
+  }
 }
 ```
 
 補足（整合ルール）:
 
-- `input_fidelity` が主フィールド。`approximate` は派生フィールドで、`input_fidelity == "approximate"` のときのみ `true`。それ以外は `false`。
-- `adaptive_window.expanded` が主フィールド。`adaptive_window_expanded` は top-level の利便性ミラーで、常に `adaptive_window.expanded` と同値。
-- 互換性のために両方を残す。下流が簡易判定だけ必要な場合は top-level を参照してよいが、詳細理由や日数は `adaptive_window` を参照する。
+- `input_fidelity` を正とし、近似入力判定は `input_fidelity == "approximate"` で行う。
+- adaptive window の有効/拡張判定は `adaptive_window` 配下のみを参照する。
 
 ## Learning Feedback
 

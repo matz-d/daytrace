@@ -132,8 +132,10 @@ python3 <plugin-root>/scripts/skill_miner_proposal.py --prepare-file "$SESSION_T
   - `true` の時は workspace 制限だけを外す
 - `config.adaptive_window`
   - workspace モード（`--all-sessions` なし）で 30 日へ拡張したか、その判定基準と初期件数
-- `summary.adaptive_window_expanded`
-  - adaptive window が発火したかどうか
+- `config.adaptive_window.expanded`
+  - adaptive window が発火したかどうかを示す canonical な判定キー
+- `summary`
+  - packet 数、candidate 数、blocking の規模。adaptive window 判定は含めない
 - `candidates[].support`
   - 出現回数、source 多様性、直近性
 - `candidates[].confidence`, `proposal_ready`, `triage_status`
