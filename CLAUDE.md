@@ -5,17 +5,19 @@
 ## テスト
 
 ```bash
-python3 -m pytest plugins/daytrace/scripts/tests/ -v
+python3 -m pytest tests/ -v
 ```
 
 外部パッケージ依存なし（Python 3 stdlib のみ）。
 
 ## リポジトリ構成
 
-- `plugins/daytrace/` — 配布単位（plugin 本体）
+- `plugins/daytrace/` — 配布単位（git submodule → [daytrace-plugin](https://github.com/matz-d/daytrace-plugin)）
 - `plugins/daytrace/.claude-plugin/plugin.json` — plugin manifest
-- `plugins/daytrace/skills/` — 3 skill（daily-report, skill-miner, post-draft）
+- `plugins/daytrace/skills/` — 5 skill（daily-report, daytrace-session, skill-miner, skill-applier, post-draft）
 - `plugins/daytrace/scripts/` — 共通 CLI + skill-miner 専用 CLI
+- `tests/` — テストスイート（開発リポジトリのみ）
+- `design-notes/` — 設計メモ（開発リポジトリのみ）
 
 ## Skill 設計規約
 
