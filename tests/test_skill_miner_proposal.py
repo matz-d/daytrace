@@ -498,9 +498,9 @@ class JudgmentMergeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["summary"]["ready_count"], 1)
-        self.assertIn("研究で解消", result["markdown"])
-        self.assertIn("分割推奨", result["markdown"])
-        self.assertIn("近接クラスタ競合", result["markdown"])
+        self.assertIn("追加調査で確認済み", result["markdown"])
+        self.assertIn("分割せず 1 つのパターンとして扱える", result["markdown"])
+        self.assertIn("類似パターンとの重複なし", result["markdown"])
 
 
 class MarkdownFormatTests(unittest.TestCase):

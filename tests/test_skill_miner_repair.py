@@ -201,7 +201,7 @@ class TestBuildProposalSectionsOversizedGuard(unittest.TestCase):
         result = build_proposal_sections(payload)
         self.assertEqual(len(result["ready"]), 0)
         self.assertEqual(len(result["needs_research"]), 1)
-        self.assertIn("巨大クラスタ", result["needs_research"][0].get("confidence_reason", ""))
+        self.assertIn("大きなグループだが一貫したパターンとして説明可能", result["needs_research"][0].get("confidence_reason", ""))
 
     def test_oversized_promoted_stays_ready(self):
         """Oversized cluster with promote_ready judgment should stay in ready."""
