@@ -12,7 +12,14 @@ from typing import Any
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT, FIXTURES_DIR
 
-from skill_miner_common import DEFAULT_TOP_N, build_candidate_decision_key, build_proposal_sections, build_research_brief, merge_judgment_into_candidate
+from skill_miner_common import (
+    DEFAULT_TOP_N,
+    build_candidate_content_key,
+    build_candidate_decision_key,
+    build_proposal_sections,
+    build_research_brief,
+    merge_judgment_into_candidate,
+)
 from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
@@ -278,6 +285,7 @@ class ProposalSectionsTests(unittest.TestCase):
 
         self.assertTrue(result["decision_log_stub"][0]["carry_forward"])
         self.assertEqual(result["decision_log_stub"][0]["decision_key"], build_candidate_decision_key(result["ready"][0]))
+        self.assertEqual(result["decision_log_stub"][0]["content_key"], build_candidate_content_key(result["ready"][0]))
 
     def test_decision_log_stub_tracks_observation_counts(self) -> None:
         payload = _prepare_payload(
@@ -1071,6 +1079,7 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(rows[0]["recommended_action"], "adopt")
             self.assertTrue(rows[0]["carry_forward"])
             self.assertEqual(rows[0]["decision_key"], build_candidate_decision_key(payload["ready"][0]))
+            self.assertEqual(rows[0]["content_key"], build_candidate_content_key(payload["ready"][0]))
             handoff_items = payload["persistence"]["skill_creator_handoff"]["items"]
             self.assertEqual(len(handoff_items), 1)
             context_file = Path(handoff_items[0]["context_file"])

@@ -25,6 +25,7 @@ from conftest import PROJECT_ROOT, PLUGIN_ROOT
 from skill_miner_common import (
     apply_tool_result_metadata,
     annotate_unclustered_packet,
+    build_candidate_content_key,
     build_candidate_decision_key,
     build_candidate_quality,
     build_tool_call_detail,
@@ -38,7 +39,16 @@ from skill_miner_common import (
 )
 from derived_store import get_observations
 import skill_miner_prepare
-from skill_miner_prepare import _store_slice_bounds, build_candidate_comparison, filter_packets_by_days, read_claude_packets, read_codex_packets, read_store_packets
+from skill_miner_prepare import (
+    _store_slice_bounds,
+    apply_decision_states_to_candidates,
+    build_candidate_comparison,
+    filter_packets_by_days,
+    load_latest_decision_states,
+    read_claude_packets,
+    read_codex_packets,
+    read_store_packets,
+)
 
 
 PREPARE = PLUGIN_ROOT / "scripts" / "skill_miner_prepare.py"
@@ -2801,6 +2811,135 @@ class SkillMinerTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["status"], "success")
             self.assertEqual(payload["summary"]["total_packets"], 1)
+
+    def test_content_key_stable_across_suggested_kind_change(self) -> None:
+        base = {
+            "label": "Review workflow",
+            "intent_trace": ["Review PR", "findings-first"],
+            "constraints": ["Do not spam"],
+            "acceptance_criteria": ["Line refs"],
+        }
+        as_hook = {**base, "suggested_kind": "hook"}
+        as_skill = {**base, "suggested_kind": "skill"}
+        self.assertEqual(build_candidate_content_key(as_hook), build_candidate_content_key(as_skill))
+        self.assertNotEqual(build_candidate_decision_key(as_hook), build_candidate_decision_key(as_skill))
+
+    def test_apply_decision_states_primary_match_has_no_migration_flag(self) -> None:
+        candidate = {
+            "candidate_id": "c1",
+            "label": "Review workflow",
+            "suggested_kind": "skill",
+            "intent_trace": ["Review PR"],
+            "constraints": [],
+            "acceptance_criteria": [],
+            "triage_status": "ready",
+            "proposal_ready": True,
+            "quality_flags": [],
+            "support": {"total_packets": 3},
+        }
+        dk = build_candidate_decision_key(candidate)
+        ck = build_candidate_content_key(candidate)
+        state = {
+            "decision_key": dk,
+            "content_key": ck,
+            "suggested_kind": "skill",
+            "carry_forward": True,
+            "user_decision": None,
+            "intent_trace": ["Review PR"],
+            "observation_count": 0,
+        }
+        retained, app = apply_decision_states_to_candidates([dict(candidate)], {dk: state}, {ck: state})
+        self.assertEqual(len(retained), 1)
+        self.assertNotIn("classification_migrated", retained[0])
+        self.assertEqual(retained[0]["prior_decision_state"]["suggested_kind"], "skill")
+        self.assertEqual(app["content_key_migrations"], 0)
+
+    def test_apply_decision_states_secondary_match_sets_classification_migrated(self) -> None:
+        shared = {
+            "candidate_id": "c1",
+            "label": "Review workflow",
+            "intent_trace": ["Review PR"],
+            "constraints": [],
+            "acceptance_criteria": [],
+            "triage_status": "ready",
+            "proposal_ready": True,
+            "quality_flags": [],
+            "support": {"total_packets": 3},
+        }
+        prior = {**shared, "suggested_kind": "hook"}
+        current = {**shared, "suggested_kind": "skill"}
+        dk_prior = build_candidate_decision_key(prior)
+        ck = build_candidate_content_key(prior)
+        state = {
+            "decision_key": dk_prior,
+            "content_key": ck,
+            "suggested_kind": "hook",
+            "carry_forward": True,
+            "user_decision": "defer",
+            "intent_trace": ["Review PR"],
+            "observation_count": 2,
+            "recorded_at": "2026-03-18T00:00:00+09:00",
+        }
+        retained, app = apply_decision_states_to_candidates([current], {dk_prior: state}, {ck: state})
+        self.assertEqual(len(retained), 1)
+        self.assertTrue(retained[0].get("classification_migrated"))
+        self.assertEqual(retained[0]["prior_decision_state"]["user_decision"], "defer")
+        self.assertEqual(app["content_key_migrations"], 1)
+        self.assertEqual(app["matched_candidates"], 1)
+
+    def test_apply_decision_states_secondary_skipped_when_kind_unchanged(self) -> None:
+        """Same content_key and same kind but decision_key miss: do not attach prior (edge case)."""
+        shared = {
+            "candidate_id": "c1",
+            "label": "Review workflow",
+            "intent_trace": ["Review PR"],
+            "constraints": [],
+            "acceptance_criteria": [],
+            "suggested_kind": "skill",
+            "triage_status": "ready",
+            "proposal_ready": True,
+            "quality_flags": [],
+            "support": {"total_packets": 3},
+        }
+        wrong_dk = "0" * 16
+        ck = build_candidate_content_key(shared)
+        state = {
+            "decision_key": wrong_dk,
+            "content_key": ck,
+            "suggested_kind": "skill",
+            "carry_forward": True,
+            "user_decision": None,
+            "observation_count": 0,
+        }
+        retained, app = apply_decision_states_to_candidates([dict(shared)], {}, {ck: state})
+        self.assertEqual(len(retained), 1)
+        self.assertNotIn("prior_decision_state", retained[0])
+        self.assertEqual(app["content_key_migrations"], 0)
+        self.assertEqual(app["matched_candidates"], 0)
+
+    def test_load_latest_decision_states_indexes_content_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "log.jsonl"
+            row = {
+                "record_type": "skill_miner_decision_stub",
+                "decision_key": "aaaabbbbccccdddd",
+                "label": "Review workflow",
+                "suggested_kind": "hook",
+                "intent_trace": ["Review PR"],
+                "constraints": [],
+                "acceptance_criteria": [],
+                "carry_forward": True,
+                "recorded_at": "2026-03-18T00:00:00+09:00",
+            }
+            ck = build_candidate_content_key(row)
+            row["content_key"] = ck
+            write_jsonl(path, [row])
+            by_dk, by_ck, status = load_latest_decision_states(path)
+            self.assertEqual(status["status"], "loaded")
+            self.assertEqual(len(by_dk), 1)
+            self.assertEqual(len(by_ck), 1)
+            self.assertEqual(by_ck[ck]["suggested_kind"], "hook")
+            self.assertEqual(by_ck[ck]["content_key"], ck)
 
 
 if __name__ == "__main__":
