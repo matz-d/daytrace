@@ -16,6 +16,7 @@ from skill_miner_common import DEFAULT_TOP_N, build_candidate_decision_key, buil
 from skill_miner_proposal import (
     build_evidence_chain_lines,
     build_markdown,
+    load_classification_overlays,
     load_judgments,
     persist_skill_creator_handoffs,
     proposal_item_lines,
@@ -162,6 +163,91 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertEqual(result["ready"][0]["skill_creator_handoff"]["entrypoint"], "/skill-creator")
         self.assertEqual(result["decision_log_stub"][0]["recommended_action"], "adopt")
         self.assertEqual(result["learning_feedback"]["status"], "ready_candidates_available")
+
+    def test_classification_overlay_can_select_llm_kind(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Run tests before close",
+            common_task_shapes=["run_tests"],
+            artifact_hints=[],
+            rule_hints=[],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "skill",
+                        "llm_reason": "This pattern is better captured as a reusable manual workflow.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "skill")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "llm")
+        self.assertIn("skill_scaffold_context", result["ready"][0])
+        self.assertEqual(result["ready"][0]["classification_trace"][-1]["kind"], "skill")
+
+    def test_low_confidence_llm_overlay_still_applies_kind(self) -> None:
+        """confidence does not change guardrail; valid llm kind is still applied."""
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Run tests before close",
+            common_task_shapes=["run_tests"],
+            artifact_hints=[],
+            rule_hints=[],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "skill",
+                        "llm_reason": "Manual workflow despite weak evidence.",
+                        "confidence": "low",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "skill")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "llm")
+        self.assertEqual(result["ready"][0].get("llm_confidence"), "low")
+
+    def test_classification_overlay_guardrail_reverts_unsafe_agent(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Build automation",
+            common_task_shapes=["implement_feature"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "agent",
+                        "llm_reason": "A persistent helper role would fit this work better.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "skill")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "guardrail_override")
+        self.assertEqual(result["ready"][0]["classification_trace"][-1]["stage"], "guardrail")
+        self.assertIn("agent requires stronger repeated behavior signals", result["ready"][0]["suggested_kind_reason"])
 
     def test_ready_hook_candidate_gets_next_step_stub(self) -> None:
         candidate = _ready_candidate(
@@ -582,6 +668,25 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("次ステップ", text)
         self.assertIn("trigger=Stop", text)
 
+    def test_proposal_item_lines_include_classification_trace_for_llm_override(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="skill",
+            suggested_kind_source="guardrail_override",
+            suggested_kind_reason="guardrail override: agent requires stronger repeated behavior signals",
+            classification_trace=[
+                {"stage": "heuristic", "kind": "skill", "reason": "default reusable workflow fallback"},
+                {"stage": "llm", "kind": "agent", "reason": "Persistent role feels more natural."},
+                {"stage": "guardrail", "kind": "skill", "reason": "guardrail override: agent requires stronger repeated behavior signals"},
+            ],
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("分類トレース", text)
+        self.assertIn("heuristic=skill / llm=agent / guardrail=skill", text)
+        self.assertIn("分類理由", text)
+
     def test_proposal_item_lines_show_contamination_note(self) -> None:
         candidate = _ready_candidate(
             suggested_kind="skill",
@@ -738,6 +843,140 @@ class ProposalCLITests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["summary"]["ready_count"], 1)
             self.assertEqual(payload["summary"]["needs_research_count"], 0)
+
+    def test_cli_with_classification_file_applies_llm_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            classification_file = Path(temp_dir) / "classification.json"
+            prepare_file.write_text(
+                json.dumps(
+                    _prepare_payload(
+                        candidates=[
+                            _ready_candidate(
+                                suggested_kind="",
+                                label="Run tests before close",
+                                common_task_shapes=["run_tests"],
+                                artifact_hints=[],
+                                rule_hints=[],
+                                support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+                            )
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            classification_file.write_text(
+                json.dumps(
+                    {
+                        "candidate_id": "c1",
+                        "classification": {
+                            "llm_suggested_kind": "skill",
+                            "llm_reason": "Treat this as a manually invoked workflow instead of full automation.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PROPOSAL),
+                    "--prepare-file",
+                    str(prepare_file),
+                    "--classification-file",
+                    str(classification_file),
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["ready"][0]["suggested_kind"], "skill")
+            self.assertEqual(payload["ready"][0]["suggested_kind_source"], "llm")
+
+    def test_cli_without_classification_file_uses_heuristic_fallback(self) -> None:
+        """No --classification-file: empty suggested_kind is resolved by Python heuristic only."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            prepare_file.write_text(
+                json.dumps(
+                    _prepare_payload(
+                        candidates=[
+                            _ready_candidate(
+                                suggested_kind="",
+                                label="Run tests before close",
+                                common_task_shapes=["run_tests"],
+                                artifact_hints=[],
+                                rule_hints=[],
+                                support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+                            )
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                ["python3", str(PROPOSAL), "--prepare-file", str(prepare_file)],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["ready"][0]["suggested_kind"], "hook")
+            self.assertEqual(payload["ready"][0]["suggested_kind_source"], "heuristic")
+
+    def test_cli_malformed_classification_file_graceful_fallback(self) -> None:
+        """Invalid JSON overlay is skipped; candidate falls back to heuristic."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            bad_overlay = Path(temp_dir) / "bad.json"
+            prepare_file.write_text(
+                json.dumps(
+                    _prepare_payload(
+                        candidates=[
+                            _ready_candidate(
+                                suggested_kind="",
+                                label="Run tests before close",
+                                common_task_shapes=["run_tests"],
+                                artifact_hints=[],
+                                rule_hints=[],
+                                support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+                            )
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            bad_overlay.write_text("{ not valid json\n", encoding="utf-8")
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PROPOSAL),
+                    "--prepare-file",
+                    str(prepare_file),
+                    "--classification-file",
+                    str(bad_overlay),
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["ready"][0]["suggested_kind"], "hook")
+            self.assertEqual(payload["ready"][0]["suggested_kind_source"], "heuristic")
 
     def test_cli_markdown_matches_golden_fixture(self) -> None:
         self.assertEqual(
@@ -947,6 +1186,52 @@ class LoadJudgmentsTests(unittest.TestCase):
             result = load_judgments([str(j1)])
 
             self.assertEqual(len(result), 0)
+
+
+class LoadClassificationOverlaysTests(unittest.TestCase):
+    """Tests for the load_classification_overlays helper."""
+
+    def test_loads_multiple_overlay_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            c1 = Path(temp_dir) / "c1.json"
+            c2 = Path(temp_dir) / "c2.json"
+            c1.write_text(json.dumps({"candidate_id": "c1", "classification": {"llm_suggested_kind": "skill"}}))
+            c2.write_text(json.dumps({"candidate_id": "c2", "classification": {"llm_suggested_kind": "agent"}}))
+
+            result = load_classification_overlays([str(c1), str(c2)])
+
+            self.assertEqual(len(result), 2)
+            self.assertIn("c1", result)
+            self.assertIn("c2", result)
+
+    def test_skips_overlay_without_candidate_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            c1 = Path(temp_dir) / "c1.json"
+            c1.write_text(json.dumps({"classification": {"llm_suggested_kind": "skill"}}))
+
+            result = load_classification_overlays([str(c1)])
+
+            self.assertEqual(result, {})
+
+    def test_skips_malformed_json_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            good = Path(temp_dir) / "good.json"
+            bad = Path(temp_dir) / "bad.json"
+            good.write_text(json.dumps({"candidate_id": "c1", "classification": {"llm_suggested_kind": "skill"}}))
+            bad.write_text("not json", encoding="utf-8")
+
+            result = load_classification_overlays([str(bad), str(good)])
+
+            self.assertEqual(list(result.keys()), ["c1"])
+
+    def test_skips_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            arr = Path(temp_dir) / "arr.json"
+            arr.write_text("[1, 2]", encoding="utf-8")
+
+            result = load_classification_overlays([str(arr)])
+
+            self.assertEqual(result, {})
 
 
 if __name__ == "__main__":
