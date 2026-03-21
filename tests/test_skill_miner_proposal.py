@@ -154,7 +154,52 @@ class ProposalSectionsTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["ready_count"], 0)
         self.assertEqual(result["summary"]["needs_research_count"], 1)
+        self.assertEqual(result["summary"]["triaged_total"], 1)
         self.assertIsNone(result["selection_prompt"])
+
+    def test_skill_handoff_cross_repo_when_dominant_workspace_differs(self) -> None:
+        cand = _ready_candidate(
+            suggested_kind="skill",
+            dominant_workspace="/other/repo",
+            workspace_paths=["/other/repo"],
+            label="Other repo skill",
+            common_task_shapes=["run_tests"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[cand])
+        payload["config"]["workspace"] = "/tmp/daytrace"
+        result = build_proposal_sections(payload)
+        ho = result["ready"][0]["skill_creator_handoff"]
+        self.assertTrue(ho.get("cross_repo"))
+        self.assertEqual(ho.get("handoff_scope"), "other_repo")
+        self.assertEqual(ho.get("target_workspace_hint"), str(Path("/other/repo").resolve()))
+
+    def test_summary_triaged_total_matches_section_lengths(self) -> None:
+        payload = _prepare_payload(
+            candidates=[
+                _needs_research_candidate(candidate_id="n1"),
+                _needs_research_candidate(candidate_id="n2"),
+            ],
+        )
+        result = build_proposal_sections(payload)
+        self.assertEqual(result["summary"]["triaged_total"], 2)
+        self.assertEqual(
+            result["summary"]["triaged_total"],
+            result["summary"]["ready_count"]
+            + result["summary"]["needs_research_count"]
+            + result["summary"]["rejected_count"],
+        )
+
+    def test_zero_ready_markdown_ignores_stale_total_candidates_metadata(self) -> None:
+        """Regression: prepare summary.total_candidates=0 must not yield '0件中' when triage has rows."""
+        candidates = [_needs_research_candidate(candidate_id=f"n{i}") for i in range(7)]
+        payload = _prepare_payload(candidates=candidates)
+        payload["summary"]["total_candidates"] = 0
+        md = build_markdown([], candidates, [], metadata=payload)
+        self.assertIn("検出候補数: 7件中 0 件が提案条件を満たした", md)
+        self.assertIn("7件のクラスタを検出", md)
 
     def test_ready_candidate_without_suggested_kind_gets_skill_scaffold_context_and_handoff(self) -> None:
         candidate = _ready_candidate(
@@ -961,13 +1006,13 @@ class MarkdownFormatTests(unittest.TestCase):
 
     def test_build_markdown_with_ready_includes_selection_prompt(self) -> None:
         markdown = build_markdown([_ready_candidate()], [], [])
-        self.assertIn("今すぐ適用する候補を選んでください", markdown)
+        self.assertIn("候補番号を入力すると /skill-creator による登録フローが始まります", markdown)
 
     def test_build_markdown_without_ready_shows_no_candidates(self) -> None:
         markdown = build_markdown([], [_needs_research_candidate()], [])
         self.assertIn("今回は有力候補なし", markdown)
         self.assertIn("見送り理由の傾向", markdown)
-        self.assertNotIn("今すぐ適用する候補を選んでください", markdown)
+        self.assertNotIn("候補番号を入力すると /skill-creator による登録フローが始まります", markdown)
 
     def test_build_markdown_limits_rejected_to_five(self) -> None:
         rejected = [
@@ -1252,6 +1297,7 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(payload["summary"]["ready_count"], 0)
             self.assertEqual(payload["summary"]["needs_research_count"], 0)
             self.assertEqual(payload["summary"]["rejected_count"], 0)
+            self.assertEqual(payload["summary"]["triaged_total"], 0)
 
     def test_cli_persists_decision_log_and_skill_creator_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1313,10 +1359,13 @@ class ProposalCLITests(unittest.TestCase):
             handoff_bundle = json.loads(context_file.read_text(encoding="utf-8"))
             self.assertEqual(handoff_bundle["record_type"], "skill_creator_handoff")
             self.assertEqual(handoff_bundle["context"]["skill_name"], "build-automation")
+            self.assertEqual(handoff_bundle.get("handoff_schema_version"), 2)
+            self.assertEqual(context_file.name, "handoff-c1.json")
             self.assertIn("公式 handoff:", payload["markdown"])
             self.assertNotIn(str(context_file), payload["markdown"])
 
-    def test_persist_skill_creator_handoffs_sanitizes_timestamp_fragment(self) -> None:
+    def test_persist_skill_creator_handoffs_uses_stable_filename_per_candidate(self) -> None:
+        """latest-wins: same candidate_id overwrites handoff-{id}.json (phase-4 dedup)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             handoff_dir = Path(temp_dir) / "handoffs"
             proposal = {
@@ -1330,6 +1379,9 @@ class ProposalCLITests(unittest.TestCase):
                         skill_creator_handoff={
                             "tool": "skill-creator",
                             "entrypoint": "/skill-creator",
+                            "cross_repo": False,
+                            "target_workspace_hint": "/tmp",
+                            "current_workspace": "/tmp",
                             "suggested_invocation": "/skill-creator build-automation をスキルにしてください",
                         },
                     )
@@ -1345,9 +1397,10 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(result["status"], "persisted")
             context_file = Path(result["items"][0]["context_file"])
             self.assertTrue(context_file.exists())
-            self.assertEqual(context_file.name.split("-", 1)[0], "20260318T0000000900")
-            self.assertNotIn("+", context_file.name)
-            self.assertNotIn(":", context_file.name)
+            self.assertEqual(context_file.name, "handoff-c1.json")
+            bundle = json.loads(context_file.read_text(encoding="utf-8"))
+            self.assertEqual(bundle.get("handoff_schema_version"), 2)
+            self.assertIn("presentation_block", bundle.get("handoff") or {})
 
     def test_cli_applies_user_decision_overlay_before_persisting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

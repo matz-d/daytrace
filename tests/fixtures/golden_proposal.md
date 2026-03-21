@@ -1,6 +1,8 @@
 ### 観測範囲
 観測範囲: current workspace / 直近 ?日間 / source 不明
 
+> 候補内訳: 適用 2 / 追加観測 1 / 観測ノート 2（合計 5）
+
 ## 提案（アクション候補）
 1. review changes (review, code)
    種類: プロジェクト設定（CLAUDE.md）
@@ -12,6 +14,8 @@
    → すぐに CLAUDE.md に追加できます
 2. prepare report (report, markdown)
    種類: 再利用スキル
+   適用先: 現在のリポジトリ
+   workspace 注記: 観測 workspace と同一リポジトリ向けの候補として扱っています。
    確度: 中程度 — 複数セッションで出現、もう少し定着を見たい
    根拠:
    - 3 packets / recurring fake daily-brief draft flow
@@ -34,4 +38,4 @@
 2. Investigate a one-off fake import warning.
    理由: single observed packet only; keep as reference, not as a proposal candidate
 
-今すぐ適用する候補を選んでください。番号を返すと適用フローに入ります。選ばなかった候補も次回以降の提案として保持されます。
+候補番号を入力すると /skill-creator による登録フローが始まります。選ばなかった候補は次回以降も引き続き提案されます。複数登録したい場合は 1 つずつ選択してください。

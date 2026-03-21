@@ -2550,7 +2550,7 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(payload["source"], "skill-miner-proposal")
             self.assertEqual(len(payload["ready"]), 1)
             self.assertEqual(payload["ready"][0]["candidate_id"], "cand-1")
-            self.assertIn("今すぐ適用する候補を選んでください", payload["markdown"])
+            self.assertIn("候補番号を入力すると /skill-creator による登録フローが始まります", payload["markdown"])
 
     def test_build_proposal_sections_handles_zero_ready_candidates(self) -> None:
         prepare_payload = {
