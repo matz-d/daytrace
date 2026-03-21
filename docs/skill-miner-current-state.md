@@ -99,9 +99,9 @@ score の current ルール:
 
 追加調査は 1 候補あたり最大 5 refs、1 回まで。
 
-### 2-4. immediate apply と固定化委譲
+### 2-4. immediate apply とアクション委譲
 
-`提案（固定化を推奨）` のある候補について、`skill-applier` skill が `suggested_kind` に応じた固定化アクションを担う:
+`提案（アクション候補）` のある候補について、`skill-applier` skill が `suggested_kind` に応じた apply / 生成アクションを担う:
 
 - `CLAUDE.md` 分類: `cwd/CLAUDE.md` への diff preview → apply（immediate apply path）
   1. 追記先は `## DayTrace Suggested Rules` セクション末尾（セクションが無ければ新規作成）
@@ -111,7 +111,7 @@ score の current ルール:
   5. 実際に apply が成功した時だけ `adopt + completed` として writeback し、次回 suppress する
 
 - `skill` 分類: scaffold context（purpose / steps / output / references）を構造化提示し、skill-creator への handoff を行う
-- `hook` / `agent` 分類: 設計案（trigger / action / scope）を提示し、次セッションへ送る
+- `hook` / `agent` 分類: 設計案（trigger / action / scope）を提示し、承認後に実ファイルを生成する
 
 いずれの分類でも即時コード生成・自動デプロイは行わない。
 
@@ -125,7 +125,7 @@ score の current ルール:
 
 ## 3. 現在できないこと
 
-- `skill` / `hook` / `agent` の実際のコード生成・自動デプロイ（skill-applier は設計案・scaffold の提示のみ）
+- `skill` の handoff 後の生成・デプロイ、`hook` / `agent` の生成後デプロイ自体（skill-applier は apply / 生成までを担い、自動デプロイはしない）
 - `SKILL.md` の自動修正
 - skill run 観測まで含めた self-improving loop（採用後の amend / evaluate）
 - store-backed adopted-state migration（現在は JSONL decision log を正とする）
@@ -193,7 +193,7 @@ Claude では raw session に以下が混在しうる:
 
 ### 何は「提案止まり」か
 
-- `skill` / `hook` / `agent` の実際の生成・インストールは次セッションへ送る
+- `skill` は handoff 後の生成、`hook` / `agent` は承認後の生成までをこのフローで扱う
 - 提案内容が正しいかどうかの最終判断はユーザーが行う
 
 ### 何をハッカソン後に回すべきか
@@ -288,7 +288,7 @@ Claude では raw session に以下が混在しうる:
 }
 ```
 
-- `ready`: 正式提案候補（`skill_scaffold_context`, `skill_creator_handoff`, `next_step_stub` を含む。skill-applier が固定化アクションの入力として使う）
+- `ready`: 正式提案候補（`skill_scaffold_context`, `skill_creator_handoff`, `next_step_stub` を含む。skill-applier が apply / 生成アクションの入力として使う）
 - `needs_research`: 追加調査後もまだ保留の候補
 - `rejected`: 不成立候補と unclustered の参照
 - `decision_log_stub`: 次回判定に渡す機械用の persistence row
@@ -322,5 +322,5 @@ Claude では raw session に以下が混在しうる:
 ## 9. 関連ドキュメント
 
 - `plugins/daytrace/skills/skill-miner/SKILL.md`: skill の実行仕様・分類ルール・proposal format
-- `plugins/daytrace/skills/skill-applier/SKILL.md`: 固定化アクションの仕様・dispatch rules・decision writeback
+- `plugins/daytrace/skills/skill-applier/SKILL.md`: apply / 生成アクションの仕様・dispatch rules・decision writeback
 - `ISSUE-skill-miner-proposal-quality.md`: 提案品質に関する問題提起と対応策
