@@ -2492,7 +2492,7 @@ class SkillMinerTests(unittest.TestCase):
         self.assertEqual(len(sections["ready"]), 1)
         self.assertEqual(len(sections["needs_research"]), 1)
         self.assertEqual(len(sections["rejected"]), 1)
-        self.assertIn("## 提案（固定化を推奨）", sections["markdown"])
+        self.assertIn("## 提案（アクション候補）", sections["markdown"])
         self.assertIn("## 有望候補（もう少し観測が必要）", sections["markdown"])
         self.assertIn("## 観測ノート", sections["markdown"])
         self.assertIsNotNone(sections["selection_prompt"])

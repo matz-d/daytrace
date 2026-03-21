@@ -141,6 +141,13 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertEqual(result["ready"][0]["label"], "Review workflow")
         self.assertIsNotNone(result["selection_prompt"])
 
+    def test_markdown_classification_detail_flag_on_proposal_sections(self) -> None:
+        payload = _prepare_payload(candidates=[_ready_candidate()])
+        compact = build_proposal_sections(payload)
+        detail = build_proposal_sections(payload, markdown_classification_detail=True)
+        self.assertIs(compact["markdown_classification_detail"], False)
+        self.assertIs(detail["markdown_classification_detail"], True)
+
     def test_needs_research_sorted_correctly(self) -> None:
         payload = _prepare_payload(candidates=[_needs_research_candidate()])
         result = build_proposal_sections(payload)
@@ -255,6 +262,127 @@ class ProposalSectionsTests(unittest.TestCase):
         self.assertEqual(result["ready"][0]["suggested_kind_source"], "guardrail_override")
         self.assertEqual(result["ready"][0]["classification_trace"][-1]["stage"], "guardrail")
         self.assertIn("agent requires stronger repeated behavior signals", result["ready"][0]["suggested_kind_reason"])
+
+    def test_agent_guardrail_accepts_llm_agent_with_role_consistency_signal(self) -> None:
+        """Phase 3: two intent lines with role language + enough packets can satisfy agent guardrail."""
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Standing reviewer stance",
+            intent_trace=["Persistent reviewer mindset for each PR", "Reviewer triage across branches"],
+            common_task_shapes=["implement_feature"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 5, "claude_packets": 2, "codex_packets": 3},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "agent",
+                        "llm_reason": "Role consistency is the main value.",
+                        "confidence": "medium",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "agent")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "llm")
+        sig = result["ready"][0].get("classification_guardrail_signals") or {}
+        self.assertTrue(sig.get("agent_role_consistency"))
+
+    def test_agent_role_consistency_ignores_duplicate_label_and_intent_text(self) -> None:
+        """Same line repeated in label + intent_trace must not count as two role signals."""
+        repeated = "Persistent reviewer mindset for each PR"
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label=repeated,
+            intent_trace=[repeated],
+            common_task_shapes=["implement_feature"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 5, "claude_packets": 2, "codex_packets": 3},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "agent",
+                        "llm_reason": "Duplicated line should not satisfy consistency.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "skill")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "guardrail_override")
+        sig = result["ready"][0].get("classification_guardrail_signals") or {}
+        self.assertFalse(sig.get("agent_role_consistency"))
+
+    def test_claude_md_guardrail_accepts_declarative_ratio_without_artifact_hints(self) -> None:
+        """Phase 3: LLM CLAUDE.md + strong constraints/acceptance can pass without claude-md artifact."""
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Repo policy norms",
+            common_task_shapes=[],
+            artifact_hints=[],
+            rule_hints=[],
+            constraints=["Never skip tests before merge", "Do not commit without review"],
+            acceptance_criteria=["Include line references in findings"],
+            support={"total_packets": 4, "claude_packets": 2, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "CLAUDE.md",
+                        "llm_reason": "Declarative norms dominate; no multi-step workflow.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "CLAUDE.md")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "llm")
+        sig = result["ready"][0].get("classification_guardrail_signals") or {}
+        self.assertTrue(sig.get("claude_md_qualifies"))
+        self.assertGreaterEqual(sig.get("declarative_ratio", 0), 0.55)
+
+    def test_hook_narrow_gate_tests_before_close_with_run_tests_first(self) -> None:
+        """Phase 3: tests-before-close + run_tests first + packets allows hook without tool signatures."""
+        candidate = _ready_candidate(
+            suggested_kind="",
+            label="Gate tests before merge",
+            common_task_shapes=["run_tests", "implement_feature"],
+            rule_hints=["tests-before-close"],
+            common_tool_signatures=[],
+            support={"total_packets": 4, "claude_packets": 2, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(
+            _prepare_payload(candidates=[candidate]),
+            classifications_by_candidate_id={
+                "c1": {
+                    "candidate_id": "c1",
+                    "classification": {
+                        "llm_suggested_kind": "hook",
+                        "llm_reason": "Policy gate at close; automation-friendly.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(result["ready"][0]["suggested_kind"], "hook")
+        self.assertEqual(result["ready"][0]["suggested_kind_source"], "llm")
 
     def test_ready_hook_candidate_gets_next_step_stub(self) -> None:
         candidate = _ready_candidate(
@@ -463,9 +591,87 @@ class ProposalSectionsTests(unittest.TestCase):
         payload = _prepare_payload(candidates=[_ready_candidate()])
         result = build_proposal_sections(payload)
 
-        self.assertIn("## 提案（固定化を推奨）", result["markdown"])
+        self.assertIn("## 提案（アクション候補）", result["markdown"])
         self.assertIn("## 有望候補（もう少し観測が必要）", result["markdown"])
         self.assertIn("## 観測ノート", result["markdown"])
+
+    def test_ready_candidates_sorted_by_confidence_then_packets(self) -> None:
+        weak = _ready_candidate(
+            candidate_id="weak-1",
+            label="Weak candidate",
+            confidence="weak",
+            support={"total_packets": 10, "claude_packets": 5, "codex_packets": 5},
+        )
+        strong = _ready_candidate(
+            candidate_id="strong-1",
+            label="Strong candidate",
+            confidence="strong",
+            support={"total_packets": 3, "claude_packets": 2, "codex_packets": 1},
+        )
+        medium_high = _ready_candidate(
+            candidate_id="medium-1",
+            label="Medium high packets",
+            confidence="medium",
+            support={"total_packets": 8, "claude_packets": 4, "codex_packets": 4},
+        )
+        medium_low = _ready_candidate(
+            candidate_id="medium-2",
+            label="Medium low packets",
+            confidence="medium",
+            support={"total_packets": 2, "claude_packets": 1, "codex_packets": 1},
+        )
+        payload = _prepare_payload(candidates=[weak, medium_low, strong, medium_high])
+        result = build_proposal_sections(payload)
+
+        labels = [c["label"] for c in result["ready"]]
+        self.assertEqual(labels, [
+            "Strong candidate",
+            "Medium high packets",
+            "Medium low packets",
+            "Weak candidate",
+        ])
+
+    def test_carry_forward_delta_shown_in_confidence_line(self) -> None:
+        candidate = _ready_candidate(
+            confidence="strong",
+            support={"total_packets": 5, "claude_packets": 3, "codex_packets": 2},
+            prior_decision_state={"observation_count": 3},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+        result = build_proposal_sections(payload)
+
+        self.assertIn("前回比 +2 観測", result["markdown"])
+
+    def test_kind_specific_action_lines_for_hook(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="hook",
+            next_step_stub={
+                "kind": "hook",
+                "prompt": "「Review workflow を hook として設定しますか？」",
+                "trigger_event": "Stop",
+                "action_summary": "テスト実行を自動化する",
+            },
+        )
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("種類: 自動チェック（hook）", text)
+        self.assertIn("自動チェックとして設定すれば", text)
+
+    def test_kind_specific_action_lines_for_agent(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="agent",
+            next_step_stub={
+                "kind": "agent",
+                "prompt": "「Review workflow をエージェントとして作成しますか？」",
+                "role_summary": "コードレビューを継続的に補助する",
+            },
+        )
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertIn("種類: 専用エージェント", text)
+        self.assertIn("専用エージェントとして作成すれば", text)
 
 
 class JudgmentMergeTests(unittest.TestCase):
@@ -618,8 +824,8 @@ class MarkdownFormatTests(unittest.TestCase):
         text = "\n".join(lines)
 
         self.assertIn("Review workflow", text)
-        self.assertIn("固定先: CLAUDE.md", text)
-        self.assertIn("期待効果", text)
+        self.assertIn("種類: プロジェクト設定（CLAUDE.md）", text)
+        self.assertIn("効果:", text)
         self.assertIn("制約", text)
         self.assertIn("受け入れ条件", text)
 
@@ -630,7 +836,7 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("Build automation", text)
         self.assertIn("現状", text)
         self.assertIn("次のステップ", text)
-        self.assertNotIn("固定先", text)
+        self.assertNotIn("種類:", text)
 
     def test_proposal_item_lines_for_skill_include_official_handoff(self) -> None:
         candidate = _ready_candidate(
@@ -688,12 +894,32 @@ class MarkdownFormatTests(unittest.TestCase):
             ],
         )
 
-        lines = proposal_item_lines(1, candidate, include_classification=True)
+        lines = proposal_item_lines(1, candidate, include_classification=True, markdown_classification_detail=True)
         text = "\n".join(lines)
 
         self.assertIn("分類トレース", text)
         self.assertIn("heuristic=skill / llm=agent / guardrail=skill", text)
         self.assertIn("分類理由", text)
+
+    def test_proposal_item_lines_default_compresses_llm_override_without_trace(self) -> None:
+        candidate = _ready_candidate(
+            suggested_kind="skill",
+            suggested_kind_source="guardrail_override",
+            suggested_kind_reason="guardrail override: agent requires stronger repeated behavior signals",
+            classification_trace=[
+                {"stage": "heuristic", "kind": "skill", "reason": "default reusable workflow fallback"},
+                {"stage": "llm", "kind": "agent", "reason": "Persistent role feels more natural."},
+                {"stage": "guardrail", "kind": "skill", "reason": "guardrail override: agent requires stronger repeated behavior signals"},
+            ],
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+        text = "\n".join(lines)
+
+        self.assertNotIn("分類トレース", text)
+        self.assertNotIn("分類理由", text)
+        self.assertIn("分類: 最終=skill（guardrail）", text)
+        self.assertIn("guardrail override: agent requires", text)
 
     def test_proposal_item_lines_show_contamination_note(self) -> None:
         candidate = _ready_candidate(
@@ -811,7 +1037,7 @@ class ProposalCLITests(unittest.TestCase):
             self.assertEqual(payload["status"], "success")
             self.assertEqual(payload["source"], "skill-miner-proposal")
             self.assertEqual(payload["summary"]["ready_count"], 1)
-            self.assertIn("## 提案（固定化を推奨）", payload["markdown"])
+            self.assertIn("## 提案（アクション候補）", payload["markdown"])
 
     def test_cli_with_judgment_file_promotes_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
