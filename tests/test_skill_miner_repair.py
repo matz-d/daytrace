@@ -410,7 +410,7 @@ class TestNextStepStub(unittest.TestCase):
         self.assertIsNotNone(stub)
         self.assertEqual(stub["kind"], "hook")
         self.assertEqual(stub["trigger_event"], "Stop")
-        self.assertIn("hook にしてください", stub["prompt"])
+        self.assertIn("hook として設定しますか", stub["prompt"])
 
     def test_agent_candidate_builds_minimal_next_step_stub(self):
         candidate = _make_candidate(
@@ -426,7 +426,7 @@ class TestNextStepStub(unittest.TestCase):
 
         self.assertIsNotNone(stub)
         self.assertEqual(stub["kind"], "agent")
-        self.assertIn("agent にしてください", stub["prompt"])
+        self.assertIn("エージェントとして作成しますか", stub["prompt"])
         self.assertTrue(stub["behavior_rules"])
 
 
