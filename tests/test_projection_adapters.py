@@ -264,6 +264,7 @@ class ProjectionAdapterTests(unittest.TestCase):
                 payload["output_dir"],
                 str(Path.home() / ".daytrace" / "output" / "2026-03-12"),
             )
+            self.assertTrue(Path(payload["output_dir"]).is_dir(), msg="build_projection_payload creates output_dir")
 
     def test_daily_projection_reuses_existing_store_without_hydrate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -617,6 +618,21 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertEqual(len(payload["patterns"]), 1)
             self.assertEqual(payload["patterns"][0]["label"], "Review workflow")
             self.assertEqual(payload["pattern_context"]["observation_mode"], "workspace")
+
+
+class EnsureArtifactOutputDirTests(unittest.TestCase):
+    def test_creates_nested_directories(self) -> None:
+        from projection_adapters import ensure_artifact_output_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "a" / "b" / "c"
+            ensure_artifact_output_dir(str(nested))
+            self.assertTrue(nested.is_dir())
+
+    def test_none_is_noop(self) -> None:
+        from projection_adapters import ensure_artifact_output_dir
+
+        ensure_artifact_output_dir(None)
 
 
 if __name__ == "__main__":
