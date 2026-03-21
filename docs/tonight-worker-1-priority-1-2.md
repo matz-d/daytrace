@@ -79,7 +79,7 @@
 
 - classify の対象ルールが docs 上で明文化されている
 - `rejected` を原則 classify しない方針が反映されている
-- daytrace-session / skill-miner docs を読めば Phase 3 の classify 方針が追える
+- daytrace-session / skill-miner docs を読めば Phase 4（Pattern Mining）の classify 方針が追える
 - proposal の通常体験で classification の内部ノイズが増えない
 - 既存テストを壊さない
 
@@ -93,7 +93,7 @@
 ## Suggested Sequence
 
 1. classify 対象の選別ルールを先に文章化
-2. daytrace-session の Phase 3 手順へ落とす
+2. daytrace-session の Phase 4 手順へ落とす
 3. classification prompt / references を更新
 4. 必要最小限のテストだけ追加
 

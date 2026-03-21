@@ -54,7 +54,7 @@ proposal phase は raw history を再読み込みしない。`evidence_items[]` 
 - `user_decision="reject"` は即 suppress ではなく、pattern changed / support grew / time elapsed の resurface 条件で再浮上する
 - `skill_miner_proposal.py` は `decision_log_stub[]` を persist し、`--user-decision-file` が渡された場合は overlay を適用した上で保存する
 - `skill_miner_decision.py` は proposal 選択結果を正規化する helper で、`adopt + completed` のみ suppress 側に倒し、`adopt + pending` は `defer` 扱いに正規化する
-- `daytrace-session` の Phase 3 は proposal を `$SESSION_TMP/proposal.json` に保存し、ユーザー選択後に `skill_miner_proposal.py --user-decision-file ...` を再実行する
+- `daytrace-session` の Phase 4（Pattern Mining）は proposal を `$SESSION_TMP/proposal.json` に保存し、ユーザー選択後に `skill_miner_proposal.py --user-decision-file ...` を再実行する
 
 ### 2-2a. current triage / scoring semantics（`skill_miner_common.py`）
 
@@ -310,7 +310,7 @@ Claude では raw session に以下が混在しうる:
 - **0 件時 UX**: 「候補なし」の場合も、なぜ候補が出なかったかと次回への示唆を明確に返す
 - **split-first 表示**: oversized cluster を検出したときに自動的に分割軸を提示し、`追加調査待ち` に誘導する
 - **暫定候補の見せ方**: `proposal_ready=false` だが観測価値のある候補を「参考候補」として見せる UX
-- **統合フロー内での役割固定**: `daytrace-session` の Phase 3 における位置づけを安定させる
+- **統合フロー内での役割固定**: `daytrace-session` の Phase 4（Pattern Mining）における位置づけを安定させる
 
 ## 8. ハッカソン後の本命課題
 

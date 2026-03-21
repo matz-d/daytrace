@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from aggregate_core import (
@@ -16,6 +17,7 @@ from aggregate_core import (
     group_confidence,
     normalize_event,
     normalize_source_payload,
+    report_day_for_local_time,
     resolve_date_filters,
     select_sources,
     source_availability,
@@ -50,12 +52,31 @@ class AggregateCoreTests(unittest.TestCase):
     maxDiff = None
 
     def test_resolve_date_filters_supports_shorthand(self) -> None:
+        # Local 08:00 UTC → report day = calendar day (hour >= 6)
         now = datetime(2026, 3, 12, 8, 0, tzinfo=timezone.utc)
         self.assertEqual(resolve_date_filters("today", None, None, now=now), ("2026-03-12", "2026-03-12"))
         self.assertEqual(resolve_date_filters("yesterday", None, None, now=now), ("2026-03-11", "2026-03-11"))
         self.assertEqual(resolve_date_filters(None, "2026-03-01", "2026-03-02", now=now), ("2026-03-01", "2026-03-02"))
         with self.assertRaises(ValueError):
             resolve_date_filters("today", "2026-03-01", None, now=now)
+
+    def test_resolve_date_filters_before_six_am_uses_previous_calendar_day(self) -> None:
+        # Local 03:00 on calendar Mar 12 → report "today" = Mar 11
+        now = datetime(2026, 3, 12, 3, 0, tzinfo=timezone.utc)
+        self.assertEqual(report_day_for_local_time(now), date(2026, 3, 11))
+        self.assertEqual(resolve_date_filters("today", None, None, now=now), ("2026-03-11", "2026-03-11"))
+        self.assertEqual(resolve_date_filters("yesterday", None, None, now=now), ("2026-03-10", "2026-03-10"))
+
+    def test_report_day_for_local_time_respects_timezone(self) -> None:
+        # 03:00 in Tokyo on Mar 12 → still Mar 12 local date but hour < 6 → previous calendar day in local tz
+        jst = ZoneInfo("Asia/Tokyo")
+        now = datetime(2026, 3, 12, 3, 0, tzinfo=jst)
+        self.assertEqual(report_day_for_local_time(now), date(2026, 3, 11))
+        self.assertEqual(resolve_date_filters("today", None, None, now=now), ("2026-03-11", "2026-03-11"))
+        # 10:00 Tokyo Mar 12 → report day Mar 12
+        now_late = datetime(2026, 3, 12, 10, 0, tzinfo=jst)
+        self.assertEqual(resolve_date_filters("today", None, None, now=now_late), ("2026-03-12", "2026-03-12"))
+        self.assertEqual(resolve_date_filters("yesterday", None, None, now=now_late), ("2026-03-11", "2026-03-11"))
 
     def test_build_command_resolves_script_and_forwards_filters(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

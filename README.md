@@ -3,8 +3,8 @@
 > **AIエージェント ハッカソン 2026 提出作品**  
 > テーマ: **「一度命じたら、あとは任せろ」**
 
-**一度頼めば、観測から提案まで自律完走。**  
-DayTrace は、ローカル証跡を集めて 1 日を再構成し、反復パターンを抽出し、次の改善候補まで返す Claude Code plugin です。
+**一度頼めば、観測から提案まで自律完走。** パターン側は **`/skill-applier` で実ファイルへの適用**まで繋げられます（diff 確認・承認後の CLAUDE.md 追記、hook/agent の生成、skill は skill-creator への handoff）。  
+DayTrace は、**ローカル完結・認証不要**で Git / AI ログなどの証跡を構造化し、**報告日を軸に日報・投稿下書きを再構成**し、**反復パターンを CLAUDE.md・skill・hook・agent 向けに提案**する Claude Code plugin です。配布用の詳細は **`plugins/daytrace/README.md`**。
 
 ![DayTrace overview](docs/daytrace-hero.svg)
 

@@ -1,6 +1,6 @@
 # DayTrace
 
-ローカル証跡を集約し、日報・スキル提案・投稿下書きを自動生成する Claude Code plugin。
+ローカル証跡を構造化し、報告日ベースの日報・投稿下書き・パターン提案を返し、`skill-applier` で承認フローを踏めば CLAUDE.md / hook / agent 等を実際に更新できる Claude Code plugin。利用者向け説明は `plugins/daytrace/README.md`。
 
 ## テスト
 

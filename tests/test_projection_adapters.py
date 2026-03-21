@@ -259,6 +259,11 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertTrue(any(source["name"] == "workspace-source" and source["scope"] == "workspace" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "ai-source" and source["scope"] == "all-day" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "browser-source" and source["scope"] == "all-day" for source in payload["sources"]))
+            self.assertEqual(payload["report_date"], "2026-03-12")
+            self.assertEqual(
+                payload["output_dir"],
+                str(Path.home() / ".daytrace" / "output" / "2026-03-12"),
+            )
 
     def test_daily_projection_reuses_existing_store_without_hydrate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -271,6 +276,44 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertEqual(len(payload["sources"]), len(aggregate_payload["sources"]))
             self.assertEqual(len(payload["timeline"]), len(aggregate_payload["timeline"]))
             self.assertEqual(len(payload["groups"]), len(aggregate_payload["groups"]))
+            self.assertEqual(payload["report_date"], "2026-03-12")
+
+    def test_projection_payload_omits_output_dir_for_multi_day_range(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(
+                sources_file,
+                workspace,
+                store_path,
+                since="2026-03-01",
+                until="2026-03-31",
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(DAILY_PROJECTION),
+                    "--sources-file",
+                    str(sources_file),
+                    "--workspace",
+                    str(workspace),
+                    "--since",
+                    "2026-03-01",
+                    "--until",
+                    "2026-03-31",
+                    "--store-path",
+                    str(store_path),
+                    "--no-hydrate",
+                    "--all-sessions",
+                ],
+                cwd=str(PLUGIN_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertIsNone(payload["report_date"])
+            self.assertIsNone(payload["output_dir"])
 
     def test_daily_projection_errors_when_sources_registry_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

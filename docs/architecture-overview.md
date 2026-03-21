@@ -143,9 +143,9 @@ AI history source の補足:
 **`daytrace-session`** は個別 skill を自律的に順次実行する統合 skill。
 
 - ask は 0 回を基本とし、共有用日報の機密境界確認・ready proposal の候補選択確認・`CLAUDE.md diff preview` だけは例外
-- 各判断ポイントで `[DayTrace]` プレフィックス付きの自己判断ログを出力
+- ユーザー向けチャットに `[DayTrace]` / `[DayTrace:trace]` は出さない。状態は日本語の見出しと短い行で示す（`docs/output-polish.md` §6）
 - Phase 1 〜 5（Phase 1.5 含む）をソース欠損・スクリプトエラーに関わらず最後まで完走する
-- Phase 3 では apply / 生成アクション（CLAUDE.md apply / skill scaffold / hook・agent guided creation）を `skill-applier` に委譲する
+- Phase 4（Pattern Mining）では apply / 生成アクション（CLAUDE.md apply / skill scaffold / hook・agent guided creation）を `skill-applier` に委譲する
 
 ## 4. 実行フロー
 
@@ -179,15 +179,15 @@ Phase 1.5: DayTrace ダイジェスト
 Phase 2: Daily Report
     Phase 1 の中間 JSON で日報生成 → mode に応じて自分用 / 共有用
 
-Phase 3: Pattern Mining & Proposals & Fixation
+Phase 3: Post Draft（条件付き）
+    AI + Git 共起 or groups >= 4 の条件で post_draft_projection.py → narrative draft
+
+Phase 4: Pattern Mining & Proposals & Fixation
     skill_miner_prepare.py → candidates[] → triage → (必要なら detail + judge) → proposal
     → ready proposal がある時は skill-applier に委譲して apply / 生成アクションまで閉じる
 
-Phase 4: Post Draft（条件付き）
-    AI + Git 共起 or groups >= 4 の条件で post_draft_projection.py → narrative draft
-
 Phase 5: Session Summary
-    全フェーズの実施結果をサマリとして出力
+    全フェーズの実施結果をサマリとして出力（mixed-scope 注記と再構成元を含む）
 ```
 
 ## 5. スコープ設計
@@ -253,7 +253,7 @@ store は **rebuildable cache / index** として扱う。
 - `post-draft`: 0 ask、narrative policy、reader 自動推定、graceful degrade
 - `skill-miner`: compress → triage → (detail + judge) → proposal の 5 フェーズ、decision log による carry-forward state machine
 - `skill-applier`: CLAUDE.md immediate apply、skill scaffold draft、hook/agent guided creation、decision writeback
-- `daytrace-session`: Phase 1.5 を含む全フェーズ自律実行、Phase 3 で skill-applier に apply / 生成委譲、`[DayTrace]` 判断ログ
+- `daytrace-session`: Phase 1.5 を含む全フェーズ自律実行、Phase 4 で skill-applier に apply / 生成委譲、チャットは `output-polish` 契約（artifact 保存先・`[DayTrace]` 非表示）
 - source registry（`sources.json` + user drop-in）
 - graceful degrade（全 source 欠損時も空結果で正常終了）
 
