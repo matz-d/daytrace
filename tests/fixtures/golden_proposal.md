@@ -34,4 +34,4 @@
 2. Investigate a one-off fake import warning.
    理由: single observed packet only; keep as reference, not as a proposal candidate
 
-どの候補をドラフト化しますか？番号か候補名で指定してください。
+今すぐ適用する候補を選んでください。番号を返すと適用フローに入ります。選ばなかった候補も次回以降の提案として保持されます。

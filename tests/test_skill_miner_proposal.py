@@ -961,13 +961,13 @@ class MarkdownFormatTests(unittest.TestCase):
 
     def test_build_markdown_with_ready_includes_selection_prompt(self) -> None:
         markdown = build_markdown([_ready_candidate()], [], [])
-        self.assertIn("どの候補をドラフト化しますか", markdown)
+        self.assertIn("今すぐ適用する候補を選んでください", markdown)
 
     def test_build_markdown_without_ready_shows_no_candidates(self) -> None:
         markdown = build_markdown([], [_needs_research_candidate()], [])
         self.assertIn("今回は有力候補なし", markdown)
         self.assertIn("見送り理由の傾向", markdown)
-        self.assertNotIn("どの候補をドラフト化しますか", markdown)
+        self.assertNotIn("今すぐ適用する候補を選んでください", markdown)
 
     def test_build_markdown_limits_rejected_to_five(self) -> None:
         rejected = [
