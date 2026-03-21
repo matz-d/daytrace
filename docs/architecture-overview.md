@@ -136,16 +136,16 @@ AI history source の補足:
 | `daily-report` | date-first | その日の活動を日報ドラフトに再構成 | 最大 1 回（mode 未指定時のみ） |
 | `post-draft` | date-first | 一次情報から narrative draft を 1 本組み立て | 0 回 |
 | `skill-miner` | scope-first | AI 会話履歴から反復パターンを抽出・提案 | 0 回（提案成立後のみ選択プロンプト） |
-| `skill-applier` | — | skill-miner の proposal を成果物に固定化 | CLAUDE.md diff 確認と候補選択のみ |
+| `skill-applier` | — | skill-miner の proposal を具体的な成果物に変換 | CLAUDE.md diff 確認と候補選択のみ |
 
 ### 3-4. Orchestration
 
 **`daytrace-session`** は個別 skill を自律的に順次実行する統合 skill。
 
-- ask は 0 回を基本とし、共有用日報の機密境界確認・ready proposal の固定化確認・`CLAUDE.md diff preview` だけは例外
+- ask は 0 回を基本とし、共有用日報の機密境界確認・ready proposal の候補選択確認・`CLAUDE.md diff preview` だけは例外
 - 各判断ポイントで `[DayTrace]` プレフィックス付きの自己判断ログを出力
 - Phase 1 〜 5（Phase 1.5 含む）をソース欠損・スクリプトエラーに関わらず最後まで完走する
-- Phase 3 では固定化アクション（CLAUDE.md apply / skill scaffold / hook・agent 設計案）を `skill-applier` に委譲する
+- Phase 3 では apply / 生成アクション（CLAUDE.md apply / skill scaffold / hook・agent guided creation）を `skill-applier` に委譲する
 
 ## 4. 実行フロー
 
@@ -181,7 +181,7 @@ Phase 2: Daily Report
 
 Phase 3: Pattern Mining & Proposals & Fixation
     skill_miner_prepare.py → candidates[] → triage → (必要なら detail + judge) → proposal
-    → ready proposal がある時は skill-applier に委譲して固定化アクションまで閉じる
+    → ready proposal がある時は skill-applier に委譲して apply / 生成アクションまで閉じる
 
 Phase 4: Post Draft（条件付き）
     AI + Git 共起 or groups >= 4 の条件で post_draft_projection.py → narrative draft
@@ -252,8 +252,8 @@ store は **rebuildable cache / index** として扱う。
 - `daily-report`: date-first、自分用 / 共有用モード、graceful degrade
 - `post-draft`: 0 ask、narrative policy、reader 自動推定、graceful degrade
 - `skill-miner`: compress → triage → (detail + judge) → proposal の 5 フェーズ、decision log による carry-forward state machine
-- `skill-applier`: CLAUDE.md immediate apply、skill scaffold draft、hook/agent 設計案提示、decision writeback
-- `daytrace-session`: Phase 1.5 を含む全フェーズ自律実行、Phase 3 で skill-applier に固定化委譲、`[DayTrace]` 判断ログ
+- `skill-applier`: CLAUDE.md immediate apply、skill scaffold draft、hook/agent guided creation、decision writeback
+- `daytrace-session`: Phase 1.5 を含む全フェーズ自律実行、Phase 3 で skill-applier に apply / 生成委譲、`[DayTrace]` 判断ログ
 - source registry（`sources.json` + user drop-in）
 - graceful degrade（全 source 欠損時も空結果で正常終了）
 
