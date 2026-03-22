@@ -20,6 +20,7 @@
    根拠:
    - 3 packets / recurring fake daily-brief draft flow
    scaffold goal: prepare report (report, markdown) を再利用可能なスキルとして保存する
+   scaffold要点: 推定モード=aggregation
    公式 handoff: /skill-creator prepare-report-report-markdown をスキルにしてください
    効果: 再利用コマンドとして保存すれば、同じ作業を素早く再現できます
    → /skill-creator で生成できます
@@ -38,4 +39,4 @@
 2. Investigate a one-off fake import warning.
    理由: single observed packet only; keep as reference, not as a proposal candidate
 
-候補番号を入力すると /skill-creator による登録フローが始まります。選ばなかった候補は次回以降も引き続き提案されます。複数登録したい場合は 1 つずつ選択してください。
+候補番号を入力すると /skill-creator による登録フローが始まります。選択後は handoff を正本扱いせず、適用先 repo の生ファイル確認から始めてください。選ばなかった候補は次回以降も引き続き提案されます。複数登録したい場合は 1 つずつ選択してください。
