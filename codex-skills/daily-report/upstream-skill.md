@@ -1,0 +1,1 @@
+../../plugins/daytrace/skills/daily-report/SKILL.md

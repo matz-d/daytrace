@@ -1,0 +1,1 @@
+../../plugins/daytrace/skills/skill-miner/SKILL.md
