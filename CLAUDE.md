@@ -31,3 +31,7 @@ python3 -m pytest tests/ -v
 - source CLI の出力 shape: `{ status, source, events[] }` or `{ status, source, reason/message, events[] }`
 - aggregate.py の出力 shape: `{ sources[], timeline[], groups[], summary }`
 - 外部ネットワーク通信なし
+
+## DayTrace Suggested Rules
+
+- DayTrace の出力成果物（日報・投稿下書き・提案）をレビューするときは、配布先ユーザーの UX 視点で改善点を合わせて提案する（表示名の日本語化・chat/artifact 責務分離・根拠の具体性などを確認する）。

@@ -16,6 +16,7 @@ from skill_miner_common import (
     DEFAULT_TOP_N,
     build_candidate_content_key,
     build_candidate_decision_key,
+    build_classification_target_candidates,
     build_proposal_sections,
     build_research_brief,
     merge_judgment_into_candidate,
@@ -1520,6 +1521,105 @@ class LoadClassificationOverlaysTests(unittest.TestCase):
             result = load_classification_overlays([str(arr)])
 
             self.assertEqual(result, {})
+
+
+class ClassificationTargetSelectionTests(unittest.TestCase):
+    def test_helper_selects_skill_agent_boundary_but_skips_clear_hook(self) -> None:
+        hook_candidate = _ready_candidate(
+            candidate_id="hook-1",
+            label="Gate tests before merge",
+            suggested_kind="",
+            confidence="strong",
+            common_task_shapes=["run_tests"],
+            artifact_hints=[],
+            rule_hints=[],
+            support={"total_packets": 4, "claude_packets": 2, "codex_packets": 2},
+            intent_trace=["Run tests before close"],
+        )
+        role_candidate = _ready_candidate(
+            candidate_id="role-1",
+            label="Standing reviewer stance",
+            suggested_kind="",
+            confidence="strong",
+            common_task_shapes=["implement_feature"],
+            artifact_hints=["code"],
+            rule_hints=[],
+            support={"total_packets": 5, "claude_packets": 2, "codex_packets": 3},
+            intent_trace=["Persistent reviewer mindset for each PR", "Reviewer triage across branches"],
+        )
+
+        targets = build_classification_target_candidates(
+            _prepare_payload(candidates=[hook_candidate, role_candidate]),
+        )
+
+        self.assertEqual([item["candidate_id"] for item in targets], ["role-1"])
+        self.assertIn("skill_agent_boundary", targets[0]["reason_codes"])
+        prompt_candidate = targets[0]["candidate"]
+        self.assertEqual(prompt_candidate["suggested_kind"], "skill")
+        self.assertIn("common_task_shapes", prompt_candidate)
+        self.assertNotIn("research_judgment", prompt_candidate)
+        self.assertNotIn("split_origin", prompt_candidate)
+
+    def test_cli_classification_targets_only_marks_research_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_file = Path(temp_dir) / "prepare.json"
+            judge_file = Path(temp_dir) / "judge.json"
+            prepare_file.write_text(
+                json.dumps(
+                    _prepare_payload(
+                        candidates=[
+                            _needs_research_candidate(
+                                candidate_id="c2",
+                                suggested_kind="",
+                                confidence="weak",
+                                common_task_shapes=["implement_feature"],
+                                artifact_hints=["code"],
+                                rule_hints=[],
+                                support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2},
+                            )
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            judge_file.write_text(
+                json.dumps(
+                    {
+                        "candidate_id": "c2",
+                        "judgment": {
+                            "recommendation": "promote_ready",
+                            "proposed_triage_status": "ready",
+                            "proposed_confidence": "medium",
+                            "summary": "Promote after detail review.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(PROPOSAL),
+                    "--prepare-file",
+                    str(prepare_file),
+                    "--judge-file",
+                    str(judge_file),
+                    "--classification-targets-only",
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["mode"], "classification_targets")
+            self.assertEqual(payload["summary"]["target_candidate_ids"], ["c2"])
+            self.assertIn("research_promotion", payload["classification_targets"][0]["reason_codes"])
+            self.assertEqual(payload["classification_targets"][0]["candidate"]["candidate_id"], "c2")
+            self.assertIn("suggested_kind", payload["classification_targets"][0]["candidate"])
 
 
 if __name__ == "__main__":
