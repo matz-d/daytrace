@@ -16,6 +16,7 @@ python3 -m pytest tests/ -v
 - `plugins/daytrace/.claude-plugin/plugin.json` — plugin manifest
 - `plugins/daytrace/skills/` — 5 skill（daily-report, daytrace-session, skill-miner, skill-applier, post-draft）
 - `plugins/daytrace/scripts/` — 共通 CLI + skill-miner 専用 CLI
+- `codex-skills/` — Codex 用ラッパ（開発リポジトリのみ）。`output-review`（出力品質・P プラン反映）はここに置き、配布プラグインには含めない
 - `tests/` — テストスイート（開発リポジトリのみ）
 - `design-notes/` — 設計メモ（開発リポジトリのみ）
 
