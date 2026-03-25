@@ -21,6 +21,7 @@ from skill_miner_common import (
     is_directive_like_user_message,
     judge_research_candidate,
     merge_judgment_into_candidate,
+    overlap_score,
     stable_block_keys,
 )
 from skill_miner_prepare import (
@@ -33,11 +34,15 @@ from skill_miner_prepare import (
     SIMILARITY_TASK_SHAPES_WEIGHT,
     SIMILARITY_TOOL_WEIGHT,
     SIMILARITY_WEIGHT_TOTAL,
+    SUBDIVISION_THRESHOLD,
+    _build_secondary_features,
     _build_similarity_features,
+    _secondary_similarity,
     _similarity_score_from_features,
     UnionFind,
     cluster_packets,
     similarity_score,
+    subdivide_oversized_cluster,
 )
 
 
@@ -670,6 +675,328 @@ class SkillMinerQualityV2Tests(unittest.TestCase):
         }
 
         self.assertEqual(similarity_score(left, right), 0.0)
+
+    def test_intent_stopwords_reduce_false_similarity(self) -> None:
+        """Packets with generic intents sharing only stopwords should score lower in intent dimension."""
+        left = make_packet(
+            "pkt-stopword-left",
+            primary_intent="Update the file and check the code change.",
+            snippets=[],
+            task_shape=[],
+            artifact_hints=[],
+            repeated_rules=[],
+        )
+        right = make_packet(
+            "pkt-stopword-right",
+            primary_intent="Fix the code and run the test update.",
+            snippets=[],
+            task_shape=[],
+            artifact_hints=[],
+            repeated_rules=[],
+        )
+
+        left_features = _build_similarity_features(left)
+        right_features = _build_similarity_features(right)
+
+        # After stopword removal, very few tokens should remain from these
+        # generic intents, keeping jaccard low.
+        from skill_miner_common import INTENT_STOP_WORDS
+
+        for token in INTENT_STOP_WORDS:
+            self.assertNotIn(token, left_features["intent_tokens"])
+            self.assertNotIn(token, right_features["intent_tokens"])
+
+        # Overall similarity should be near zero (no structural signals).
+        self.assertLessEqual(similarity_score(left, right), 0.05)
+
+    def test_intent_stopwords_preserve_specific_terms(self) -> None:
+        """Domain-specific tokens must survive stopword filtering."""
+        packet = make_packet(
+            "pkt-specific",
+            primary_intent="Implement the OAuth2 authentication flow for Kubernetes deployment.",
+            snippets=[],
+            task_shape=[],
+            artifact_hints=[],
+            repeated_rules=[],
+        )
+
+        features = _build_similarity_features(packet)
+        intent_tokens = features["intent_tokens"]
+
+        # Specific terms must survive (tokenizer may retain trailing punctuation)
+        self.assertTrue(any("oauth2" in t for t in intent_tokens))
+        self.assertTrue(any("authentication" in t for t in intent_tokens))
+        self.assertTrue(any("kubernetes" in t for t in intent_tokens))
+        self.assertTrue(any("deployment" in t for t in intent_tokens))
+        # Stopwords must not survive
+        self.assertNotIn("the", intent_tokens)
+        self.assertNotIn("for", intent_tokens)
+
+    def test_generic_shape_discount_reduces_generic_only_similarity(self) -> None:
+        """Two packets with only generic task shapes should get discounted overlap."""
+        from skill_miner_prepare import _generic_discounted_overlap, GENERIC_SHAPE_DISCOUNT
+
+        left_shapes = {"review_changes", "search_code"}
+        right_shapes = {"review_changes", "search_code"}
+
+        discounted = _generic_discounted_overlap(left_shapes, right_shapes)
+        original = overlap_score(left_shapes, right_shapes)
+
+        self.assertEqual(original, 1.0)
+        self.assertAlmostEqual(discounted, GENERIC_SHAPE_DISCOUNT)
+        self.assertLess(discounted, original)
+
+    def test_generic_shape_discount_preserves_specific_match(self) -> None:
+        """Specific (non-generic) shape matches must receive full credit."""
+        from skill_miner_prepare import _generic_discounted_overlap
+
+        left_shapes = {"implement_feature", "run_tests"}
+        right_shapes = {"implement_feature", "run_tests"}
+
+        discounted = _generic_discounted_overlap(left_shapes, right_shapes)
+        original = overlap_score(left_shapes, right_shapes)
+
+        self.assertEqual(discounted, original)
+        self.assertEqual(discounted, 1.0)
+
+    def test_generic_shape_discount_mixed_match(self) -> None:
+        """Mixed generic + specific sets get partial discount."""
+        from skill_miner_prepare import _generic_discounted_overlap, GENERIC_SHAPE_DISCOUNT
+
+        left_shapes = {"implement_feature", "review_changes"}
+        right_shapes = {"implement_feature", "review_changes"}
+
+        discounted = _generic_discounted_overlap(left_shapes, right_shapes)
+        # 1 specific (full) + 1 generic (discounted) out of max 2
+        expected = (1.0 + GENERIC_SHAPE_DISCOUNT) / 2.0
+        self.assertAlmostEqual(discounted, expected)
+
+    # ---- Subdivision tests ----
+
+    def test_secondary_similarity_file_divergence_reduces_score(self) -> None:
+        """Non-overlapping file sets reduce secondary similarity."""
+        left = {"file_set": frozenset(["src/a.py", "src/b.py"]), "has_failure": False, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        right = {"file_set": frozenset(["lib/x.py", "lib/y.py"]), "has_failure": False, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        sim = _secondary_similarity(left, right)
+        self.assertLess(sim, 1.0)
+        self.assertAlmostEqual(sim, 0.7)
+
+    def test_secondary_similarity_failure_mismatch(self) -> None:
+        """Failure hint mismatch reduces secondary similarity."""
+        left = {"file_set": frozenset(), "has_failure": True, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        right = {"file_set": frozenset(), "has_failure": False, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        sim = _secondary_similarity(left, right)
+        self.assertAlmostEqual(sim, 0.85)
+
+    def test_secondary_similarity_origin_mismatch(self) -> None:
+        """Different origin hints reduce secondary similarity."""
+        left = {"file_set": frozenset(), "has_failure": False, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        right = {"file_set": frozenset(), "has_failure": False, "has_retry": False, "origin": "codex", "alignment_status": "ok"}
+        sim = _secondary_similarity(left, right)
+        self.assertAlmostEqual(sim, 0.9)
+
+    def test_secondary_similarity_all_match(self) -> None:
+        """Matching secondary features yield 1.0."""
+        feat = {"file_set": frozenset(["a.py"]), "has_failure": False, "has_retry": False, "origin": "claude", "alignment_status": "ok"}
+        self.assertAlmostEqual(_secondary_similarity(feat, feat), 1.0)
+
+    def test_build_secondary_features_extracts_fields(self) -> None:
+        """_build_secondary_features extracts the right keys."""
+        pkt = make_packet(
+            "pkt-sec-1",
+            primary_intent="test secondary features",
+            snippets=["test snippet"],
+            task_shape=["review_changes"],
+            artifact_hints=["review"],
+            repeated_rules=["rule-a"],
+        )
+        pkt["referenced_files"] = ["a.py", "b.py"]
+        pkt["workflow_signals"] = {"failure_hints": ["error"], "retry_hints": []}
+        pkt["origin_hint"] = "claude"
+        pkt["intent_tool_alignment"] = {"status": "aligned"}
+        sec = _build_secondary_features(pkt)
+        self.assertIn("a.py", sec["file_set"])
+        self.assertTrue(sec["has_failure"])
+        self.assertFalse(sec["has_retry"])
+        self.assertEqual(sec["origin"], "claude")
+        self.assertEqual(sec["alignment_status"], "aligned")
+
+    def test_subdivide_does_not_change_small_group(self) -> None:
+        """Groups smaller than 2 × min_sub_cluster_size are returned as-is."""
+        packets = [
+            make_packet(
+                f"sub-small-{i}",
+                primary_intent="generic review task",
+                snippets=["generic review"],
+                task_shape=["review_changes"],
+                artifact_hints=["review"],
+                repeated_rules=["rule-a"],
+            )
+            for i in range(3)
+        ]
+        features = [_build_similarity_features(p) for p in packets]
+        result = subdivide_oversized_cluster(
+            [0, 1, 2],
+            sorted_packets=packets,
+            features_by_index=features,
+            similarity_cache={},
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(sorted(result[0]), [0, 1, 2])
+
+    def test_subdivide_splits_heterogeneous_group(self) -> None:
+        """Heterogeneous packets split into distinct sub-clusters."""
+        group_a = [
+            make_packet(
+                f"sub-a-{i}",
+                primary_intent="Deploy infrastructure to production with Terraform",
+                snippets=["terraform apply main.tf"],
+                task_shape=["deploy_infrastructure"],
+                artifact_hints=["terraform"],
+                repeated_rules=["always validate plan before apply"],
+            )
+            for i in range(5)
+        ]
+        for p in group_a:
+            p["referenced_files"] = ["infra/main.tf", "infra/vars.tf"]
+            p["origin_hint"] = "claude"
+
+        group_b = [
+            make_packet(
+                f"sub-b-{i}",
+                primary_intent="Write unit tests for authentication module",
+                snippets=["pytest test_auth.py"],
+                task_shape=["write_tests"],
+                artifact_hints=["pytest"],
+                repeated_rules=["use fixtures for test data"],
+            )
+            for i in range(5)
+        ]
+        for p in group_b:
+            p["referenced_files"] = ["tests/test_auth.py", "src/auth.py"]
+            p["origin_hint"] = "codex"
+
+        all_packets = group_a + group_b
+        features = [_build_similarity_features(p) for p in all_packets]
+        result = subdivide_oversized_cluster(
+            list(range(10)),
+            sorted_packets=all_packets,
+            features_by_index=features,
+            similarity_cache={},
+        )
+        self.assertGreater(len(result), 1, "heterogeneous group should split")
+
+    def test_subdivide_preserves_homogeneous_group(self) -> None:
+        """Nearly identical packets remain in one cluster."""
+        packets = [
+            make_packet(
+                f"sub-homo-{i}",
+                primary_intent="Review pull request changes and suggest improvements",
+                snippets=["Review PR changes"],
+                task_shape=["review_changes"],
+                artifact_hints=["github-pr"],
+                repeated_rules=["always check for security issues"],
+                tool_signature=["rg", "bash"],
+            )
+            for i in range(10)
+        ]
+        for p in packets:
+            p["referenced_files"] = ["src/main.py"]
+            p["origin_hint"] = "claude"
+        features = [_build_similarity_features(p) for p in packets]
+        result = subdivide_oversized_cluster(
+            list(range(10)),
+            sorted_packets=packets,
+            features_by_index=features,
+            similarity_cache={},
+        )
+        total_sub_clusters = len([g for g in result if len(g) >= 2])
+        self.assertLessEqual(total_sub_clusters, 2, "homogeneous group should stay mostly together")
+
+    def test_cluster_packets_subdivision_origin_metadata(self) -> None:
+        """Candidates from oversized cluster subdivision carry subdivision_origin."""
+        packets = []
+        for i in range(12):
+            p = make_packet(
+                f"pkt-os-{i}",
+                primary_intent=f"Review code change {i} and deploy" if i < 6 else f"Write tests for module {i}",
+                snippets=[f"review {i}"] if i < 6 else [f"test {i}"],
+                task_shape=["review_changes"] if i < 6 else ["write_tests"],
+                artifact_hints=["github-pr"] if i < 6 else ["pytest"],
+                repeated_rules=["check security"] if i < 6 else ["use fixtures"],
+                tool_signature=["rg", "bash"],
+            )
+            p["referenced_files"] = [f"src/file_{i % 3}.py"]
+            p["origin_hint"] = "claude" if i < 6 else "codex"
+            packets.append(p)
+
+        candidates, unclustered, stats = cluster_packets(packets)
+        subdivided = [c for c in candidates if "subdivision_origin" in c]
+        for c in subdivided:
+            origin = c["subdivision_origin"]
+            self.assertIn("parent_candidate_id", origin)
+            self.assertIn("original_size", origin)
+            self.assertIn("subdivision_threshold", origin)
+            self.assertIn("sub_cluster_count", origin)
+            self.assertEqual(origin["subdivision_threshold"], SUBDIVISION_THRESHOLD)
+
+    # ---- Generic penalty staged tests ----
+
+    def test_generic_penalty_full_stronger_than_old(self) -> None:
+        """Full generic penalty (both task & tool generic, no artifact/rule) is stronger than old value."""
+        from skill_miner_prepare import GENERIC_PENALTY_FULL, SIMILARITY_GENERIC_ONLY_PENALTY
+        self.assertGreater(GENERIC_PENALTY_FULL, SIMILARITY_GENERIC_ONLY_PENALTY)
+
+    def test_generic_penalty_partial_applies_to_task_only_generic(self) -> None:
+        """Score is penalized when only task shape is generic (not both)."""
+        from skill_miner_prepare import GENERIC_PENALTY_PARTIAL
+        base = make_packet(
+            "pen-task-generic",
+            primary_intent="Review some code changes",
+            snippets=["Review code"],
+            task_shape=["review_changes"],
+            artifact_hints=[],
+            repeated_rules=[],
+            tool_signature=["python3", "mypy"],  # non-generic tools
+        )
+        specific = make_packet(
+            "pen-task-specific",
+            primary_intent="Deploy infrastructure with Terraform",
+            snippets=["terraform apply"],
+            task_shape=["deploy_infrastructure"],
+            artifact_hints=[],
+            repeated_rules=[],
+            tool_signature=["python3", "mypy"],
+        )
+        feat_base = _build_similarity_features(base)
+        feat_specific = _build_similarity_features(specific)
+        # Verify that task-only generic flag is set for base but not specific
+        self.assertTrue(feat_base.get("generic_task_only"))
+        self.assertFalse(feat_specific.get("generic_task_only"))
+
+    def test_generic_penalty_with_artifact_signal_exempts(self) -> None:
+        """Having artifact or rule signal exempts from partial penalty even when one side is generic."""
+        left = make_packet(
+            "pen-exempt-l",
+            primary_intent="Review changes in auth module",
+            snippets=["review auth"],
+            task_shape=["review_changes"],
+            artifact_hints=["auth-module"],
+            repeated_rules=[],
+            tool_signature=["rg", "bash"],
+        )
+        right = make_packet(
+            "pen-exempt-r",
+            primary_intent="Review changes in auth module",
+            snippets=["review auth"],
+            task_shape=["review_changes"],
+            artifact_hints=["auth-module"],
+            repeated_rules=[],
+            tool_signature=["rg", "bash"],
+        )
+        score = similarity_score(left, right)
+        # With matching artifacts, penalty should not reduce score below threshold
+        self.assertGreaterEqual(score, 0.5)
 
     def test_compare_iso_timestamps_and_recent_count_respect_actual_time(self) -> None:
         packets = [

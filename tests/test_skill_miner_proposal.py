@@ -983,6 +983,15 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("user_signal=low", text)
         self.assertIn("assistant_fallback", text)
 
+    def test_proposal_item_lines_prefer_display_label_for_heading(self) -> None:
+        candidate = _ready_candidate(
+            display_label="DayTrace 出力 UX レビュー",
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+
+        self.assertEqual(lines[0], "1. DayTrace 出力 UX レビュー")
+
     def test_research_brief_includes_internal_scaffolding_question_for_contaminated_candidate(self) -> None:
         candidate = _needs_research_candidate(
             origin_hint="unknown",
@@ -1045,6 +1054,42 @@ class MarkdownFormatTests(unittest.TestCase):
 
         for index in range(1, DEFAULT_TOP_N + 1):
             self.assertIn(f"{index}. Needs-{index}", markdown)
+
+    def test_build_proposal_sections_include_compact_ready_rows_and_markdown(self) -> None:
+        ready = _ready_candidate(
+            candidate_id="ready-1",
+            label="Review workflow",
+            suggested_kind="skill",
+            confidence="strong",
+            display_label="DayTrace 出力 UX レビュー",
+            skill_creator_handoff={
+                "tool": "skill-creator",
+                "entrypoint": "/skill-creator",
+                "handoff_scope": "current_repo",
+            },
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[ready]))
+
+        self.assertEqual(result["compact_ready_rows"][0]["display_label"], "DayTrace 出力 UX レビュー")
+        self.assertEqual(result["compact_ready_rows"][0]["kind"], "skill")
+        self.assertEqual(result["compact_ready_rows"][0]["confidence_label"], "高い")
+        self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "現在のリポジトリ")
+        self.assertIn("| # | 候補 | 種類 | 適用スコープ | 確度 | 効果 | アクション |", result["compact_ready_markdown"])
+        self.assertIn("DayTrace 出力 UX レビュー", result["compact_ready_markdown"])
+
+    def test_compact_ready_markdown_omits_scope_column_when_unused(self) -> None:
+        ready = _ready_candidate(
+            candidate_id="ready-1",
+            label="Repo policy norms",
+            suggested_kind="CLAUDE.md",
+            confidence="medium",
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[ready]))
+
+        self.assertIn("| # | 候補 | 種類 | 確度 | 効果 | アクション |", result["compact_ready_markdown"])
+        self.assertNotIn("適用スコープ", result["compact_ready_markdown"])
 
     def test_build_markdown_truncates_rejected_section_to_current_limit(self) -> None:
         rejected = [
