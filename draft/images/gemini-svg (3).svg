@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 550" width="100%" height="100%" style="background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity="0.08"/>
+    </filter>
+    
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <marker id="arrowhead" markerWidth="12" markerHeight="8" refX="10" refY="4" orient="auto">
+      <polygon points="0 0, 12 4, 0 8" fill="#cbd5e1" />
+    </marker>
+    <marker id="arrowhead-active" markerWidth="12" markerHeight="8" refX="10" refY="4" orient="auto">
+      <polygon points="0 0, 12 4, 0 8" fill="#3b82f6" />
+    </marker>
+
+    <linearGradient id="centerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(425, 275)">
+    <circle cx="0" cy="0" r="140" fill="#e0e7ff" opacity="0.4">
+      <animate attributeName="r" values="130; 160; 130" dur="4s" repeatCount="indefinite" />
+      <animate attributeName="opacity" values="0.2; 0.5; 0.2" dur="4s" repeatCount="indefinite" />
+    </circle>
+    <circle cx="0" cy="0" r="100" fill="url(#centerGradient)" stroke="#c7d2fe" stroke-width="2" filter="url(#shadow)"/>
+    
+    <text x="0" y="-15" font-size="16" font-weight="bold" fill="#3730a3" text-anchor="middle">DayTrace</text>
+    <text x="0" y="5" font-size="16" font-weight="bold" fill="#3730a3" text-anchor="middle">フライホイール</text>
+    <text x="0" y="30" font-size="12" fill="#6366f1" text-anchor="middle">使うほど環境が育つ</text>
+  </g>
+
+  <g fill="none" stroke="#e2e8f0" stroke-width="8" stroke-linecap="round">
+    <path d="M 545 100 Q 695 100, 695 190" marker-end="url(#arrowhead)"/>
+    <path d="M 695 360 Q 695 450, 545 450" marker-end="url(#arrowhead)"/>
+    <path d="M 305 450 Q 155 450, 155 360" marker-end="url(#arrowhead)"/>
+    <path d="M 155 190 Q 155 100, 305 100" marker-end="url(#arrowhead)"/>
+  </g>
+
+  <g fill="none" stroke="#3b82f6" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 15">
+    <path d="M 545 100 Q 695 100, 695 190">
+      <animate attributeName="stroke-dashoffset" from="50" to="0" dur="1s" repeatCount="indefinite" />
+    </path>
+    <path d="M 695 360 Q 695 450, 545 450">
+      <animate attributeName="stroke-dashoffset" from="50" to="0" dur="1s" repeatCount="indefinite" />
+    </path>
+    <path d="M 305 450 Q 155 450, 155 360">
+      <animate attributeName="stroke-dashoffset" from="50" to="0" dur="1s" repeatCount="indefinite" />
+    </path>
+    <path d="M 155 190 Q 155 100, 305 100">
+      <animate attributeName="stroke-dashoffset" from="50" to="0" dur="1s" repeatCount="indefinite" />
+    </path>
+  </g>
+
+  <g filter="url(#shadow)" transform="translate(305, 50)">
+    <rect x="0" y="0" width="240" height="90" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <rect x="0" y="0" width="240" height="8" fill="#3b82f6" rx="4"/>
+    <circle cx="120" cy="-4" r="14" fill="#3b82f6" stroke="#ffffff" stroke-width="2"/>
+    <text x="120" y="1" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">1</text>
+    
+    <text x="120" y="35" font-size="16" font-weight="bold" fill="#1e293b" text-anchor="middle">日々の作業（Reality）</text>
+    <text x="120" y="55" font-size="12" fill="#64748b" text-anchor="middle">コード執筆 / 調査 / ドキュメント作成</text>
+    <text x="120" y="75" font-size="11" fill="#94a3b8" text-anchor="middle">人間とAIがツールを使って業務をこなす</text>
+  </g>
+
+  <g filter="url(#shadow)" transform="translate(575, 220)">
+    <rect x="0" y="0" width="240" height="110" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <rect x="0" y="0" width="240" height="8" fill="#8b5cf6" rx="4"/>
+    <circle cx="244" cy="55" r="14" fill="#8b5cf6" stroke="#ffffff" stroke-width="2"/>
+    <text x="244" y="60" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">2</text>
+    
+    <text x="120" y="35" font-size="16" font-weight="bold" fill="#1e293b" text-anchor="middle">証跡の蓄積・抽出（Observe）</text>
+    
+    <rect x="30" y="45" width="180" height="20" rx="4" fill="#f1f5f9"/>
+    <text x="120" y="59" font-size="11" font-family="monospace" fill="#475569" text-anchor="middle">daytrace / skill-miner</text>
+    
+    <text x="120" y="80" font-size="12" fill="#64748b" text-anchor="middle">人間の暗黙知・反復パターンを</text>
+    <text x="120" y="98" font-size="12" font-weight="bold" fill="#7c3aed" text-anchor="middle">AIが発見し、形式知化を提案</text>
+  </g>
+
+  <g filter="url(#shadow)" transform="translate(305, 410)">
+    <rect x="0" y="0" width="240" height="90" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <rect x="0" y="82" width="240" height="8" fill="#f59e0b" rx="4"/>
+    <circle cx="120" cy="94" r="14" fill="#f59e0b" stroke="#ffffff" stroke-width="2"/>
+    <text x="120" y="99" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
+    
+    <text x="120" y="35" font-size="16" font-weight="bold" fill="#1e293b" text-anchor="middle">人間の監査・承認（Judge）</text>
+    <text x="120" y="55" font-size="12" fill="#64748b" text-anchor="middle">提案をレビューし、採用を決定する</text>
+    <text x="120" y="75" font-size="11" font-weight="bold" fill="#d97706" text-anchor="middle">※AI浅慮を防ぐ「二段階ゲート」の役割</text>
+  </g>
+
+  <g filter="url(#shadow)" transform="translate(35, 220)">
+    <rect x="0" y="0" width="240" height="110" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <rect x="0" y="0" width="240" height="8" fill="#10b981" rx="4"/>
+    <circle cx="-4" cy="55" r="14" fill="#10b981" stroke="#ffffff" stroke-width="2"/>
+    <text x="-4" y="60" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">4</text>
+    
+    <text x="120" y="35" font-size="16" font-weight="bold" fill="#1e293b" text-anchor="middle">環境のアップデート（Act）</text>
+    
+    <rect x="30" y="45" width="180" height="20" rx="4" fill="#f1f5f9"/>
+    <text x="120" y="59" font-size="11" font-family="monospace" fill="#475569" text-anchor="middle">skill-applier / CLAUDE.md</text>
+    
+    <text x="120" y="80" font-size="12" fill="#64748b" text-anchor="middle">ワークスペース固有のルールが更新され</text>
+    <text x="120" y="98" font-size="12" font-weight="bold" fill="#059669" text-anchor="middle">翌日からAIの支援が高度化する</text>
+  </g>
+
+</svg>

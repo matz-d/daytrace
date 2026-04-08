@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 480" width="100%" height="100%">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#21262d" stroke-width="1"/>
+    </pattern>
+    <marker id="arr-up" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="270">
+      <polygon points="0 0, 8 3, 0 6" fill="#d2a8ff"/>
+    </marker>
+    <marker id="arr-dn" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="90">
+      <polygon points="0 0, 8 3, 0 6" fill="#d2a8ff"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#0d1117"/>
+  <rect width="100%" height="100%" fill="url(#grid)"/>
+
+  <!-- ══════════════════════════════════════════
+       CORE PLUGIN BLOCK  (y=28 ~ y=192)
+       ══════════════════════════════════════════ -->
+  <rect x="28" y="28" width="804" height="164" rx="10"
+        fill="#1a2d3f" stroke="#58a6ff" stroke-width="2"/>
+
+  <!-- "CORE" badge -->
+  <rect x="40" y="38" width="52" height="20" rx="10" fill="#1f6feb" opacity="0.9"/>
+  <text x="66" y="53" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" font-weight="bold" fill="#c9d1d9">CORE</text>
+
+  <text x="104" y="54" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="16" font-weight="bold" fill="#58a6ff">DayTrace Core Plugin</text>
+  <text x="104" y="72" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="12" fill="#8b949e">エンジン・基本ロジック（共通・不変）— バージョンアップで全ユーザーに恩恵</text>
+
+  <!-- 5 Skill chips -->
+  <!-- /daytrace-session -->
+  <rect x="42"  y="90" width="148" height="42" rx="7" fill="#0d1f33" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="116" y="108" text-anchor="middle"
+        font-family="'Consolas','Monaco',monospace" font-size="11" font-weight="bold" fill="#58a6ff">/daytrace-session</text>
+  <text x="116" y="124" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" fill="#8b949e">統合入口 · 自律完走</text>
+
+  <!-- /daily-report -->
+  <rect x="200" y="90" width="138" height="42" rx="7" fill="#162d20" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="269" y="108" text-anchor="middle"
+        font-family="'Consolas','Monaco',monospace" font-size="11" font-weight="bold" fill="#3fb950">/daily-report</text>
+  <text x="269" y="124" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" fill="#8b949e">日報生成</text>
+
+  <!-- /post-draft -->
+  <rect x="348" y="90" width="130" height="42" rx="7" fill="#2a1e0a" stroke="#d29922" stroke-width="1.5"/>
+  <text x="413" y="108" text-anchor="middle"
+        font-family="'Consolas','Monaco',monospace" font-size="11" font-weight="bold" fill="#d29922">/post-draft</text>
+  <text x="413" y="124" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" fill="#8b949e">投稿下書き</text>
+
+  <!-- /skill-miner -->
+  <rect x="488" y="90" width="136" height="42" rx="7" fill="#2d1f3f" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="556" y="108" text-anchor="middle"
+        font-family="'Consolas','Monaco',monospace" font-size="11" font-weight="bold" fill="#d2a8ff">/skill-miner</text>
+  <text x="556" y="124" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" fill="#8b949e">パターン抽出</text>
+
+  <!-- /skill-applier -->
+  <rect x="634" y="90" width="142" height="42" rx="7" fill="#2a1e0a" stroke="#d29922" stroke-width="1.5"/>
+  <text x="705" y="108" text-anchor="middle"
+        font-family="'Consolas','Monaco',monospace" font-size="11" font-weight="bold" fill="#d29922">/skill-applier</text>
+  <text x="705" y="124" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" fill="#8b949e">提案を適用</text>
+
+  <!-- Core note -->
+  <rect x="42" y="145" width="760" height="34" rx="6" fill="#0d1117" opacity="0.5"/>
+  <text x="422" y="167" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="12" fill="#8b949e">Source CLI Contract に従う · JSON スキーマで型安全 · 外部ネットワーク通信なし</text>
+
+  <!-- ══════════════════════════════════════════
+       INTERFACE BAND  (y=196 ~ y=248)
+       ══════════════════════════════════════════ -->
+  <rect x="28" y="196" width="804" height="52" rx="0"
+        fill="#1a0a2a" stroke="#d2a8ff" stroke-width="1" stroke-dasharray="6 4" opacity="0.8"/>
+
+  <!-- Bi-directional arrows -->
+  <!-- Down arrows (Core → Local) -->
+  <line x1="120" y1="196" x2="120" y2="248" stroke="#d2a8ff" stroke-width="2"/>
+  <polygon points="113,240 120,250 127,240" fill="#d2a8ff"/>
+
+  <line x1="740" y1="196" x2="740" y2="248" stroke="#d2a8ff" stroke-width="2"/>
+  <polygon points="733,240 740,250 747,240" fill="#d2a8ff"/>
+
+  <!-- Up arrows (Local → Core) -->
+  <line x1="160" y1="248" x2="160" y2="196" stroke="#d2a8ff" stroke-width="2"/>
+  <polygon points="153,204 160,194 167,204" fill="#d2a8ff"/>
+
+  <line x1="700" y1="248" x2="700" y2="196" stroke="#d2a8ff" stroke-width="2"/>
+  <polygon points="693,204 700,194 707,204" fill="#d2a8ff"/>
+
+  <!-- Interface label -->
+  <text x="430" y="219" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="13" font-weight="bold" fill="#d2a8ff">疎結合インターフェース</text>
+  <text x="430" y="238" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#6e40c9">JSON contracts · Source CLI Contract · Projection Adapters</text>
+
+  <!-- ══════════════════════════════════════════
+       LOCAL WORKSPACE BLOCK  (y=252 ~ y=448)
+       ══════════════════════════════════════════ -->
+  <rect x="28" y="252" width="804" height="196" rx="10"
+        fill="#1a3020" stroke="#3fb950" stroke-width="2"/>
+
+  <!-- "LOCAL" badge -->
+  <rect x="40" y="262" width="52" height="20" rx="10" fill="#238636" opacity="0.9"/>
+  <text x="66" y="277" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="10" font-weight="bold" fill="#c9d1d9">LOCAL</text>
+
+  <text x="104" y="278" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="16" font-weight="bold" fill="#3fb950">Local Workspace</text>
+  <text x="104" y="296" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="12" fill="#8b949e">個人の SSOT（カスタマイズ・文脈）— Core 本体を変えずに自分専用に拡張できる</text>
+
+  <!-- File tree -->
+  <text x="54" y="326" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#8b949e">~/.daytrace/</text>
+
+  <text x="70" y="346" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#3fb950">├── CLAUDE.md</text>
+  <text x="260" y="346" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">← カスタム指示・ルール</text>
+
+  <text x="70" y="364" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#3fb950">├── skills/</text>
+  <text x="190" y="364" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">← 独自スキル（wrapper 含む）</text>
+
+  <text x="70" y="382" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#3fb950">├── hooks/</text>
+  <text x="190" y="382" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">← 独自フック</text>
+
+  <text x="70" y="400" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#3fb950">├── agent/</text>
+  <text x="190" y="400" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">← 独自エージェント</text>
+
+  <text x="70" y="418" text-anchor="start"
+        font-family="'Consolas','Monaco',monospace" font-size="12" fill="#3fb950">└── output/YYYY-MM-DD/</text>
+  <text x="340" y="418" text-anchor="start"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">← 日報・下書き・提案</text>
+
+  <!-- Key insight callout box -->
+  <rect x="510" y="310" width="298" height="112" rx="8" fill="#0d1117" stroke="#3fb950" stroke-width="1.5" opacity="0.9"/>
+  <text x="659" y="332" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="12" font-weight="bold" fill="#3fb950">Core をforkしない</text>
+  <text x="659" y="352" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#c9d1d9">本体のバージョンアップで</text>
+  <text x="659" y="369" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#c9d1d9">全ユーザーが恩恵を受けながら、</text>
+  <text x="659" y="386" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#c9d1d9">Local の資産はそのまま保持される</text>
+  <text x="659" y="407" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="11" fill="#8b949e">→ wrapper を一枚追加するだけ</text>
+
+  <!-- ───── BOTTOM CAPTION ───── -->
+  <text x="430" y="466" text-anchor="middle"
+        font-family="'Segoe UI',sans-serif" font-size="12" fill="#8b949e">共通のコアは DayTrace 本体に任せ、自分固有の文脈だけをローカル側に寄せる</text>
+</svg>
