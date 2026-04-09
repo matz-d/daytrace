@@ -180,8 +180,8 @@ class ProposalSectionsTests(unittest.TestCase):
     def test_summary_triaged_total_matches_section_lengths(self) -> None:
         payload = _prepare_payload(
             candidates=[
-                _needs_research_candidate(candidate_id="n1"),
-                _needs_research_candidate(candidate_id="n2"),
+                _needs_research_candidate(candidate_id="n1", label="Build automation"),
+                _needs_research_candidate(candidate_id="n2", label="Build pipeline checks"),
             ],
         )
         result = build_proposal_sections(payload)
@@ -992,6 +992,53 @@ class MarkdownFormatTests(unittest.TestCase):
 
         self.assertEqual(lines[0], "1. DayTrace 出力 UX レビュー")
 
+    def test_proposal_item_lines_generate_short_heading_from_raw_prompt_label(self) -> None:
+        candidate = _ready_candidate(
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=True)
+
+        self.assertEqual(lines[0], "1. 検索タグ生成")
+
+    def test_proposal_item_lines_do_not_relabel_lint_config_as_test_rule(self) -> None:
+        candidate = _needs_research_candidate(
+            label="Update lint config",
+            display_label="",
+            common_task_shapes=["edit_config"],
+            artifact_hints=["config"],
+            evidence_items=[
+                {
+                    "timestamp": "2026-03-09T10:00:00+09:00",
+                    "source": "codex-history",
+                    "summary": "Update lint config before deploy",
+                }
+            ],
+        )
+
+        lines = proposal_item_lines(1, candidate, include_classification=False)
+
+        self.assertEqual(lines[0], "1. 設定更新ルール")
+        self.assertNotEqual(lines[0], "1. テスト確認ルール")
+
+    def test_proposal_item_lines_hide_raw_intent_trace_and_compress_long_details(self) -> None:
+        candidate = _ready_candidate(
+            constraints=[
+                "Generate search tags and metadata for each bookmark and keep the output consistent even when examples are noisy."
+            ],
+            acceptance_criteria=[
+                "Return ONLY valid JSON, no markdown, no explanation. Include tags, sentiment, summary, and topic clusters."
+            ],
+        )
+
+        text = "\n".join(proposal_item_lines(1, candidate, include_classification=True))
+
+        self.assertNotIn("意図トレース", text)
+        self.assertIn("制約:", text)
+        self.assertIn("受け入れ条件: 出力形式を JSON に固定する", text)
+
     def test_research_brief_includes_internal_scaffolding_question_for_contaminated_candidate(self) -> None:
         candidate = _needs_research_candidate(
             origin_hint="unknown",
@@ -1014,9 +1061,9 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertIn("One-off task", text)
         self.assertIn("理由: single occurrence", text)
 
-    def test_build_markdown_with_ready_includes_selection_prompt(self) -> None:
+    def test_build_markdown_with_ready_omits_selection_prompt(self) -> None:
         markdown = build_markdown([_ready_candidate()], [], [])
-        self.assertIn("候補番号を入力すると /skill-creator による登録フローが始まります", markdown)
+        self.assertNotIn("候補番号を入力すると /skill-creator による登録フローが始まります", markdown)
 
     def test_build_markdown_without_ready_shows_no_candidates(self) -> None:
         markdown = build_markdown([], [_needs_research_candidate()], [])
@@ -1077,6 +1124,165 @@ class MarkdownFormatTests(unittest.TestCase):
         self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "現在のリポジトリ")
         self.assertIn("| # | 候補 | 種類 | 適用スコープ | 確度 | 効果 | アクション |", result["compact_ready_markdown"])
         self.assertIn("DayTrace 出力 UX レビュー", result["compact_ready_markdown"])
+
+    def test_build_proposal_sections_collapses_duplicate_candidates_across_sections(self) -> None:
+        ready = _ready_candidate(
+            candidate_id="dup-ready",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            suggested_kind="skill",
+            support={"total_packets": 32, "claude_packets": 0, "codex_packets": 32},
+        )
+        needs = _needs_research_candidate(
+            candidate_id="dup-needs",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            confidence="weak",
+            suggested_kind="skill",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            support={"total_packets": 3, "claude_packets": 0, "codex_packets": 3},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[ready, needs]))
+
+        self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(result["summary"]["needs_research_count"], 0)
+        self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-needs")
+        self.assertIn("関連候補: 1件の近似候補を統合表示", result["markdown"])
+
+    def test_build_proposal_sections_collapses_duplicate_candidates_within_same_section(self) -> None:
+        first = _ready_candidate(
+            candidate_id="dup-ready-1",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            suggested_kind="skill",
+            support={"total_packets": 32, "claude_packets": 0, "codex_packets": 32},
+        )
+        second = _ready_candidate(
+            candidate_id="dup-ready-2",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            suggested_kind="skill",
+            support={"total_packets": 3, "claude_packets": 0, "codex_packets": 3},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[first, second]))
+
+        self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(len(result["ready"]), 1)
+        self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-ready-2")
+        self.assertIn("関連候補: 1件の近似候補を統合表示", result["markdown"])
+
+    def test_build_proposal_sections_collapses_duplicate_candidates_prefers_higher_rank_primary(self) -> None:
+        weaker = _ready_candidate(
+            candidate_id="dup-ready-weak",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            confidence="weak",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            suggested_kind="skill",
+            support={"total_packets": 1, "claude_packets": 0, "codex_packets": 1},
+        )
+        stronger = _ready_candidate(
+            candidate_id="dup-ready-strong",
+            label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
+            display_label="",
+            confidence="strong",
+            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            suggested_kind="skill",
+            support={"total_packets": 30, "claude_packets": 0, "codex_packets": 30},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[weaker, stronger]))
+
+        self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(result["ready"][0]["candidate_id"], "dup-ready-strong")
+        self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-ready-weak")
+
+    def test_build_proposal_sections_keeps_cross_repo_candidate_separate(self) -> None:
+        current_repo = _ready_candidate(
+            candidate_id="repo",
+            label="Prepare report",
+            display_label="",
+            suggested_kind="skill",
+            common_task_shapes=["prepare_report"],
+            artifact_hints=["report"],
+            support={"total_packets": 4, "claude_packets": 2, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        cross_repo = _ready_candidate(
+            candidate_id="cross",
+            label="Prepare report",
+            display_label="",
+            suggested_kind="skill",
+            dominant_workspace="/other/repo",
+            workspace_paths=["/other/repo"],
+            common_task_shapes=["prepare_report"],
+            artifact_hints=["report"],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2, "unique_workspaces": 1},
+        )
+
+        payload = _prepare_payload(candidates=[current_repo, cross_repo])
+        payload["config"]["workspace"] = "/tmp/daytrace"
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_count"], 2)
+        self.assertCountEqual([candidate["candidate_id"] for candidate in result["ready"]], ["repo", "cross"])
+
+    def test_build_proposal_sections_demotes_misaligned_run_tests_candidate(self) -> None:
+        candidate = _ready_candidate(
+            label="Run tests before close",
+            suggested_kind="hook",
+            common_task_shapes=["run_tests"],
+            rule_hints=["tests-before-close"],
+            evidence_items=[
+                {
+                    "timestamp": "2026-03-09T10:00:00+09:00",
+                    "source": "codex-history",
+                    "summary": "Write weekly lecture report draft from notes",
+                }
+            ],
+            intent_trace=["Summarize the lecture report clearly."],
+            constraints=["Keep the report in Japanese."],
+            acceptance_criteria=["Summarize the weekly status clearly."],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[candidate]))
+
+        self.assertEqual(result["summary"]["ready_count"], 0)
+        self.assertEqual(result["summary"]["needs_research_count"], 1)
+        self.assertIn("候補名と根拠の意味が十分に一致しない", result["needs_research"][0]["confidence_reason"])
+
+    def test_build_proposal_sections_demotes_misaligned_review_candidate(self) -> None:
+        candidate = _ready_candidate(
+            label="Review changes before close",
+            suggested_kind="CLAUDE.md",
+            common_task_shapes=["review_changes"],
+            rule_hints=["review_changes"],
+            artifact_hints=["review"],
+            evidence_summary="Weekly lecture report drafting pattern",
+            confidence_reason="report-oriented summary tasks repeated",
+            evidence_items=[
+                {
+                    "timestamp": "2026-03-09T10:00:00+09:00",
+                    "source": "codex-history",
+                    "summary": "Write weekly lecture report draft from notes",
+                }
+            ],
+            intent_trace=["Summarize the lecture report clearly."],
+            constraints=["Keep the report in Japanese."],
+            acceptance_criteria=["Summarize the weekly status clearly."],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2},
+        )
+
+        result = build_proposal_sections(_prepare_payload(candidates=[candidate]))
+
+        self.assertEqual(result["summary"]["ready_count"], 0)
+        self.assertEqual(result["summary"]["needs_research_count"], 1)
+        self.assertIn("候補名と根拠の意味が十分に一致しない", result["needs_research"][0]["confidence_reason"])
 
     def test_compact_ready_markdown_omits_scope_column_when_unused(self) -> None:
         ready = _ready_candidate(

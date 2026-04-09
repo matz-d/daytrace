@@ -810,6 +810,11 @@ class SkillMinerTests(unittest.TestCase):
         return workspace, claude_root, codex_history, codex_sessions
 
     def run_prepare(self, workspace: Path, claude_root: Path, codex_history: Path, codex_sessions: Path, *extra_args: str) -> dict:
+        extra = list(extra_args)
+        if "--reference-date" not in extra:
+            # Keep fixture-backed prepare tests deterministic even as wall-clock time moves
+            # away from the fixed 2026-03-09 / 2026-03-12 sample data.
+            extra.extend(["--reference-date", "2026-03-10"])
         completed = subprocess.run(
             [
                 "python3",
@@ -826,7 +831,7 @@ class SkillMinerTests(unittest.TestCase):
                 "5",
                 "--max-unclustered",
                 "5",
-                *extra_args,
+                *extra,
             ],
             cwd=str(PROJECT_ROOT),
             capture_output=True,
@@ -1893,6 +1898,8 @@ class SkillMinerTests(unittest.TestCase):
                     "5",
                     "--max-unclustered",
                     "5",
+                    "--reference-date",
+                    "2026-03-10",
                 ],
                 cwd=str(PROJECT_ROOT),
                 capture_output=True,
@@ -2550,7 +2557,10 @@ class SkillMinerTests(unittest.TestCase):
             self.assertEqual(payload["source"], "skill-miner-proposal")
             self.assertEqual(len(payload["ready"]), 1)
             self.assertEqual(payload["ready"][0]["candidate_id"], "cand-1")
-            self.assertIn("候補番号を入力すると /skill-creator による登録フローが始まります", payload["markdown"])
+            self.assertNotIn("候補番号を入力すると /skill-creator による登録フローが始まります", payload["markdown"])
+            self.assertIsInstance(payload["selection_prompt"], str)
+            self.assertTrue(payload["selection_prompt"].startswith("候補番号を入力すると /skill-creator による登録フローが始まります。"))
+            self.assertIn("選ばなかった候補は次回以降も引き続き提案されます。", payload["selection_prompt"])
 
     def test_build_proposal_sections_handles_zero_ready_candidates(self) -> None:
         prepare_payload = {
@@ -2660,6 +2670,8 @@ class SkillMinerTests(unittest.TestCase):
                     str(root / "missing-history.jsonl"),
                     "--codex-sessions-root",
                     str(root / "missing-sessions"),
+                    "--reference-date",
+                    "2026-03-10",
                 ],
                 cwd=str(PROJECT_ROOT),
                 capture_output=True,
@@ -2801,6 +2813,8 @@ class SkillMinerTests(unittest.TestCase):
                     str(root / "missing-history.jsonl"),
                     "--codex-sessions-root",
                     str(root / "missing-sessions"),
+                    "--reference-date",
+                    "2026-03-10",
                 ],
                 cwd=str(PROJECT_ROOT),
                 capture_output=True,

@@ -13,6 +13,7 @@ from pathlib import Path
 from conftest import PLUGIN_ROOT
 
 from derived_store import persist_patterns_from_prepare
+from projection_adapters import _payload_scope_mode
 
 
 DAILY_PROJECTION = PLUGIN_ROOT / "scripts" / "daily_report_projection.py"
@@ -260,6 +261,9 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertTrue(any(source["name"] == "ai-source" and source["scope"] == "all-day" for source in payload["sources"]))
             self.assertTrue(any(source["name"] == "browser-source" and source["scope"] == "all-day" for source in payload["sources"]))
             self.assertEqual(payload["report_date"], "2026-03-12")
+            self.assertEqual(payload["report_date_context"]["timezone_basis"], "local")
+            self.assertEqual(payload["report_date_context"]["day_boundary_hour"], 6)
+            self.assertEqual(payload["scope_mode"], "mixed")
             self.assertEqual(
                 payload["output_dir"],
                 str(Path.home() / ".daytrace" / "output" / "2026-03-12"),
@@ -278,6 +282,7 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertEqual(len(payload["timeline"]), len(aggregate_payload["timeline"]))
             self.assertEqual(len(payload["groups"]), len(aggregate_payload["groups"]))
             self.assertEqual(payload["report_date"], "2026-03-12")
+            self.assertEqual(payload["scope_mode"], "mixed")
 
     def test_projection_payload_omits_output_dir_for_multi_day_range(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -315,6 +320,19 @@ class ProjectionAdapterTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertIsNone(payload["report_date"])
             self.assertIsNone(payload["output_dir"])
+            self.assertEqual(payload["report_date_context"]["timezone_basis"], "local")
+            self.assertEqual(payload["report_date_context"]["day_boundary_hour"], 6)
+
+    def test_payload_scope_mode_uses_source_scopes_when_groups_are_empty(self) -> None:
+        scope_mode = _payload_scope_mode(
+            [],
+            [
+                {"status": "success", "scope_mode": "workspace", "events_count": 1},
+                {"status": "success", "scope_mode": "all-day", "events_count": 1},
+            ],
+        )
+
+        self.assertEqual(scope_mode, "mixed")
 
     def test_daily_projection_errors_when_sources_registry_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

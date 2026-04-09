@@ -4,7 +4,7 @@
 > 候補内訳: 適用 2 / 追加観測 1 / 観測ノート 2（合計 5）
 
 ## 提案（アクション候補）
-1. review changes (review, code)
+1. レビュー指摘整理
    種類: プロジェクト設定（CLAUDE.md）
    確度: 高い — 複数セッション・複数ソースで繰り返し観測
    根拠:
@@ -12,9 +12,9 @@
    - 2026-03-11T13:15:00+09:00 claude-history: Keep file-line references in the fake review summary.
    効果: プロジェクト設定に追加すれば、毎回の指示が不要になります
    → すぐに CLAUDE.md に追加できます
-2. prepare report (report, markdown)
+2. 日報下書き整理
    種類: 再利用スキル
-   適用先: 現在のリポジトリ
+   適用先: 要確認（現在のリポジトリとは断定しません）
    workspace 注記: 観測 workspace と同一リポジトリ向けの候補として扱っています。
    確度: 中程度 — 複数セッションで出現、もう少し定着を見たい
    根拠:
@@ -38,5 +38,3 @@
    理由: single occurrence in a fake note-only session
 2. Investigate a one-off fake import warning.
    理由: single observed packet only; keep as reference, not as a proposal candidate
-
-候補番号を入力すると /skill-creator による登録フローが始まります。選択後は handoff を正本扱いせず、適用先 repo の生ファイル確認から始めてください。選ばなかった候補は次回以降も引き続き提案されます。複数登録したい場合は 1 つずつ選択してください。
