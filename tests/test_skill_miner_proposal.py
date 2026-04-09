@@ -996,7 +996,7 @@ class MarkdownFormatTests(unittest.TestCase):
         candidate = _ready_candidate(
             label="Generate search tags and metadata for each of these Twitter/X bookmarks.",
             display_label="",
-            representative_examples=["Generate search tags and metadata for each of these Twitter/X bookmarks."],
+            representative_examples=["Unrelated control text about reviewing pull requests."],
         )
 
         lines = proposal_item_lines(1, candidate, include_classification=True)
@@ -1025,6 +1025,7 @@ class MarkdownFormatTests(unittest.TestCase):
 
     def test_proposal_item_lines_hide_raw_intent_trace_and_compress_long_details(self) -> None:
         candidate = _ready_candidate(
+            intent_trace=["INTERNAL TRACE: should never appear in markdown"],
             constraints=[
                 "Generate search tags and metadata for each bookmark and keep the output consistent even when examples are noisy."
             ],
@@ -1036,6 +1037,7 @@ class MarkdownFormatTests(unittest.TestCase):
         text = "\n".join(proposal_item_lines(1, candidate, include_classification=True))
 
         self.assertNotIn("意図トレース", text)
+        self.assertNotIn("INTERNAL TRACE: should never appear in markdown", text)
         self.assertIn("制約:", text)
         self.assertIn("受け入れ条件: 出力形式を JSON に固定する", text)
 
@@ -1147,6 +1149,7 @@ class MarkdownFormatTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["ready_count"], 1)
         self.assertEqual(result["summary"]["needs_research_count"], 0)
+        self.assertEqual(result["summary"]["triaged_total"], 1)
         self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-needs")
         self.assertIn("関連候補: 1件の近似候補を統合表示", result["markdown"])
 
@@ -1171,6 +1174,7 @@ class MarkdownFormatTests(unittest.TestCase):
         result = build_proposal_sections(_prepare_payload(candidates=[first, second]))
 
         self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(result["summary"]["triaged_total"], 1)
         self.assertEqual(len(result["ready"]), 1)
         self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-ready-2")
         self.assertIn("関連候補: 1件の近似候補を統合表示", result["markdown"])
@@ -1198,6 +1202,7 @@ class MarkdownFormatTests(unittest.TestCase):
         result = build_proposal_sections(_prepare_payload(candidates=[weaker, stronger]))
 
         self.assertEqual(result["summary"]["ready_count"], 1)
+        self.assertEqual(result["summary"]["triaged_total"], 1)
         self.assertEqual(result["ready"][0]["candidate_id"], "dup-ready-strong")
         self.assertEqual(result["ready"][0]["merged_variants"][0]["candidate_id"], "dup-ready-weak")
 
