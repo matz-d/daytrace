@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="100%" height="100%">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#21262d" stroke-width="0.7"/>
+    </pattern>
+    <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arr-amber" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d2a8ff"/>
+    </marker>
+    <marker id="arr-gray" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b949e"/>
+    </marker>
+    <style>
+      @keyframes dashFlow {
+        from { stroke-dashoffset: 16; }
+        to   { stroke-dashoffset: 0; }
+      }
+      .flow { stroke-dasharray: 5 3; animation: dashFlow 1.2s linear infinite; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#0d1117"/>
+  <rect width="100%" height="100%" fill="url(#grid)"/>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle"
+        font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="18" font-weight="bold" fill="#c9d1d9">DayTrace データフロー</text>
+
+  <!-- ===== SECTION 1: SOURCES ===== -->
+  <text x="18" y="76" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">① ローカル証跡ソース</text>
+
+  <!-- git-history (workspace / green) -->
+  <rect x="35" y="83" width="155" height="67" rx="7" fill="#0e1c11" stroke="#3fb950" stroke-width="1.5"/>
+  <rect x="35" y="83" width="4"   height="67" rx="2" fill="#3fb950"/>
+  <text x="120" y="107" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#3fb950">Git 履歴</text>
+  <text x="120" y="124" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">git-history</text>
+  <text x="120" y="141" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#3fb950">workspace</text>
+
+  <!-- claude-history (all-day / blue) -->
+  <rect x="198" y="83" width="155" height="67" rx="7" fill="#0d1e2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="198" y="83" width="4"   height="67" rx="2" fill="#58a6ff"/>
+  <text x="283" y="107" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#58a6ff">Claude 会話</text>
+  <text x="283" y="124" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">claude-history</text>
+  <text x="283" y="141" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#58a6ff">all-day</text>
+
+  <!-- codex-history (all-day / blue) -->
+  <rect x="361" y="83" width="155" height="67" rx="7" fill="#0d1e2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="361" y="83" width="4"   height="67" rx="2" fill="#58a6ff"/>
+  <text x="446" y="107" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#58a6ff">Codex 会話</text>
+  <text x="446" y="124" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">codex-history</text>
+  <text x="446" y="141" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#58a6ff">all-day</text>
+
+  <!-- chrome-history (all-day / blue) -->
+  <rect x="524" y="83" width="155" height="67" rx="7" fill="#0d1e2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="524" y="83" width="4"   height="67" rx="2" fill="#58a6ff"/>
+  <text x="609" y="107" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#58a6ff">Chrome 閲覧</text>
+  <text x="609" y="124" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">chrome-history</text>
+  <text x="609" y="141" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#58a6ff">all-day</text>
+
+  <!-- workspace-file-activity (workspace / green) -->
+  <rect x="687" y="83" width="155" height="67" rx="7" fill="#0e1c11" stroke="#3fb950" stroke-width="1.5"/>
+  <rect x="687" y="83" width="4"   height="67" rx="2" fill="#3fb950"/>
+  <text x="772" y="107" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#3fb950">ファイル変更</text>
+  <text x="772" y="124" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">workspace-file-activity</text>
+  <text x="772" y="141" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#3fb950">workspace</text>
+
+  <!-- Arrows: sources → aggregate (vertical, animated) -->
+  <line x1="112" y1="150" x2="112" y2="197" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)" class="flow"/>
+  <line x1="275" y1="150" x2="275" y2="197" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-blue)"  class="flow"/>
+  <line x1="438" y1="150" x2="438" y2="197" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-blue)"  class="flow"/>
+  <line x1="601" y1="150" x2="601" y2="197" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-blue)"  class="flow"/>
+  <line x1="764" y1="150" x2="764" y2="197" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)" class="flow"/>
+
+  <!-- ===== SECTION 2: AGGREGATE ===== -->
+  <text x="18" y="192" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">② 収集・集約</text>
+
+  <!-- aggregate.py box -->
+  <rect x="80" y="200" width="740" height="56" rx="8" fill="#1a1f0e" stroke="#d29922" stroke-width="2"/>
+  <rect x="80" y="200" width="5"   height="56" rx="2" fill="#d29922"/>
+  <text x="455" y="222" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#d29922">aggregate.py — 収集・集約オーケストレーター</text>
+  <text x="455" y="243" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">各ソース CLI を並列実行　ソースが欠けてもスキップして最後まで出力（graceful degrade）</text>
+
+  <!-- Arrow: aggregate → store -->
+  <line x1="450" y1="256" x2="450" y2="273" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+  <!-- SQLite Store box -->
+  <rect x="310" y="275" width="280" height="44" rx="8" fill="#1c1030" stroke="#d2a8ff" stroke-width="1.5"/>
+  <rect x="310" y="275" width="4"   height="44" rx="2" fill="#d2a8ff"/>
+  <text x="452" y="297" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="12" font-weight="bold" fill="#d2a8ff">SQLite Store</text>
+  <text x="452" y="312" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">~/.daytrace/daytrace.sqlite3</text>
+
+  <!-- Branch arrows from store -->
+  <path d="M 375,319 L 235,342" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <path d="M 525,319 L 660,338" fill="none" stroke="#d29922" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+
+  <!-- Vertical divider -->
+  <line x1="455" y1="326" x2="455" y2="685" stroke="#30363d" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <!-- ===== LEFT PATH: 日報・投稿下書き ===== -->
+  <text x="230" y="335" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#58a6ff">日報・投稿下書き</text>
+
+  <!-- Projection adapters box -->
+  <rect x="35" y="345" width="400" height="72" rx="8" fill="#0d1e2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="35" y="345" width="4"   height="72" rx="2" fill="#58a6ff"/>
+  <text x="237" y="367" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="12" font-weight="bold" fill="#58a6ff">投影アダプター（Projection Adapters）</text>
+  <text x="237" y="385" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">daily_report_projection — 日報用</text>
+  <text x="237" y="403" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">post_draft_projection — 投稿下書き用</text>
+
+  <!-- Arrows: projection → outputs -->
+  <line x1="115" y1="417" x2="115" y2="444" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <line x1="325" y1="417" x2="325" y2="444" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <!-- 日報 output box -->
+  <rect x="35" y="446" width="165" height="60" rx="8" fill="#0e1c11" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="118" y="470" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="14" font-weight="bold" fill="#3fb950">📄 日報</text>
+  <text x="118" y="488" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">根拠付き・自分用 / 共有用</text>
+  <text x="118" y="502" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#3fb950">~/.daytrace/output/</text>
+
+  <!-- 投稿下書き output box -->
+  <rect x="225" y="446" width="210" height="60" rx="8" fill="#0e1c11" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="330" y="470" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="14" font-weight="bold" fill="#3fb950">📝 投稿下書き</text>
+  <text x="330" y="488" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">読者向けに整形・1日の流れ</text>
+  <text x="330" y="502" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#3fb950">~/.daytrace/output/</text>
+
+  <!-- daytrace-session note (left bottom area) -->
+  <rect x="35" y="535" width="400" height="75" rx="8" fill="#161b22"
+        stroke="#484f58" stroke-width="1" stroke-dasharray="5 3"/>
+  <text x="237" y="558" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="13" font-weight="bold" fill="#c9d1d9">🚀  /daytrace-session</text>
+  <text x="237" y="576" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">上記フロー全体を一括オーケストレート</text>
+  <text x="237" y="600" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#484f58">設定不要　·　ローカル完結　·　外部送信なし</text>
+
+  <!-- ===== RIGHT PATH: skill-miner ===== -->
+  <text x="663" y="330" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#d29922">パターン提案（skill-miner）</text>
+
+  <!-- skill-miner CLIs box -->
+  <rect x="465" y="340" width="400" height="118" rx="8" fill="#1f1a0e" stroke="#d29922" stroke-width="1.5"/>
+  <rect x="465" y="340" width="4"   height="118" rx="2" fill="#d29922"/>
+  <text x="667" y="362" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="12" font-weight="bold" fill="#d29922">skill-miner CLIs</text>
+  <text x="667" y="381" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">skill_miner_prepare — Claude / Codex を直接読み取り</text>
+  <text x="667" y="398" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">観測窓: 直近 7〜30 日（aggregate.py をバイパス）</text>
+  <text x="667" y="415" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">skill_miner_proposal — 強い候補のみを提案</text>
+  <text x="667" y="434" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#484f58">「0件でも正常」― 提案数より妥当性を優先</text>
+  <text x="667" y="451" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#484f58">store からの読み取りも可（--input-source store）</text>
+
+  <!-- Arrow: skill-miner CLIs → パターン提案 -->
+  <line x1="665" y1="458" x2="665" y2="476" stroke="#d29922" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+
+  <!-- パターン提案 output box -->
+  <rect x="490" y="478" width="350" height="54" rx="8" fill="#1f1a0e" stroke="#d29922" stroke-width="2"/>
+  <text x="665" y="502" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="14" font-weight="bold" fill="#d29922">🔍 パターン提案</text>
+  <text x="665" y="521" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">CLAUDE.md / skill / hook / agent の候補</text>
+
+  <!-- Arrow: パターン提案 → skill-applier -->
+  <line x1="665" y1="532" x2="665" y2="551" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+  <!-- skill-applier box -->
+  <rect x="490" y="553" width="350" height="54" rx="8" fill="#1c1030" stroke="#d2a8ff" stroke-width="2"/>
+  <rect x="490" y="553" width="4"   height="54" rx="2" fill="#d2a8ff"/>
+  <text x="665" y="577" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="14" font-weight="bold" fill="#d2a8ff">skill-applier</text>
+  <text x="665" y="596" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="11" fill="#8b949e">diff 確認付き承認フロー（HITL）</text>
+
+  <!-- Arrow: skill-applier → final output -->
+  <line x1="665" y1="607" x2="665" y2="627" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <!-- Final output box -->
+  <rect x="490" y="629" width="350" height="46" rx="8" fill="#0e1c11" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="665" y="652" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="12" font-weight="bold" fill="#3fb950">CLAUDE.md / skill / hook / agent に反映</text>
+  <text x="665" y="668" text-anchor="middle" font-family="'Segoe UI','Hiragino Sans',sans-serif"
+        font-size="10" fill="#8b949e">使うほど環境が育つ</text>
+
+</svg>
