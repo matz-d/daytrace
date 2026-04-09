@@ -13,7 +13,7 @@ from pathlib import Path
 from conftest import PLUGIN_ROOT
 
 from derived_store import persist_patterns_from_prepare
-from projection_adapters import _payload_scope_mode
+from projection_adapters import _payload_scope_mode, _share_guard_summary
 
 
 DAILY_PROJECTION = PLUGIN_ROOT / "scripts" / "daily_report_projection.py"
@@ -264,6 +264,8 @@ class ProjectionAdapterTests(unittest.TestCase):
             self.assertEqual(payload["report_date_context"]["timezone_basis"], "local")
             self.assertEqual(payload["report_date_context"]["day_boundary_hour"], 6)
             self.assertEqual(payload["scope_mode"], "mixed")
+            self.assertIn("share_guard", payload)
+            self.assertEqual(payload["share_guard"]["auto_excluded_group_ids"], [])
             self.assertEqual(
                 payload["output_dir"],
                 str(Path.home() / ".daytrace" / "output" / "2026-03-12"),
@@ -333,6 +335,36 @@ class ProjectionAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(scope_mode, "mixed")
+
+    def test_share_guard_requires_confirmation_when_caution_and_auto_excluded_coexist(self) -> None:
+        summary = _share_guard_summary(
+            [
+                {
+                    "id": "group-1",
+                    "summary": "mixed scope group",
+                    "mixed_scope": True,
+                    "share_policy": {
+                        "recommended_visibility": "share_with_caution",
+                        "auto_exclude_from_share": False,
+                        "reasons": ["mixed_scope"],
+                    },
+                },
+                {
+                    "id": "group-2",
+                    "summary": "browser heavy group",
+                    "mixed_scope": False,
+                    "share_policy": {
+                        "recommended_visibility": "private_only",
+                        "auto_exclude_from_share": True,
+                        "reasons": ["oversized_browser_cluster"],
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(summary["auto_excluded_group_ids"], ["group-2"])
+        self.assertEqual(summary["caution_group_ids"], ["group-1"])
+        self.assertTrue(summary["requires_confirmation"])
 
     def test_daily_projection_errors_when_sources_registry_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

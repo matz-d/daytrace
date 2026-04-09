@@ -400,6 +400,81 @@ class AggregateCoreTests(unittest.TestCase):
         self.assertEqual(groups[0]["evidence"][0]["source"], "git")
         self.assertEqual(groups[0]["evidence_overflow_count"], 1)
 
+    def test_browser_only_large_group_is_flagged_for_share_exclusion(self) -> None:
+        timeline = [
+            {
+                "source": "browser",
+                "timestamp": f"2026-03-11T10:{index:02d}:00+09:00",
+                "type": "visit",
+                "summary": f"page-{index}",
+                "details": {
+                    "host": "x.com" if index < 5 else "google.com",
+                    "flow_key": "home",
+                    "visit_count": 3,
+                    "page_count": 1,
+                    "compressed": index < 3,
+                },
+                "confidence": "low",
+            }
+            for index in range(10)
+        ]
+        groups = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={"browser": ["browser"]},
+        )
+
+        self.assertEqual(len(groups), 1)
+        share_policy = groups[0]["share_policy"]
+        self.assertTrue(share_policy["auto_exclude_from_share"])
+        self.assertEqual(share_policy["recommended_visibility"], "private_only")
+        self.assertIn("oversized_browser_cluster", share_policy["reasons"])
+        self.assertIn("share_sensitive_browser_hosts", share_policy["reasons"])
+        self.assertEqual(groups[0]["browser_context"]["host_count"], 2)
+
+    def test_large_cumulative_visit_count_without_dense_daily_activity_stays_caution_only(self) -> None:
+        timeline = [
+            {
+                "source": "browser",
+                "timestamp": "2026-03-11T10:00:00+09:00",
+                "type": "visit",
+                "summary": "one page",
+                "details": {
+                    "host": "example.com",
+                    "flow_key": "article",
+                    "visit_count": 999,
+                    "page_count": 1,
+                    "compressed": False,
+                },
+                "confidence": "low",
+            },
+            {
+                "source": "browser",
+                "timestamp": "2026-03-11T10:05:00+09:00",
+                "type": "visit",
+                "summary": "second page",
+                "details": {
+                    "host": "example.com",
+                    "flow_key": "article",
+                    "visit_count": 888,
+                    "page_count": 1,
+                    "compressed": False,
+                },
+                "confidence": "low",
+            },
+        ]
+        groups = build_groups(
+            timeline,
+            group_window_minutes=15,
+            confidence_categories_by_source={"browser": ["browser"]},
+        )
+
+        self.assertEqual(len(groups), 1)
+        share_policy = groups[0]["share_policy"]
+        self.assertFalse(share_policy["auto_exclude_from_share"])
+        self.assertEqual(share_policy["recommended_visibility"], "share_with_caution")
+        self.assertNotIn("high_browser_page_volume", share_policy["reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

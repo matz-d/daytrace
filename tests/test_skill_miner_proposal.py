@@ -122,7 +122,12 @@ def _prepare_payload(
         "candidates": candidates or [],
         "unclustered": unclustered or [],
         "summary": {"total_packets": 5, "total_candidates": len(candidates or [])},
-        "config": {"effective_days": 7, "workspace": "/tmp/daytrace", "all_sessions": False},
+        "config": {
+            "effective_days": 7,
+            "workspace": "/tmp/daytrace",
+            "invocation_workspace": "/tmp/daytrace",
+            "all_sessions": False,
+        },
         "sources": [
             {"name": "claude-history", "status": "success"},
             {"name": "codex-history", "status": "success"},
@@ -1235,6 +1240,172 @@ class MarkdownFormatTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["ready_count"], 2)
         self.assertCountEqual([candidate["candidate_id"] for candidate in result["ready"]], ["repo", "cross"])
+
+    def test_build_proposal_sections_splits_current_repo_and_other_repo_ready_candidates(self) -> None:
+        current_repo = _ready_candidate(
+            candidate_id="repo",
+            label="Current repo policy",
+            suggested_kind="CLAUDE.md",
+            dominant_workspace="/tmp/daytrace",
+            workspace_paths=["/tmp/daytrace"],
+        )
+        other_repo = _ready_candidate(
+            candidate_id="cross",
+            label="Other repo workflow",
+            suggested_kind="skill",
+            dominant_workspace="/other/repo",
+            workspace_paths=["/other/repo"],
+            common_task_shapes=["prepare_report"],
+            artifact_hints=["report"],
+            support={"total_packets": 3, "claude_packets": 1, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[current_repo, other_repo])
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_current_repo_count"], 1)
+        self.assertEqual(result["summary"]["ready_other_repo_count"], 1)
+        self.assertEqual([candidate["candidate_id"] for candidate in result["ready_current_repo"]], ["repo"])
+        self.assertEqual([candidate["candidate_id"] for candidate in result["ready_other_repo"]], ["cross"])
+        self.assertIn("### 現在のリポジトリ向け", result["markdown"])
+        self.assertIn("### 別リポジトリ向け", result["markdown"])
+        self.assertIn("### 現在のリポジトリ向け", result["compact_ready_markdown"])
+        self.assertIn("### 別リポジトリ向け", result["compact_ready_markdown"])
+
+    def test_all_sessions_candidates_use_invocation_workspace_for_cross_repo_detection(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="cross",
+            label="Workspace-agent skill",
+            suggested_kind="skill",
+            dominant_workspace="/Users/example/workspace-agent",
+            workspace_paths=["/Users/example/workspace-agent"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+        payload["config"]["workspace"] = None
+        payload["config"]["all_sessions"] = True
+        payload["config"]["observation_mode"] = "all-sessions"
+        payload["config"]["invocation_workspace"] = "/Users/example/daytrace"
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_other_repo_count"], 1)
+        self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "別リポジトリ")
+        self.assertTrue(result["ready"][0]["skill_creator_handoff"]["cross_repo"])
+        self.assertEqual(result["ready"][0]["skill_creator_handoff"]["handoff_scope"], "other_repo")
+
+    def test_subdirectory_workspace_is_treated_as_current_repo(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="subdir",
+            label="Repo subdir workflow",
+            suggested_kind="skill",
+            dominant_workspace="/tmp/daytrace/subdir",
+            workspace_paths=["/tmp/daytrace/subdir"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_current_repo_count"], 1)
+        self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "現在のリポジトリ")
+        self.assertFalse(result["ready"][0]["skill_creator_handoff"]["cross_repo"])
+        self.assertEqual(result["ready"][0]["skill_creator_handoff"]["handoff_scope"], "current_repo")
+
+    def test_all_sessions_invocation_workspace_treats_subdirectory_as_current_repo(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="subdir",
+            label="Repo subdir workflow",
+            suggested_kind="skill",
+            dominant_workspace="/Users/example/repo/subdir",
+            workspace_paths=["/Users/example/repo/subdir"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+        payload["config"]["workspace"] = None
+        payload["config"]["all_sessions"] = True
+        payload["config"]["observation_mode"] = "all-sessions"
+        payload["config"]["invocation_workspace"] = "/Users/example/repo"
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_current_repo_count"], 1)
+        self.assertEqual(result["summary"]["ready_other_repo_count"], 0)
+        self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "現在のリポジトリ")
+
+    def test_all_sessions_invocation_subdirectory_treats_parent_repo_as_current_repo(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="parent",
+            label="Repo root workflow",
+            suggested_kind="skill",
+            dominant_workspace="/Users/example/repo",
+            workspace_paths=["/Users/example/repo"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+        payload["config"]["workspace"] = None
+        payload["config"]["all_sessions"] = True
+        payload["config"]["observation_mode"] = "all-sessions"
+        payload["config"]["invocation_workspace"] = "/Users/example/repo/subdir"
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_current_repo_count"], 1)
+        self.assertEqual(result["summary"]["ready_other_repo_count"], 0)
+        self.assertEqual(result["compact_ready_rows"][0]["apply_scope"], "現在のリポジトリ")
+        self.assertFalse(result["ready"][0]["skill_creator_handoff"]["cross_repo"])
+        self.assertEqual(result["ready"][0]["skill_creator_handoff"]["handoff_scope"], "current_repo")
+
+    def test_heading_uses_other_repo_only_label_when_no_uncertain_candidates(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="cross",
+            label="Other repo workflow",
+            suggested_kind="skill",
+            dominant_workspace="/other/repo",
+            workspace_paths=["/other/repo"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+
+        result = build_proposal_sections(payload)
+
+        self.assertIn("### 別リポジトリ向け", result["markdown"])
+        self.assertNotIn("### 別リポジトリ向け / 要確認", result["markdown"])
+        self.assertIn("### 別リポジトリ向け", result["compact_ready_markdown"])
+
+    def test_heading_uses_uncertain_only_label_when_no_other_repo_candidates(self) -> None:
+        candidate = _ready_candidate(
+            candidate_id="uncertain",
+            label="Uncertain skill",
+            suggested_kind="skill",
+            dominant_workspace="/Users/example/workspace-agent",
+            workspace_paths=["/Users/example/workspace-agent"],
+            common_task_shapes=["write_markdown"],
+            artifact_hints=["markdown"],
+            support={"total_packets": 2, "claude_packets": 0, "codex_packets": 2, "unique_workspaces": 1},
+        )
+        payload = _prepare_payload(candidates=[candidate])
+        payload["config"]["workspace"] = None
+        payload["config"]["invocation_workspace"] = None
+        payload["config"]["all_sessions"] = True
+        payload["config"]["observation_mode"] = "all-sessions"
+
+        result = build_proposal_sections(payload)
+
+        self.assertEqual(result["summary"]["ready_uncertain_count"], 1)
+        self.assertIn("### 要確認", result["markdown"])
+        self.assertNotIn("### 別リポジトリ向け / 要確認", result["markdown"])
+        self.assertIn("### 要確認", result["compact_ready_markdown"])
 
     def test_build_proposal_sections_demotes_misaligned_run_tests_candidate(self) -> None:
         candidate = _ready_candidate(

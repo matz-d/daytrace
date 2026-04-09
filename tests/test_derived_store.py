@@ -310,6 +310,26 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(second[0]["mixed_scope"], first[0]["mixed_scope"])
             self.assertEqual(second[0]["confidence_breakdown"], first[0]["confidence_breakdown"])
             self.assertEqual(second[0]["evidence_overflow_count"], first[0]["evidence_overflow_count"])
+            self.assertEqual(second[1]["share_policy"], first[1]["share_policy"])
+            self.assertEqual(second[1]["browser_context"], first[1]["browser_context"])
+
+    def test_get_activities_rebuilds_when_derivation_version_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
+            self.run_aggregate(sources_file, workspace, store_path)
+
+            activities = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+            self.assertTrue(activities)
+
+            with sqlite3.connect(store_path) as connection:
+                connection.execute("UPDATE activities SET derivation_version = 'activities-v3'")
+                connection.commit()
+
+            refreshed = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
+
+            self.assertTrue(all(item["derivation_version"] == ACTIVITY_DERIVATION_VERSION for item in refreshed))
+            self.assertIn("share_policy", refreshed[1])
+            self.assertIn("browser_context", refreshed[1])
 
     def test_get_activities_uses_max_span_in_grouping_and_cache_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

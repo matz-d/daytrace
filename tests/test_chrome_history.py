@@ -13,7 +13,7 @@ from pathlib import Path
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT
 
-from chrome_history import collapse_visits, normalize_url
+from chrome_history import collapse_visits, compress_visit_flows, normalize_url
 
 SCRIPT = PLUGIN_ROOT / "scripts" / "chrome_history.py"
 JST = timezone(timedelta(hours=9))
@@ -135,6 +135,45 @@ class ChromeHistoryTests(unittest.TestCase):
         self.assertEqual(collapsed[0]["visit_count"], 5)
         self.assertEqual(collapsed[1]["profile"], "Profile 1")
         self.assertEqual(collapsed[1]["visit_count"], 1)
+
+    def test_compress_visit_flows_merges_same_host_same_flow_when_close_in_time(self) -> None:
+        collapsed = [
+            {
+                "profile": "Default",
+                "url": "https://omnicampus.jp.auth0.com/authorize",
+                "title": "Log in | omnicampus",
+                "timestamp": "2026-03-12T09:00:00+09:00",
+                "visit_count": 1,
+                "host": "omnicampus.jp.auth0.com",
+                "flow_key": "login",
+            },
+            {
+                "profile": "Default",
+                "url": "https://omnicampus.jp.auth0.com/u/login",
+                "title": "Log in | omnicampus",
+                "timestamp": "2026-03-12T09:01:00+09:00",
+                "visit_count": 1,
+                "host": "omnicampus.jp.auth0.com",
+                "flow_key": "login",
+            },
+            {
+                "profile": "Default",
+                "url": "https://example.com/elsewhere",
+                "title": "Another page",
+                "timestamp": "2026-03-12T09:10:00+09:00",
+                "visit_count": 1,
+                "host": "example.com",
+                "flow_key": "elsewhere",
+            },
+        ]
+
+        compressed = compress_visit_flows(collapsed)
+
+        self.assertEqual(len(compressed), 2)
+        self.assertEqual(compressed[0]["page_count"], 2)
+        self.assertTrue(compressed[0]["compressed"])
+        self.assertEqual(compressed[0]["visit_count"], 2)
+        self.assertEqual(compressed[0]["flow_key"], "login")
 
 
 if __name__ == "__main__":
