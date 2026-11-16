@@ -8,10 +8,10 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
-from datetime import datetime
 from pathlib import Path
 
 from conftest import PLUGIN_ROOT
+from helpers import make_source_entry, write_file
 
 from derived_store import (
     SLICE_COMPLETE,
@@ -27,34 +27,6 @@ from derived_store import (
 
 
 AGGREGATE = PLUGIN_ROOT / "scripts" / "aggregate.py"
-
-
-def write_file(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
-
-
-def make_source_entry(
-    name: str,
-    command: str,
-    *,
-    supports_date_range: bool,
-    supports_all_sessions: bool,
-    confidence_category: str,
-    scope_mode: str,
-    platforms: list[str] | None = None,
-) -> dict[str, object]:
-    return {
-        "name": name,
-        "command": command,
-        "required": False,
-        "timeout_sec": 5,
-        "platforms": platforms or ["darwin", "linux"],
-        "supports_date_range": supports_date_range,
-        "supports_all_sessions": supports_all_sessions,
-        "scope_mode": scope_mode,
-        "prerequisites": [],
-        "confidence_category": confidence_category,
-    }
 
 
 class DerivedStoreTests(unittest.TestCase):

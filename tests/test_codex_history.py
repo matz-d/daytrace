@@ -4,25 +4,17 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT
+from helpers import write_jsonl
 
 from codex_history import load_history_indexes
 from common import parse_datetime
 
 SCRIPT = PLUGIN_ROOT / "scripts" / "codex_history.py"
-
-
-def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
-            handle.write("\n")
 
 
 class CodexHistoryTests(unittest.TestCase):
@@ -327,7 +319,9 @@ class CodexHistoryTests(unittest.TestCase):
             self.assertEqual(len(session_event["details"]["logical_packets"]), 1)
             self.assertEqual(session_event["details"]["logical_packets"][0]["started_at"], "2026-03-12T23:55:00+09:00")
             self.assertEqual(session_event["details"]["user_highlights"], ["day1 prompt"])
-            self.assertEqual(len(session_event["details"]["ai_observation_packets"]), 1)
+            for event in payload["events"]:
+                self.assertNotIn("ai_observation_packets", event["details"])
+                self.assertNotIn("skill_miner_packet", event["details"])
 
     def test_load_history_indexes_returns_full_and_filtered_views(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -387,8 +381,7 @@ class CodexHistoryTests(unittest.TestCase):
             workspace = root / "workspace"
             workspace.mkdir()
             sessions_root = root / "sessions"
-            history_file = root / "history.jsonl"
-            history_file.write_text("", encoding="utf-8")
+            history_file = root / "history.jsonl"  # deliberately not created
 
             def user_item(timestamp: str, turn_id: str, text: str) -> dict[str, object]:
                 return {
@@ -468,6 +461,7 @@ class CodexHistoryTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, msg=completed.stderr)
             payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "success")
             commentary = next(event for event in payload["events"] if event["type"] == "commentary")
             self.assertNotIn("No user prompt captured", commentary["summary"])
             self.assertIn("見積書の下書きを直して", commentary["summary"])

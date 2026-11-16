@@ -28,20 +28,25 @@ python3 -m pytest tests/ -v
 - `plugins/daytrace/` — 配布単位（git submodule → [daytrace-plugin](https://github.com/matz-d/daytrace-plugin)）
 - `plugins/daytrace/.claude-plugin/plugin.json` — plugin manifest
 - `plugins/daytrace/skills/daytrace-log/` — 集める・読み出すだけの skill
-- `plugins/daytrace/scripts/` — 収集 CLI（`collect_daily.py` / `read_log.py` / source CLI / store）
+- `plugins/daytrace/scripts/` — 収集 CLI（`collect_daily.py` / `read_log.py` / source CLI / store / `session_packets.py`）
 - `ops/launchd/` — 毎日の自動収集の launchd 設定（このマシン用）
-- `tests/` — テストスイート（開発リポジトリのみ）
+- `tests/` — テストスイート（開発リポジトリのみ）。共通の準備用関数は `tests/helpers.py`
 
 ## Scripts 規約
 
 - 全 source CLI は Source CLI Contract（`plugins/daytrace/scripts/README.md`）に従う
 - source CLI の出力 shape: `{ status, source, events[] }` or `{ status, source, reason/message, events[] }`
-- store の `observations.occurred_at` は固定幅の UTC（schema v4）。時刻を比べる値は `common.to_storage_timestamp()` を通す
+- store の `observations.occurred_at` は固定幅の UTC（schema v4 以降）。時刻を比べる値は `common.to_storage_timestamp()` を通す
 - 依頼文は `request_text.clean_request_text()` を通し、ツールが差し込んだ文（system-reminder、引き継ぎ要約、AGENTS.md など）を除く
 - 外部ネットワーク通信なし
 
-## 既知の残課題
+## 日付と保存の規則
 
-- `skill_miner_common.py` は旧パターン提案の共有部品で、収集（会話のまとまり分け）が一部を使っている。収集に要る部分だけに切り出す
-- store のイベントには旧パターン提案用の `skill_miner_packet` が入ったままで、容量が大きい（約 1GB）
-- 収集の日付範囲は暦日（0:00〜23:59）、「今日」の判定は朝 6 時区切りで、境界がずれている
+- 1日は暦日（ローカル時刻の 0:00〜23:59）。`--date today` / `yesterday`、収集範囲、store の `requested_date` のすべてで同じ
+- `collect_daily.py` は今日を集め、前日は「その日が終わった後の file-activity 収集」が保存されるまで取り直す
+- store は schema v5。旧パターン提案用の packet（`ai_observation` など）は保存しない
+- source が壊れた出力を返しても、その source だけ `error` になり、収集全体は止めない
+
+## 残っているリファクタリング候補
+
+`docs/refactoring-candidates-2026-11-16.md`（Codex の調査）の 3〜8。順位1（未使用コードの削除）と2（テストの補強）、外部仕様の変更3点は 2026-11-16 に対応済み。

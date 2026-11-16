@@ -12,39 +12,12 @@ from datetime import datetime
 from pathlib import Path
 
 from conftest import PLUGIN_ROOT
+from helpers import make_source_entry, write_file
 
-from store import bootstrap_store, persist_source_result
+from store import bootstrap_store, compute_observation_fingerprint, persist_source_result
 
 
 AGGREGATE = PLUGIN_ROOT / "scripts" / "aggregate.py"
-
-
-def write_file(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
-
-
-def make_source_entry(
-    name: str,
-    command: str,
-    *,
-    supports_date_range: bool,
-    supports_all_sessions: bool,
-    confidence_category: str,
-    scope_mode: str,
-    platforms: list[str] | None = None,
-) -> dict[str, object]:
-    return {
-        "name": name,
-        "command": command,
-        "required": False,
-        "timeout_sec": 5,
-        "platforms": platforms or ["darwin", "linux"],
-        "supports_date_range": supports_date_range,
-        "supports_all_sessions": supports_all_sessions,
-        "scope_mode": scope_mode,
-        "prerequisites": [],
-        "confidence_category": confidence_category,
-    }
 
 
 class StoreTests(unittest.TestCase):
@@ -225,7 +198,7 @@ class StoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 connection.row_factory = sqlite3.Row
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
@@ -255,7 +228,7 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(observation_row["observation_kind"], "event")
                 self.assertTrue(observation_row["occurred_at"].endswith("+00:00"))
 
-    def test_bootstrap_store_migrates_v2_store_to_v4(self) -> None:
+    def test_bootstrap_store_migrates_v2_store_to_v5(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "daytrace.sqlite3"
             with sqlite3.connect(store_path) as connection:
@@ -365,7 +338,7 @@ class StoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 connection.row_factory = sqlite3.Row
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
                 observation_columns = {
                     str(row["name"]): str(row["type"]) for row in connection.execute("PRAGMA table_info(observations)").fetchall()
                 }
@@ -432,6 +405,63 @@ class StoreTests(unittest.TestCase):
             with sqlite3.connect(store_path) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
+
+    def test_bootstrap_store_v4_to_v5_drops_legacy_packet_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "daytrace.sqlite3"
+            bootstrap_store(store_path)
+            event = {
+                "source": "claude-history",
+                "timestamp": "2026-03-12T09:00:00+09:00",
+                "type": "session_summary",
+                "summary": "Claude session: 見積を直して",
+                "details": {
+                    "user_requests": [{"timestamp": "2026-03-12T00:00:00Z", "text": "見積を直して"}],
+                    "ai_observation": {"primary_intent": "big"},
+                    "ai_observation_packets": [{"packet_id": "p1"}],
+                    "logical_packets": [{"packet_index": 0, "skill_miner_packet": {"packet_id": "p1"}}],
+                },
+                "confidence": "medium",
+            }
+            with sqlite3.connect(store_path) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO source_runs (
+                        run_fingerprint, source_name, source_id, identity_version, manifest_fingerprint,
+                        confidence_categories_json, command_fingerprint, status, scope_mode, workspace,
+                        requested_date, since_value, until_value, all_sessions, filters_json, command_json,
+                        reason, message, duration_sec, events_count, collected_at
+                    ) VALUES ('r', 'claude-history', 'claude-history', '1', 'm', '[]', 'c', 'success', 'all-day',
+                        '/tmp/workspace', '2026-03-12', '2026-03-12', '2026-03-12', 1, '{}', '[]', NULL, NULL, 0.1, 1,
+                        '2026-03-12T10:00:00+09:00')
+                    """
+                )
+                for kind, payload in (("event", event), ("packet", {**event, "type": "skill_miner_packet"})):
+                    connection.execute(
+                        """
+                        INSERT INTO observations (
+                            source_run_id, event_fingerprint, observation_kind, source_name, scope_mode, occurred_at,
+                            event_type, summary, confidence, details_json, event_json, collected_at
+                        ) VALUES (1, ?, ?, 'claude-history', 'all-day', '2026-03-12T00:00:00.000000+00:00', ?, 's', 'medium', ?, ?, 'x')
+                        """,
+                        (kind, kind, payload["type"], json.dumps(payload["details"]), json.dumps(payload)),
+                    )
+                connection.execute("PRAGMA user_version = 4")
+                connection.commit()
+
+            bootstrap_store(store_path)
+
+            with sqlite3.connect(store_path) as connection:
+                connection.row_factory = sqlite3.Row
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+                rows = connection.execute("SELECT * FROM observations").fetchall()
+                self.assertEqual([row["observation_kind"] for row in rows], ["event"])
+                stored = json.loads(rows[0]["event_json"])
+                self.assertNotIn("ai_observation", stored["details"])
+                self.assertNotIn("ai_observation_packets", stored["details"])
+                self.assertEqual(stored["details"]["logical_packets"], [{"packet_index": 0}])
+                self.assertEqual(stored["details"]["user_requests"][0]["text"], "見積を直して")
+                self.assertEqual(rows[0]["event_fingerprint"], compute_observation_fingerprint(stored))
 
 
 if __name__ == "__main__":

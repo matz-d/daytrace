@@ -14,16 +14,9 @@ from pathlib import Path
 
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT
+from helpers import write_jsonl
 
 SCRIPT = PLUGIN_ROOT / "scripts" / "claude_history.py"
-
-
-def write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
-            handle.write("\n")
 
 
 class ClaudeHistoryTests(unittest.TestCase):
@@ -145,10 +138,12 @@ class ClaudeHistoryTests(unittest.TestCase):
             self.assertEqual(logical_packets[1]["packet_index"], 1)
             for packet in logical_packets:
                 self.assertEqual(packet["cwd"], str(workspace_a))
-                self.assertIn("ai_observation", packet)
-            self.assertIn("ai_observation", event["details"])
-            commentary = next(item for item in payload["events"] if item["type"] == "commentary")
-            self.assertIn("ai_observation", commentary["details"])
+                self.assertIn("referenced_files", packet)
+            self.assertIn("referenced_files", event["details"])
+            # v0.2.0 stopped writing the pattern-proposal packets.
+            for item in payload["events"]:
+                self.assertNotIn("ai_observation", item["details"])
+                self.assertNotIn("ai_observation_packets", item["details"])
 
     def test_pivot_message_produces_separate_logical_packets_without_gap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -288,6 +283,70 @@ class ClaudeHistoryTests(unittest.TestCase):
             )
             self.assertNotIn("continued from a previous conversation", session_event["summary"])
             self.assertNotIn("system-reminder", session_event["summary"])
+
+    def test_user_requests_keep_only_user_text_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            base = datetime(2026, 11, 12, 1, 0, tzinfo=timezone.utc)
+            claude_root = root / "claude"
+            write_jsonl(
+                claude_root / "repo" / "session.jsonl",
+                [
+                    {
+                        "type": "user",
+                        "cwd": str(workspace),
+                        "sessionId": "s1",
+                        "timestamp": base.isoformat(),
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "この画像の"},
+                                {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                                {"type": "text", "text": "表を直して"},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "assistant",
+                        "cwd": str(workspace),
+                        "sessionId": "s1",
+                        "timestamp": (base + timedelta(minutes=1)).isoformat(),
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "thinking": "内部の推論"},
+                                {"type": "text", "text": "直しました"},
+                                {"type": "tool_use", "name": "Edit", "input": {"file_path": "a.md"}},
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--root",
+                    str(claude_root),
+                    "--all-sessions",
+                    "--since",
+                    "2026-11-12T00:00:00+09:00",
+                    "--until",
+                    "2026-11-12T23:59:59+09:00",
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            session_event = next(event for event in payload["events"] if event["type"] == "session_summary")
+            self.assertEqual([request["text"] for request in session_event["details"]["user_requests"]], ["この画像の 表を直して"])
 
 
 if __name__ == "__main__":

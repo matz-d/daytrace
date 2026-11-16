@@ -11,36 +11,9 @@ from pathlib import Path
 
 
 from conftest import PLUGIN_ROOT
+from helpers import make_source_entry, write_file
 
 AGGREGATE = PLUGIN_ROOT / "scripts" / "aggregate.py"
-
-
-def write_file(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
-
-
-def make_source_entry(
-    name: str,
-    command: str,
-    *,
-    supports_date_range: bool,
-    supports_all_sessions: bool,
-    confidence_category: str,
-    scope_mode: str,
-    platforms: list[str] | None = None,
-) -> dict[str, object]:
-    return {
-        "name": name,
-        "command": command,
-        "required": False,
-        "timeout_sec": 5,
-        "platforms": platforms or ["darwin", "linux"],
-        "supports_date_range": supports_date_range,
-        "supports_all_sessions": supports_all_sessions,
-        "scope_mode": scope_mode,
-        "prerequisites": [],
-        "confidence_category": confidence_category,
-    }
 
 
 class AggregateContractTests(unittest.TestCase):
@@ -582,6 +555,48 @@ class AggregateContractTests(unittest.TestCase):
             self.assertGreater(len(payload["timeline"]), 0)
             for event in payload["timeline"]:
                 self.assertIn("group_id", event)
+
+    def test_broken_source_outputs_stay_inside_that_source(self) -> None:
+        # A non-object payload, non-list events, or an unreadable timestamp used to
+        # raise inside aggregate and fail every source of the run.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outputs = {
+                "good-source": {
+                    "status": "success",
+                    "source": "good-source",
+                    "events": [
+                        {"source": "good-source", "timestamp": "2026-03-12T09:00:00+09:00", "type": "note", "summary": "ok", "details": {}, "confidence": "high"},
+                        {"source": "good-source", "timestamp": "not a time", "type": "note", "summary": "bad time", "details": {}, "confidence": "high"},
+                    ],
+                },
+                "list-source": [1, 2, 3],
+                "null-events-source": {"status": "success", "source": "null-events-source", "events": None},
+            }
+            registry = []
+            for name, output in outputs.items():
+                script = root / f"{name}.py"
+                write_file(script, f"import json\nprint(json.dumps({output!r}))\n")
+                registry.append(
+                    make_source_entry(
+                        name,
+                        f"python3 {script}",
+                        supports_date_range=False,
+                        supports_all_sessions=False,
+                        confidence_category="ai_history",
+                        scope_mode="all-day",
+                    )
+                )
+            sources_file = root / "sources.json"
+            write_file(sources_file, json.dumps(registry))
+
+            payload, _completed = self.run_aggregate(sources_file, "--workspace", str(workspace))
+
+            statuses = {entry["name"]: entry["status"] for entry in payload["sources"]}
+            self.assertEqual(statuses, {"good-source": "success", "list-source": "error", "null-events-source": "error"})
+            self.assertEqual([event["summary"] for event in payload["timeline"]], ["ok"])
 
 
 if __name__ == "__main__":
