@@ -221,6 +221,74 @@ class ClaudeHistoryTests(unittest.TestCase):
             self.assertIn("Review app.py", logical_packets[0]["user_highlights"][0])
             self.assertIn("Instead, switch to drafting release notes.", logical_packets[1]["user_highlights"][0])
 
+    def test_user_requests_skip_compact_summaries_and_injected_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            base = datetime(2026, 11, 12, 1, 0, tzinfo=timezone.utc)
+
+            def row(minutes: int, content: object, **extra: object) -> dict:
+                return {
+                    "type": extra.pop("type", "user"),
+                    "cwd": str(workspace),
+                    "sessionId": "s1",
+                    "isSidechain": extra.pop("isSidechain", False),
+                    "timestamp": (base + timedelta(minutes=minutes)).isoformat(),
+                    "message": {"role": "user", "content": content},
+                    **extra,
+                }
+
+            claude_root = root / "claude"
+            write_jsonl(
+                claude_root / "repo" / "session.jsonl",
+                [
+                    row(0, "This session is being continued from a previous conversation that ran out of context. Summary...", isCompactSummary=True),
+                    row(1, "<system-reminder>\nThe user forked this session.\n</system-reminder>"),
+                    row(2, "<command-name>/insights</command-name>\n<command-message>insights</command-message>\n<command-args></command-args>"),
+                    row(3, "撮影の本数は？<system-reminder>context</system-reminder>"),
+                    row(4, "<local-command-stdout>ok</local-command-stdout>"),
+                    row(5, "サブエージェントへの指示", isSidechain=True),
+                    row(6, [{"type": "tool_result", "tool_use_id": "x", "content": "done"}]),
+                    {
+                        "type": "assistant",
+                        "cwd": str(workspace),
+                        "sessionId": "s1",
+                        "isSidechain": False,
+                        "timestamp": (base + timedelta(minutes=7)).isoformat(),
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "8本です。"}]},
+                    },
+                ],
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--root",
+                    str(claude_root),
+                    "--all-sessions",
+                    "--since",
+                    "2026-11-12T00:00:00+09:00",
+                    "--until",
+                    "2026-11-12T23:59:59+09:00",
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            session_event = next(event for event in payload["events"] if event["type"] == "session_summary")
+            self.assertEqual(
+                [request["text"] for request in session_event["details"]["user_requests"]],
+                ["/insights", "撮影の本数は？"],
+            )
+            self.assertNotIn("continued from a previous conversation", session_event["summary"])
+            self.assertNotIn("system-reminder", session_event["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

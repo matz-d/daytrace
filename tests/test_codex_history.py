@@ -379,6 +379,109 @@ class CodexHistoryTests(unittest.TestCase):
             self.assertIn("message-0", excerpts[0])
             self.assertTrue(any("message-9" in excerpt for excerpt in excerpts))
 
+    def test_cli_reads_user_message_items_and_turns_without_history_file(self) -> None:
+        # Since 2026-11 Codex writes requests as event_msg/item_completed UserMessage
+        # and no longer updates history.jsonl. Requests must still be captured.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            sessions_root = root / "sessions"
+            history_file = root / "history.jsonl"
+            history_file.write_text("", encoding="utf-8")
+
+            def user_item(timestamp: str, turn_id: str, text: str) -> dict[str, object]:
+                return {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "item_completed",
+                        "turn_id": turn_id,
+                        "item": {"type": "UserMessage", "content": [{"type": "text", "text": text}]},
+                    },
+                }
+
+            write_jsonl(
+                sessions_root / "2026" / "11" / "12" / "rollout-new.jsonl",
+                [
+                    {
+                        "timestamp": "2026-11-11T23:17:16Z",
+                        "type": "session_meta",
+                        "payload": {"id": "new-session", "timestamp": "2026-11-11T23:17:16Z", "cwd": str(workspace)},
+                    },
+                    {
+                        "timestamp": "2026-11-11T23:18:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_attribution": {"turn_id": "t1", "turn_trigger": "composer"}},
+                    },
+                    {
+                        "timestamp": "2026-11-11T23:18:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "# AGENTS.md instructions\n<INSTRUCTIONS>rules</INSTRUCTIONS>"}],
+                        },
+                    },
+                    user_item("2026-11-11T23:18:02Z", "t1", "見積書の下書きを直して"),
+                    {
+                        "timestamp": "2026-11-11T23:20:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_complete", "turn_id": "t1"},
+                    },
+                    {
+                        "timestamp": "2026-11-12T11:00:00Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_started",
+                            "turn_attribution": {"turn_id": "t2", "turn_trigger": "automation_cron_scheduled"},
+                        },
+                    },
+                    user_item("2026-11-12T11:00:01Z", "t2", "Automation: 夜のレビュー"),
+                    {
+                        "timestamp": "2026-11-12T11:01:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_complete", "turn_id": "t2"},
+                    },
+                ],
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--history-file",
+                    str(history_file),
+                    "--sessions-root",
+                    str(sessions_root),
+                    "--all-sessions",
+                    "--since",
+                    "2026-11-12T00:00:00+09:00",
+                    "--until",
+                    "2026-11-12T23:59:59+09:00",
+                ],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            payload = json.loads(completed.stdout)
+            commentary = next(event for event in payload["events"] if event["type"] == "commentary")
+            self.assertNotIn("No user prompt captured", commentary["summary"])
+            self.assertIn("見積書の下書きを直して", commentary["summary"])
+
+            session_event = next(event for event in payload["events"] if event["type"] == "session_meta")
+            turns = session_event["details"]["turns"]
+            self.assertEqual(
+                [(turn["trigger"], turn["request"]) for turn in turns],
+                [("composer", "見積書の下書きを直して"), ("automation_cron_scheduled", "Automation: 夜のレビュー")],
+            )
+            self.assertEqual(turns[0]["started_at"], "2026-11-11T23:18:00Z")
+            self.assertEqual(turns[0]["completed_at"], "2026-11-11T23:20:00Z")
+            self.assertTrue(all("AGENTS.md" not in turn["request"] for turn in turns))
+
 
 if __name__ == "__main__":
     unittest.main()

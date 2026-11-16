@@ -14,20 +14,15 @@ from pathlib import Path
 from conftest import PLUGIN_ROOT
 
 from derived_store import (
-    ACTIVITY_DERIVATION_VERSION,
-    PATTERN_DERIVATION_VERSION,
     SLICE_COMPLETE,
     SLICE_DEGRADED,
     SLICE_EMPTY,
     SLICE_PARTIAL,
     SLICE_STALE,
     evaluate_slice_completeness,
-    get_activities,
     get_observations,
-    get_patterns,
     get_source_runs,
     get_slice_source_runs,
-    persist_patterns_from_prepare,
 )
 
 
@@ -65,7 +60,13 @@ def make_source_entry(
 class DerivedStoreTests(unittest.TestCase):
     maxDiff = None
 
-    def create_fixture(self, root: Path, *, workspace_summary: str = "Persist workspace event") -> tuple[Path, Path, Path]:
+    def create_fixture(
+        self,
+        root: Path,
+        *,
+        workspace_summary: str = "Persist workspace event",
+        workspace_timestamp: str = "2026-03-12T09:00:00+09:00",
+    ) -> tuple[Path, Path, Path]:
         workspace = root / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +87,7 @@ class DerivedStoreTests(unittest.TestCase):
                     "events": [
                         {{
                             "source": "workspace-source",
-                            "timestamp": "2026-03-12T09:00:00+09:00",
+                            "timestamp": {workspace_timestamp!r},
                             "type": "commit",
                             "summary": {workspace_summary!r},
                             "details": {{"workspace": args[args.index("--workspace") + 1]}},
@@ -279,174 +280,6 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(source_runs[0]["command"], [])
             self.assertIn("decode_warnings", source_runs[0])
 
-    def test_get_activities_derives_and_persists_grouped_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
-            self.run_aggregate(sources_file, workspace, store_path)
-
-            activities = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            self.assertEqual(len(activities), 2)
-            self.assertEqual(activities[0]["derivation_version"], ACTIVITY_DERIVATION_VERSION)
-            self.assertEqual(activities[0]["confidence"], "high")
-            self.assertEqual(activities[0]["activity"]["summary"], "Persist workspace event + 1 related activities")
-            self.assertEqual(activities[1]["summary"], "Opened derived layer note")
-
-            with sqlite3.connect(store_path) as connection:
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0], 2)
-
-    def test_get_activities_readback_preserves_extended_group_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
-            self.run_aggregate(sources_file, workspace, store_path)
-
-            first = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            second = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-
-            self.assertEqual(first[0]["scope_breakdown"], ["all-day", "workspace"])
-            self.assertTrue(first[0]["mixed_scope"])
-            self.assertEqual(first[0]["confidence_breakdown"], {"ai_history": 1, "git": 1})
-            self.assertEqual(first[0]["evidence_overflow_count"], 0)
-            self.assertEqual(second[0]["scope_breakdown"], first[0]["scope_breakdown"])
-            self.assertEqual(second[0]["mixed_scope"], first[0]["mixed_scope"])
-            self.assertEqual(second[0]["confidence_breakdown"], first[0]["confidence_breakdown"])
-            self.assertEqual(second[0]["evidence_overflow_count"], first[0]["evidence_overflow_count"])
-            self.assertEqual(second[1]["share_policy"], first[1]["share_policy"])
-            self.assertEqual(second[1]["browser_context"], first[1]["browser_context"])
-
-    def test_get_activities_rebuilds_when_derivation_version_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
-            self.run_aggregate(sources_file, workspace, store_path)
-
-            activities = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            self.assertTrue(activities)
-
-            with sqlite3.connect(store_path) as connection:
-                connection.execute("UPDATE activities SET derivation_version = 'activities-v3'")
-                connection.commit()
-
-            refreshed = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-
-            self.assertTrue(all(item["derivation_version"] == ACTIVITY_DERIVATION_VERSION for item in refreshed))
-            self.assertIn("share_policy", refreshed[1])
-            self.assertIn("browser_context", refreshed[1])
-
-    def test_get_activities_uses_max_span_in_grouping_and_cache_key(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            store_path = root / "daytrace.sqlite3"
-
-            observations = []
-            for index in range(8):
-                hour, minute = divmod(index * 14, 60)
-                timestamp = f"2026-03-12T{9 + hour:02d}:{minute:02d}:00+09:00"
-                event = {
-                    "source": "chain-source",
-                    "timestamp": timestamp,
-                    "type": "commit",
-                    "summary": f"event-{index}",
-                    "details": {},
-                    "confidence": "high",
-                }
-                observations.append(
-                    {
-                        "observation_id": index + 1,
-                        "source_run_id": 1,
-                        "run_fingerprint": "run-1",
-                        "event_fingerprint": f"fp-{index}",
-                        "source_name": "chain-source",
-                        "scope_mode": "workspace",
-                        "workspace": str(workspace.resolve()),
-                        "requested_date": None,
-                        "since_value": "2026-03-12",
-                        "until_value": "2026-03-12T23:59:59+09:00",
-                        "all_sessions": False,
-                        "occurred_at": timestamp,
-                        "event_type": "commit",
-                        "summary": f"event-{index}",
-                        "confidence": "high",
-                        "details": {},
-                        "event": event,
-                        "confidence_categories": ["git"],
-                        "collected_at": "2026-03-12T12:00:00+09:00",
-                    }
-                )
-
-            unlimited = get_activities(
-                store_path,
-                workspace=workspace,
-                since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
-                preloaded_observations=observations,
-                max_span_minutes=0,
-            )
-            limited = get_activities(
-                store_path,
-                workspace=workspace,
-                since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
-                preloaded_observations=observations,
-                max_span_minutes=60,
-            )
-            limited_cached = get_activities(
-                store_path,
-                workspace=workspace,
-                since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
-                preloaded_observations=observations,
-                max_span_minutes=60,
-            )
-
-            self.assertEqual(len(unlimited), 1)
-            self.assertGreater(len(limited), 1)
-            self.assertEqual([item["event_count"] for item in limited_cached], [item["event_count"] for item in limited])
-            self.assertTrue(all(item["derivation_version"] == ACTIVITY_DERIVATION_VERSION for item in limited_cached))
-
-    def test_get_activities_fail_soft_on_corrupted_json_columns(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
-            self.run_aggregate(sources_file, workspace, store_path)
-            self.assertTrue(
-                get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            )
-
-            with sqlite3.connect(store_path) as connection:
-                connection.execute(
-                    """
-                    UPDATE activities
-                    SET sources_json = '{',
-                        confidence_categories_json = '{',
-                        evidence_json = '{',
-                        observation_fingerprints_json = '{',
-                        activity_json = '{'
-                    """
-                )
-                connection.commit()
-
-            activities = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            self.assertTrue(activities)
-            self.assertEqual(activities[0]["sources"], [])
-            self.assertEqual(activities[0]["confidence_categories"], [])
-            self.assertEqual(activities[0]["evidence"], [])
-            self.assertEqual(activities[0]["observation_fingerprints"], [])
-            self.assertEqual(activities[0]["activity"], {})
-            self.assertIn("decode_warnings", activities[0])
-
-    def test_get_activities_rebuilds_when_observations_change(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            sources_file, workspace, store_path = self.create_fixture(root, workspace_summary="Initial workspace summary")
-            self.run_aggregate(sources_file, workspace, store_path)
-            first = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            self.assertEqual(first[0]["activity"]["events"][0]["summary"], "Initial workspace summary")
-
-            sources_file, workspace, _ = self.create_fixture(root, workspace_summary="Updated workspace summary")
-            self.run_aggregate(sources_file, workspace, store_path)
-            updated = get_activities(store_path, workspace=workspace, since="2026-03-12", until="2026-03-12T23:59:59+09:00")
-            self.assertEqual(updated[0]["activity"]["events"][0]["summary"], "Updated workspace summary")
-
     def test_evaluate_slice_completeness_reuses_covering_broader_slice(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
@@ -502,132 +335,9 @@ class DerivedStoreTests(unittest.TestCase):
                 until="2026-03-12",
                 all_sessions=True,
             )
-            activities = get_activities(
-                store_path,
-                workspace=workspace,
-                since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
-                all_sessions=True,
-            )
 
             self.assertEqual(len(selected_runs), 3)
             self.assertEqual(len({run["run_fingerprint"] for run in selected_runs}), 3)
-            self.assertEqual([activity["event_count"] for activity in activities], [2, 1])
-
-    def test_persist_patterns_from_prepare_and_query(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            store_path = Path(temp_dir) / "daytrace.sqlite3"
-            workspace = Path(temp_dir) / "workspace"
-            workspace.mkdir()
-            payload = {
-                "status": "success",
-                "source": "skill-miner-prepare",
-                "candidates": [
-                    {
-                        "candidate_id": "candidate-001",
-                        "label": "Review workflow",
-                        "score": 0.82,
-                        "support": {"total_packets": 3},
-                        "session_refs": ["codex:abc", "claude:def"],
-                        "evidence_items": [{"session_ref": "codex:abc", "timestamp": "2026-03-12T09:00:00+09:00", "source": "codex-history", "summary": "Review findings"}],
-                    }
-                ],
-                "summary": {"total_candidates": 1},
-                "config": {
-                    "workspace": str(workspace.resolve()),
-                    "observation_mode": "workspace",
-                    "days": 7,
-                    "effective_days": 7,
-                },
-            }
-
-            persist_patterns_from_prepare(payload, store_path=store_path)
-            patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
-            self.assertEqual(len(patterns), 1)
-            self.assertEqual(patterns[0]["derivation_version"], PATTERN_DERIVATION_VERSION)
-            self.assertEqual(patterns[0]["pattern"]["candidate_id"], "candidate-001")
-            self.assertEqual(patterns[0]["label"], "Review workflow")
-
-    def test_persist_patterns_from_prepare_normalizes_naive_derived_at(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            store_path = Path(temp_dir) / "daytrace.sqlite3"
-            workspace = Path(temp_dir) / "workspace"
-            workspace.mkdir()
-            payload = {
-                "status": "success",
-                "source": "skill-miner-prepare",
-                "candidates": [
-                    {
-                        "candidate_id": "candidate-001",
-                        "label": "Review workflow",
-                        "score": 0.82,
-                        "support": {"total_packets": 3},
-                        "session_refs": ["codex:abc"],
-                        "evidence_items": [],
-                    }
-                ],
-                "summary": {"total_candidates": 1},
-                "config": {
-                    "workspace": str(workspace.resolve()),
-                    "observation_mode": "workspace",
-                    "days": 7,
-                    "effective_days": 7,
-                },
-            }
-
-            persist_patterns_from_prepare(
-                payload,
-                store_path=store_path,
-                derived_at=datetime(2026, 3, 12, 11, 45, 0),
-            )
-
-            patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
-            self.assertEqual(len(patterns), 1)
-            self.assertRegex(patterns[0]["derived_at"], r"^2026-03-12T11:45:00[+-]\d{2}:\d{2}$")
-
-    def test_get_patterns_fail_soft_on_corrupted_json_columns(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            store_path = Path(temp_dir) / "daytrace.sqlite3"
-            workspace = Path(temp_dir) / "workspace"
-            workspace.mkdir()
-            payload = {
-                "status": "success",
-                "source": "skill-miner-prepare",
-                "candidates": [
-                    {
-                        "candidate_id": "candidate-001",
-                        "label": "Review workflow",
-                        "score": 0.82,
-                        "support": {"total_packets": 3},
-                        "session_refs": ["codex:abc"],
-                        "evidence_items": [],
-                    }
-                ],
-                "summary": {"total_candidates": 1},
-                "config": {
-                    "workspace": str(workspace.resolve()),
-                    "observation_mode": "workspace",
-                    "days": 7,
-                    "effective_days": 7,
-                },
-            }
-
-            persist_patterns_from_prepare(payload, store_path=store_path)
-            with sqlite3.connect(store_path) as connection:
-                connection.execute(
-                    """
-                    UPDATE patterns
-                    SET support_json = '{',
-                        pattern_json = '{'
-                    """
-                )
-                connection.commit()
-
-            patterns = get_patterns(store_path, workspace=workspace, observation_mode="workspace", days=7)
-            self.assertEqual(len(patterns), 1)
-            self.assertEqual(patterns[0]["support"], {})
-            self.assertEqual(patterns[0]["pattern"], {})
-            self.assertIn("decode_warnings", patterns[0])
 
     def test_evaluate_slice_completeness_empty_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -756,32 +466,40 @@ class DerivedStoreTests(unittest.TestCase):
             self.assertEqual(len(observations), 1)
             self.assertEqual(observations[0]["source_name"], "browser-source")
 
-    def test_broader_and_narrower_slice_give_same_activities_for_overlapping_period(self) -> None:
+    def test_get_observations_keeps_morning_events_before_utc_midnight(self) -> None:
+        # Claude and Codex write UTC timestamps. 07:30 JST is 22:30 UTC on the
+        # previous day, and comparing it as a string against a +09:00 bound
+        # used to drop every event before 09:00 JST from a day query.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sources_file, workspace, store_path = self.create_fixture(
+                Path(temp_dir),
+                workspace_timestamp="2026-03-11T22:30:00+00:00",
+            )
+            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-12", until="2026-03-12")
+
+            observations = get_observations(
+                store_path,
+                workspace=workspace,
+                since="2026-03-12T00:00:00+09:00",
+                until="2026-03-12T23:59:59.999999+09:00",
+                all_sessions=True,
+            )
+
+            self.assertIn("workspace-source", {observation["source_name"] for observation in observations})
+            self.assertTrue(all(observation["occurred_at"].endswith("+00:00") for observation in observations))
+
+    def test_get_observations_daily_runs_only_skips_range_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sources_file, workspace, store_path = self.create_fixture(Path(temp_dir))
-
-            # First: broader-only
             self.run_aggregate(sources_file, workspace, store_path, since="2026-03-01", until="2026-03-31")
-            broader_activities = get_activities(
+
+            observations = get_observations(
                 store_path,
                 workspace=workspace,
                 since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
+                until="2026-03-12",
                 all_sessions=True,
+                daily_runs_only=True,
             )
 
-            # Then: add narrower covering run
-            self.run_aggregate(sources_file, workspace, store_path, since="2026-03-12", until="2026-03-12")
-            narrower_activities = get_activities(
-                store_path,
-                workspace=workspace,
-                since="2026-03-12",
-                until="2026-03-12T23:59:59+09:00",
-                all_sessions=True,
-            )
-
-            self.assertEqual(len(broader_activities), len(narrower_activities))
-            self.assertEqual(
-                [a["event_count"] for a in broader_activities],
-                [a["event_count"] for a in narrower_activities],
-            )
+            self.assertEqual(observations, [])

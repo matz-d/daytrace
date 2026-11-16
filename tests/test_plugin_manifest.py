@@ -38,7 +38,7 @@ def load_skill_frontmatter(skill_path: Path) -> dict[str, str]:
     return payload
 
 
-EXPECTED_SKILLS = {"daytrace-session", "daily-report", "skill-miner", "skill-applier", "post-draft"}
+EXPECTED_SKILLS = {"daytrace-log"}
 
 
 class PluginManifestTests(unittest.TestCase):
@@ -47,6 +47,10 @@ class PluginManifestTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "daytrace")
         self.assertIn("description", manifest)
         self.assertIn("version", manifest)
+
+    def test_marketplace_lists_the_plugin(self) -> None:
+        marketplace = json.loads((PLUGIN_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        self.assertEqual([plugin["name"] for plugin in marketplace["plugins"]], ["daytrace"])
 
     def test_all_skills_discoverable_with_valid_frontmatter(self) -> None:
         discovered = {d.name for d in SKILLS_ROOT.iterdir() if d.is_dir() and (d / "SKILL.md").exists()}
@@ -57,13 +61,9 @@ class PluginManifestTests(unittest.TestCase):
             self.assertEqual(frontmatter["name"], skill_name)
             self.assertTrue(len(frontmatter["description"]) > 0)
 
-    def test_daily_report_and_post_draft_descriptions_include_user_trigger_phrases(self) -> None:
-        daily = load_skill_frontmatter(SKILLS_ROOT / "daily-report" / "SKILL.md")["description"]
-        post = load_skill_frontmatter(SKILLS_ROOT / "post-draft" / "SKILL.md")["description"]
-
-        self.assertIn("日報", daily)
-        self.assertTrue("自分用" in daily or "共有用" in daily)
-        self.assertTrue(any(phrase in post for phrase in ("記事を書きたい", "ブログにまとめたい", "ふりかえりを書きたい", "学びを共有したい")))
+    def test_log_skill_description_includes_user_trigger_phrases(self) -> None:
+        description = load_skill_frontmatter(SKILLS_ROOT / "daytrace-log" / "SKILL.md")["description"]
+        self.assertIn("ログを集めて", description)
 
 
 if __name__ == "__main__":

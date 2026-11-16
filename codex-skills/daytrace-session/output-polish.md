@@ -1,1 +1,0 @@
-../../plugins/daytrace/docs/output-polish.md

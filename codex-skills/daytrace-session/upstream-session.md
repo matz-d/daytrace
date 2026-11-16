@@ -1,1 +1,0 @@
-../../plugins/daytrace/skills/daytrace-session/SKILL.md

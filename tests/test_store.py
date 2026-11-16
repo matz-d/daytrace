@@ -225,7 +225,7 @@ class StoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 connection.row_factory = sqlite3.Row
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
 
@@ -253,8 +253,9 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(event_json["type"], "commit")
                 self.assertRegex(observation_row["event_fingerprint"], r"^[0-9a-f]{64}$")
                 self.assertEqual(observation_row["observation_kind"], "event")
+                self.assertTrue(observation_row["occurred_at"].endswith("+00:00"))
 
-    def test_bootstrap_store_migrates_v2_observations_with_observation_kind(self) -> None:
+    def test_bootstrap_store_migrates_v2_store_to_v4(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "daytrace.sqlite3"
             with sqlite3.connect(store_path) as connection:
@@ -364,13 +365,18 @@ class StoreTests(unittest.TestCase):
 
             with sqlite3.connect(store_path) as connection:
                 connection.row_factory = sqlite3.Row
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
                 observation_columns = {
                     str(row["name"]): str(row["type"]) for row in connection.execute("PRAGMA table_info(observations)").fetchall()
                 }
                 self.assertIn("observation_kind", observation_columns)
-                row = connection.execute("SELECT observation_kind FROM observations").fetchone()
+                row = connection.execute("SELECT observation_kind, occurred_at FROM observations").fetchone()
                 self.assertEqual(row["observation_kind"], "event")
+                # v4 rewrites stored times as fixed-width UTC.
+                self.assertEqual(row["occurred_at"], "2026-03-12T00:00:00.000000+00:00")
+                tables = {str(item[0]) for item in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                self.assertNotIn("activities", tables)
+                self.assertNotIn("patterns", tables)
 
     def test_rerun_reuses_same_source_runs_without_duplicate_observations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

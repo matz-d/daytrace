@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.makotomatuda.daytrace-collect</string>
+
+    <!-- Git とファイル変更は workspace-agent だけ。会話ログは 1 日分すべて集める -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/makotomatuda/projects/lab/daytrace/plugins/daytrace/scripts/collect_daily.py</string>
+        <string>--workspace</string>
+        <string>/Users/makotomatuda/projects/waos/workspace-agent</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/makotomatuda/projects/waos/workspace-agent</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- 毎日 23:45。スリープ中だった場合は復帰時に動き、取りこぼした前日分も集める -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/makotomatuda/Library/Logs/daytrace-collect.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/makotomatuda/Library/Logs/daytrace-collect.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
