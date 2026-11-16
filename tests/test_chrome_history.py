@@ -8,12 +8,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from conftest import PROJECT_ROOT, PLUGIN_ROOT
 
-from chrome_history import collapse_visits, compress_visit_flows, normalize_url
+from chrome_history import collapse_visits, compress_visit_flows, normalize_url, read_profile_visits
 
 SCRIPT = PLUGIN_ROOT / "scripts" / "chrome_history.py"
 JST = timezone(timedelta(hours=9))
@@ -174,6 +175,18 @@ class ChromeHistoryTests(unittest.TestCase):
         self.assertTrue(compressed[0]["compressed"])
         self.assertEqual(compressed[0]["visit_count"], 2)
         self.assertEqual(compressed[0]["flow_key"], "login")
+
+    def test_read_profile_visits_removes_temp_copy_when_the_db_is_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history = Path(temp_dir) / "History"
+            history.write_bytes(b"not a sqlite database")
+            profile = f"broken-{uuid.uuid4().hex}"
+
+            with self.assertRaises(sqlite3.DatabaseError):
+                read_profile_visits(profile, history, None, None)
+
+            leftovers = list(Path(tempfile.gettempdir()).glob(f"daytrace-{profile}-*"))
+            self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":

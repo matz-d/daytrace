@@ -187,7 +187,7 @@ class AggregateCoreTests(unittest.TestCase):
             status, reason = source_availability(source, root, script_dir=root)
             self.assertEqual((status, reason), ("available", None))
 
-    def test_grouping_confidence_and_summary_are_pure(self) -> None:
+    def test_grouping_confidence_and_group_id_written_back_to_timeline(self) -> None:
         timeline = [
             {
                 "source": "ai-source",
@@ -233,6 +233,10 @@ class AggregateCoreTests(unittest.TestCase):
         self.assertEqual(groups[0]["event_count"], 2)
         self.assertEqual(len(groups[0]["evidence"]), 1)
         self.assertEqual(groups[0]["events"][0]["group_id"], "group-001")
+        # build_groups is not pure: groups share the timeline's event objects and
+        # write group_id back onto them, which aggregate.py exposes as timeline[].group_id.
+        self.assertIs(groups[0]["events"][0], timeline[0])
+        self.assertEqual(timeline[2]["group_id"], "group-002")
 
     def test_collect_timeline_and_build_summary_are_cli_independent(self) -> None:
         source_results = [

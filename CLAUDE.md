@@ -28,7 +28,7 @@ python3 -m pytest tests/ -v
 - `plugins/daytrace/` — 配布単位（git submodule → [daytrace-plugin](https://github.com/matz-d/daytrace-plugin)）
 - `plugins/daytrace/.claude-plugin/plugin.json` — plugin manifest
 - `plugins/daytrace/skills/daytrace-log/` — 集める・読み出すだけの skill
-- `plugins/daytrace/scripts/` — 収集 CLI（`collect_daily.py` / `read_log.py` / source CLI / store / `session_packets.py`）
+- `plugins/daytrace/scripts/` — 収集 CLI（`collect_daily.py` / `read_log.py` / source CLI / store / `session_packets.py` / `grouping.py`）
 - `ops/launchd/` — 毎日の自動収集の launchd 設定（このマシン用）
 - `tests/` — テストスイート（開発リポジトリのみ）。共通の準備用関数は `tests/helpers.py`
 
@@ -47,6 +47,6 @@ python3 -m pytest tests/ -v
 - store は schema v5。旧パターン提案用の packet（`ai_observation` など）は保存しない
 - source が壊れた出力を返しても、その source だけ `error` になり、収集全体は止めない
 
-## 残っているリファクタリング候補
+## リファクタリングの状況
 
-`docs/refactoring-candidates-2026-11-16.md`（Codex の調査）の 3〜8。順位1（未使用コードの削除）と2（テストの補強）、外部仕様の変更3点は 2026-11-16 に対応済み。
+`docs/refactoring-candidates-2026-11-16.md`（Codex の調査）の候補 1〜8 と、外部仕様の変更 3 点は 2026-11-16 にすべて対応済み。

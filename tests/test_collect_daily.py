@@ -13,7 +13,7 @@ from pathlib import Path
 
 from conftest import PLUGIN_ROOT
 
-from collect_daily import days_to_collect
+from collect_daily import day_result, days_to_collect
 from store import bootstrap_store
 
 COLLECT = PLUGIN_ROOT / "scripts" / "collect_daily.py"
@@ -209,6 +209,40 @@ class CollectDailyTests(unittest.TestCase):
             # Collected after midnight: yesterday is complete and left alone.
             store_yesterday_run(datetime(2026, 3, 13, 0, 10).astimezone().isoformat())
             self.assertEqual(days_to_collect(store_path, workspace.resolve(), now), ["2026-03-13"])
+
+    def test_day_result_reduces_aggregate_output(self) -> None:
+        def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(["aggregate.py"], returncode, stdout=stdout, stderr=stderr)
+
+        ok = json.dumps(
+            {
+                "status": "success",
+                "sources": [
+                    {"name": "chrome-history", "status": "skipped", "events_count": 0, "reason": "permission_denied", "scope": "all-day"},
+                    {"name": "claude-history", "status": "success", "events_count": 3, "scope": "all-day"},
+                ],
+                "config": {},
+            }
+        )
+        self.assertEqual(
+            day_result("2026-03-12", completed(ok)),
+            {
+                "date": "2026-03-12",
+                "status": "success",
+                "sources": [
+                    {"name": "chrome-history", "status": "skipped", "events_count": 0, "reason": "permission_denied"},
+                    {"name": "claude-history", "status": "success", "events_count": 3},
+                ],
+            },
+        )
+
+        store_failed = json.dumps({"status": "success", "sources": [], "config": {"store_errors": ["claude-history: disk full"]}})
+        self.assertEqual(
+            day_result("2026-03-12", completed(store_failed)),
+            {"date": "2026-03-12", "status": "error", "sources": [], "store_errors": ["claude-history: disk full"]},
+        )
+        self.assertEqual(day_result("2026-03-12", completed("not json"))["message"], "aggregate.py did not return JSON")
+        self.assertEqual(day_result("2026-03-12", completed(returncode=1, stderr="boom\n"))["message"], "boom")
 
 
 if __name__ == "__main__":

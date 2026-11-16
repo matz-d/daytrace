@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
 from datetime import datetime
+from pathlib import Path
 
-from common import sanitize_text, sanitize_url, summarize_text, within_range
+from common import git_repo_context, sanitize_text, sanitize_url, summarize_text, within_range
 
 
 class CommonTests(unittest.TestCase):
@@ -44,6 +47,19 @@ class CommonTests(unittest.TestCase):
                 boundary,
             )
         )
+
+    def test_git_repo_context_for_root_nested_and_outside(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir).resolve() / "repo"
+            nested = repo / "apps" / "web"
+            outside = Path(temp_dir).resolve() / "outside"
+            nested.mkdir(parents=True)
+            outside.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+
+            self.assertEqual(git_repo_context(repo, timeout=10), (repo, "."))
+            self.assertEqual(git_repo_context(nested, timeout=10), (repo, "apps/web"))
+            self.assertIsNone(git_repo_context(outside, timeout=10))
 
 
 if __name__ == "__main__":
